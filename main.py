@@ -2,16 +2,17 @@ import subprocess as sp
 
 
 def main():
-    print("Hello from openems-docker!")
-    IMAGE_NAME = "openems-image"
+    image_name = "openems-image"
+    sim_path = "Simple_Patch_Antenna.py"
+
     cmd = f"""
 	docker run -it --rm \
 		-e DISPLAY=host.docker.internal:0 \
 		-v /tmp/.X11-unix:/tmp/.X11-unix \
 		-v ./src:/app/ \
 		-v /tmp:/tmp/ \
-		{IMAGE_NAME} \
-		python3 /app/Simple_Patch_Antenna.py
+		{image_name} \
+		python3 /app/{sim_path}
 	"""
     sp.run(cmd, shell=True)
 
