@@ -96,7 +96,7 @@ nf2ff = FDTD.CreateNF2FFBox()
 ### Run the simulation
 save_csx_xml = True
 if save_csx_xml:
-    CSX_file = os.path.join(os.getcwd(), "simp_patch.xml")
+    CSX_file = os.path.join(os.getcwd(), "Simp_Patch.xml")
     res = CSX.Write2XML(CSX_file)
 
 post_proc_only = False
