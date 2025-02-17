@@ -28,7 +28,8 @@ def read_nf2ff(nf2ff_path: Path):
 def plot_directivity(nf2ff):
     theta = np.rad2deg(nf2ff["theta"])
     E_norm = nf2ff["E_norm"]
-    E_norm_scaled = 20.0 * np.log10(E_norm / np.max(E_norm)) + 10.0
+    print(np.max(E_norm, axis=1))
+    E_norm_scaled = 20.0 * np.log10(E_norm / np.max(E_norm))
 
     plt.plot(theta, np.squeeze(E_norm_scaled[0]), "k-", linewidth=2, label="xz-plane")
     plt.plot(theta, np.squeeze(E_norm_scaled[1]), "r--", linewidth=2, label="yz-plane")
