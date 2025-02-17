@@ -1,4 +1,8 @@
-import os
+# 3x3
+# same phase & amplitude for all ports
+# use array factor to calculate the directivity and compare with the analytical solution
+
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -7,7 +11,7 @@ from openEMS import openEMS
 from openEMS.physical_constants import EPS0, C0
 
 ### General parameter setup
-Sim_Path = os.path.join(os.getcwd(), "Simp_Patch")
+sim_path = Path(Path.cwd(), "Simp_Patch")
 
 # patch width (resonant length) in x-direction
 patch_width = 32  #
@@ -32,10 +36,6 @@ SimBox = np.array([200, 200, 150])
 # setup FDTD parameter & excitation function
 f0 = 2e9  # center frequency
 fc = 1e9  # 20 dB corner frequency
-
-# 3x3
-# same phase & amplitude for all ports
-# use array factor to calculate the directivity and compare with the analytical solution
 
 ### FDTD setup
 ## * Limit the simulation to 30k timesteps
@@ -96,17 +96,16 @@ nf2ff = FDTD.CreateNF2FFBox()
 ### Run the simulation
 save_csx_xml = True
 if save_csx_xml:
-    CSX_file = os.path.join(os.getcwd(), "Simp_Patch.xml")
-    res = CSX.Write2XML(CSX_file)
+    res = CSX.Write2XML(sim_path / "Simp_Patch.xml")
 
 post_proc_only = False
 if not post_proc_only:
-    FDTD.Run(Sim_Path)
+    FDTD.Run(sim_path)
 
 
 ### Post-processing and plotting
 f = np.linspace(max(1e9, f0 - fc), f0 + fc, 401)
-port.CalcPort(Sim_Path, f)
+port.CalcPort(sim_path, f)
 s11 = port.uf_ref / port.uf_inc
 s11_dB = 20.0 * np.log10(np.abs(s11))
 plt.figure()
@@ -122,10 +121,10 @@ if not len(idx) == 1:
     raise Exception("No resonance frequency found for far-field calulation")
 
 f_res = f[idx[0]]
-f_res = f
+# f_res = f
 theta = np.arange(-180.0, 180.0, 2.0)
 phi = np.array([0.0, 90.0])
-nf2ff_res = nf2ff.CalcNF2FF(Sim_Path, f_res, theta, phi, center=[0, 0, 1e-3])
+nf2ff_res = nf2ff.CalcNF2FF(sim_path, f_res, theta, phi, center=[0, 0, 1e-3])
 print(type(nf2ff_res))
 
 plt.figure()
