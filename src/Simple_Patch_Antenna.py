@@ -1,7 +1,3 @@
-# 3x3
-# same phase & amplitude for all ports
-# use array factor to calculate the directivity and compare with the analytical solution
-
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,6 +9,7 @@ from openEMS.physical_constants import EPS0, C0
 ### General parameter setup
 sim_path = Path(Path.cwd(), "Simp_Patch")
 
+### Antenna array parameters
 # patch width (resonant length) in x-direction
 patch_width = 32  #
 # patch length in y-direction
@@ -79,7 +76,7 @@ mesh.AddLine("z", np.linspace(0, substrate_thickness, substrate_cells + 1))
 gnd = CSX.AddMetal("gnd")  # create a perfect electric conductor (PEC)
 start[2] = 0
 stop[2] = 0
-gnd.AddBox(start, stop, priority=10)
+gnd.AddBox(start=start, stop=stop, priority=10)
 
 FDTD.AddEdges2Grid(dirs="xy", properties=gnd)
 
