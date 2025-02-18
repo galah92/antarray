@@ -122,7 +122,7 @@ if not len(idx) == 1:
 
 f_res = f[idx[0]]
 theta = np.arange(-180.0, 180.0, 2.0)
-phi = np.array([0.0, 90.0])
+phi = np.arange(-180.0, 180.0, 2.0)
 nf2ff_res = nf2ff.CalcNF2FF(sim_path, f_res, theta, phi, center=[0, 0, 1e-3])
 
 plt.figure()

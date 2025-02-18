@@ -116,7 +116,6 @@ def plot_ff_3d(
 
     # Configure plot settings
     ax.set_box_aspect([1, 1, 1])
-    ax.axis("off")
 
     # Add colorbar
     if logscale is not None:
@@ -132,6 +131,10 @@ def plot_ff_3d(
         )
     else:
         plt.colorbar(surf, ax=ax)
+
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
 
     ax.set_title(title)
 
