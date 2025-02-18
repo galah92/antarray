@@ -121,11 +121,9 @@ if not len(idx) == 1:
     raise Exception("No resonance frequency found for far-field calulation")
 
 f_res = f[idx[0]]
-# f_res = f
 theta = np.arange(-180.0, 180.0, 2.0)
 phi = np.array([0.0, 90.0])
 nf2ff_res = nf2ff.CalcNF2FF(sim_path, f_res, theta, phi, center=[0, 0, 1e-3])
-print(type(nf2ff_res))
 
 plt.figure()
 E_norm, Dmax = nf2ff_res.E_norm, nf2ff_res.Dmax
