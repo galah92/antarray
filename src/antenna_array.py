@@ -8,33 +8,30 @@ from openEMS.physical_constants import EPS0, C0
 
 ### General parameter setup
 filename = Path(__file__).stem
-sim_path = Path(Path.cwd(), filename)
+sim_path = Path(__file__).parent / "sim" / filename
+sim_path.mkdir(parents=True, exist_ok=True)
 
 ### Antenna array parameters
-# patch width (resonant length) in x-direction
-patch_width = 32.86
-# patch length in y-direction
-patch_length = 41.37
+patch_width = 32  # patch width (resonant length) in x-direction
+patch_length = 40  # patch length in y-direction
 
 # define array size and dimensions
-array = {
-    "xn": 4,
-    "yn": 4,
-    "x_spacing": patch_width * 3,
-    "y_spacing": patch_length * 3,
-}
+xn = 4
+yn = 4
+x_spacing = patch_width * 3
+y_spacing = patch_length * 3
 
 # substrate setup
 substrate_epsR = 3.38
 substrate_kappa = 1e-3 * 2 * np.pi * 2.45e9 * EPS0 * substrate_epsR
-substrate_width = 60 + (array["xn"] - 1) * array["x_spacing"]
-substrate_length = 60 + (array["yn"] - 1) * array["y_spacing"]
+substrate_width = 60 + (xn - 1) * x_spacing
+substrate_length = 60 + (yn - 1) * y_spacing
 substrate_thickness = 1.524
 substrate_cells = 4
 
 # setup feeding
-feed_pos = -5.5
-feed_width = 2
+feed_pos = -5.5  # feeding position in x-direction
+feed_width = 2  # width of the feeding line
 feed_R = 50  # feed resistance
 
 # size of the simulation box around the array
@@ -77,12 +74,12 @@ mesh.AddLine(
     + [SimBox[2]],
 )
 
-# Add mesh lines for patches and feeds
-for xn in range(array["xn"]):
-    for yn in range(array["yn"]):
-        midX = (array["xn"] / 2 - xn - 0.5) * array["x_spacing"]
-        midY = (array["yn"] / 2 - yn - 0.5) * array["y_spacing"]
+ant_midX = (xn / 2 - np.arange(xn) - 0.5) * x_spacing
+ant_midY = (yn / 2 - np.arange(yn) - 0.5) * y_spacing
 
+# Add mesh lines for patches and feeds
+for midX in ant_midX:
+    for midY in ant_midY:
         # feeding mesh
         mesh.AddLine("x", [midX + feed_pos])
         mesh.AddLine("y", [midY - feed_width / 2, midY + feed_width / 2])
@@ -127,11 +124,8 @@ patch = CSX.AddMetal("patch")
 port_number = 1
 
 ports = []
-for xn in range(array["xn"]):
-    for yn in range(array["yn"]):
-        midX = (array["xn"] / 2 - xn - 0.5) * array["x_spacing"]
-        midY = (array["yn"] / 2 - yn - 0.5) * array["y_spacing"]
-
+for midX in ant_midX:
+    for midY in ant_midY:
         # Create patch
         start = [midX - patch_width / 2, midY - patch_length / 2, substrate_thickness]
         stop = [midX + patch_width / 2, midY + patch_length / 2, substrate_thickness]
@@ -170,7 +164,7 @@ f = np.linspace(max(1e9, f0 - fc), f0 + fc, 501)
 
 # Calculate total input power
 P_in = 0
-for port_nr in range(1, array["xn"] * array["yn"] + 1):
+for port_nr in range(1, xn * yn + 1):
     port = ports[port_nr - 1]
     port.CalcPort(sim_path, f)
     P_in += 0.5 * port.uf_tot * np.conj(port.if_tot)
@@ -224,37 +218,3 @@ if draw_3d_pattern:
     # plotFF3D(nf2ff_3d)
 
 print("Done.")
-
-
-def array_factor_sum(xn, yn, theta, phi, f_res, nf2ff, center):
-    AF = np.zeros((len(theta), len(phi)), dtype=complex)
-    for xn in range(array["xn"]):
-        for yn in range(array["yn"]):
-            midX = (array["xn"] / 2 - xn - 0.5) * array["x_spacing"]
-            midY = (array["yn"] / 2 - yn - 0.5) * array["y_spacing"]
-
-            # Calculate the far field of the single patch
-            nf2ff_res = nf2ff.CalcNF2FF(
-                sim_path, f_res, theta, phi, center=[midX, midY, 1e-3]
-            )
-
-            # Calculate the array factor
-            AF += nf2ff_res.E_norm
-
-    return AF
-
-
-AF = array_factor_sum(
-    array["xn"], array["yn"], theta, phi, f_res, nf2ff, center=[0, 0, 1e-3]
-)
-AF_dB = 20 * np.log10(np.abs(AF) / np.max(np.abs(AF)))
-
-
-def plot_array_factor(AF_dB, theta, phi):
-    plt.figure()
-    plt.pcolormesh(theta, phi, AF_dB.T, shading="gouraud")
-    plt.colorbar()
-    plt.xlabel("Theta (deg)")
-    plt.ylabel("Phi (deg)")
-    plt.title("Array Factor (dB)")
-    plt.savefig("ArrayFactor.png")

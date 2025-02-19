@@ -8,13 +8,12 @@ from openEMS.physical_constants import EPS0, C0
 
 ### General parameter setup
 filename = Path(__file__).stem
-sim_path = Path(Path.cwd(), filename)
+sim_path = Path(__file__).parent / "sim" / filename
+sim_path.mkdir(parents=True, exist_ok=True)
 
 ### Antenna array parameters
-# patch width (resonant length) in x-direction
-patch_width = 32  #
-# patch length in y-direction
-patch_length = 40
+patch_width = 32  # patch width (resonant length) in x-direction
+patch_length = 40  # patch length in y-direction
 
 # substrate setup
 substrate_epsR = 3.38
@@ -96,7 +95,7 @@ nf2ff = FDTD.CreateNF2FFBox()
 ### Run the simulation
 save_csx_xml = True
 if save_csx_xml:
-    res = CSX.Write2XML(sim_path / "Simp_Patch.xml")
+    res = CSX.Write2XML(sim_path / "csx.xml")
 
 post_proc_only = False
 if not post_proc_only:
