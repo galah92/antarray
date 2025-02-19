@@ -53,6 +53,8 @@ def plot_ff_2d(nf2ff):
     plt.legend()
     plt.grid()
 
+    return E_norm
+
 
 def plot_ff_3d(
     nf2ff: dict[str, object],
