@@ -7,7 +7,8 @@ from openEMS import openEMS
 from openEMS.physical_constants import EPS0, C0
 
 ### General parameter setup
-sim_path = Path(Path.cwd(), "Simp_Patch")
+filename = Path(__file__).stem
+sim_path = Path(Path.cwd(), filename)
 
 ### Antenna array parameters
 # patch width (resonant length) in x-direction
@@ -41,9 +42,11 @@ FDTD = openEMS(NrTS=30000, EndCriteria=1e-4)
 FDTD.SetGaussExcite(f0, fc)
 FDTD.SetBoundaryCond(["MUR", "MUR", "MUR", "MUR", "MUR", "MUR"])
 
-
+### Setup CSXCAD geometry & mesh
 CSX = ContinuousStructure()
 FDTD.SetCSX(CSX)
+
+# setup the mesh
 mesh = CSX.GetGrid()
 mesh.SetDeltaUnit(1e-3)
 mesh_res = C0 / (f0 + fc) / 1e-3 / 20

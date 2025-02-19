@@ -7,7 +7,8 @@ from openEMS import openEMS
 from openEMS.physical_constants import EPS0, C0
 
 ### General parameter setup
-sim_path = Path(Path.cwd(), "Simp_Patch_Array")
+filename = Path(__file__).stem
+sim_path = Path(Path.cwd(), filename)
 
 ### Antenna array parameters
 # patch width (resonant length) in x-direction
@@ -39,17 +40,18 @@ feed_R = 50  # feed resistance
 # size of the simulation box around the array
 SimBox = np.array([50 + substrate_width, 50 + substrate_length, 25])
 
+# setup FDTD parameter & excitation function
+f0 = 0  # center frequency
+fc = 3e9  # 20 dB corner frequency
+
 ### FDTD setup
 ## * Limit the simulation to 30k timesteps
 ## * Define a reduced end criteria of -50dB
 FDTD = openEMS(NrTS=30000, EndCriteria=1e-5)
-f0 = 0  # center frequency
-fc = 3e9  # 20 dB corner frequency
 FDTD.SetGaussExcite(f0, fc)
 
 # Set boundary conditions
-bc = ["MUR"] * 6
-FDTD.SetBoundaryCond(bc)
+FDTD.SetBoundaryCond(["MUR", "MUR", "MUR", "MUR", "MUR", "MUR"])
 
 ### Setup CSXCAD geometry & mesh
 CSX = ContinuousStructure()
@@ -143,7 +145,14 @@ for xn in range(array["xn"]):
             substrate_thickness,
         ]
         port = FDTD.AddLumpedPort(
-            port_number, feed_R, port_start, port_stop, "z", 1.0, priority=5
+            port_number,
+            feed_R,
+            port_start,
+            port_stop,
+            "z",
+            excite=1.0,
+            priority=5,
+            delay=np.exp(-1j * 2 * np.pi * f0 * 0.5),
         )
         ports.append(port)
         port_number += 1
@@ -215,3 +224,37 @@ if draw_3d_pattern:
     # plotFF3D(nf2ff_3d)
 
 print("Done.")
+
+
+def array_factor_sum(xn, yn, theta, phi, f_res, nf2ff, center):
+    AF = np.zeros((len(theta), len(phi)), dtype=complex)
+    for xn in range(array["xn"]):
+        for yn in range(array["yn"]):
+            midX = (array["xn"] / 2 - xn - 0.5) * array["x_spacing"]
+            midY = (array["yn"] / 2 - yn - 0.5) * array["y_spacing"]
+
+            # Calculate the far field of the single patch
+            nf2ff_res = nf2ff.CalcNF2FF(
+                sim_path, f_res, theta, phi, center=[midX, midY, 1e-3]
+            )
+
+            # Calculate the array factor
+            AF += nf2ff_res.E_norm
+
+    return AF
+
+
+AF = array_factor_sum(
+    array["xn"], array["yn"], theta, phi, f_res, nf2ff, center=[0, 0, 1e-3]
+)
+AF_dB = 20 * np.log10(np.abs(AF) / np.max(np.abs(AF)))
+
+
+def plot_array_factor(AF_dB, theta, phi):
+    plt.figure()
+    plt.pcolormesh(theta, phi, AF_dB.T, shading="gouraud")
+    plt.colorbar()
+    plt.xlabel("Theta (deg)")
+    plt.ylabel("Phi (deg)")
+    plt.title("Array Factor (dB)")
+    plt.savefig("ArrayFactor.png")

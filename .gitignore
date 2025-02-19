@@ -173,6 +173,6 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-.png
+*.png
 .h5
 Simp_Patch*
