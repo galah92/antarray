@@ -14,34 +14,32 @@ sim_path.mkdir(parents=True, exist_ok=True)
 patch_width = 32  # patch width (resonant length) in x-direction
 patch_length = 40  # patch length in y-direction
 
-# define array size and dimensions
-xn = 4
-yn = 4
-x_spacing = patch_width * 3
-y_spacing = patch_length * 3
-
-# substrate setup
-substrate_epsR = 3.38
-substrate_kappa = 1e-3 * 2 * np.pi * 2.45e9 * EPS0 * substrate_epsR
-substrate_width = 60 + (xn - 1) * x_spacing
-substrate_length = 60 + (yn - 1) * y_spacing
-substrate_thickness = 1.524
-substrate_cells = 4
-
-# setup feeding
-feed_pos = -5.5  # feeding position in x-direction
-feed_width = 2  # width of the feeding line
-feed_R = 50  # feed resistance
-
-# size of the simulation box around the array
-SimBox = np.array([50 + substrate_width, 50 + substrate_length, 25])
-
 # setup FDTD parameter & excitation function
 f0 = 0  # center frequency
 fc = 3e9  # 20 dB corner frequency
 
 
-def simulate(excite: int):
+def simulate(xn: int, yn: int):
+    # define array size and dimensions
+    x_spacing = patch_width * 3
+    y_spacing = patch_length * 3
+
+    # substrate setup
+    substrate_epsR = 3.38
+    substrate_kappa = 1e-3 * 2 * np.pi * 2.45e9 * EPS0 * substrate_epsR
+    substrate_width = 60 + (xn - 1) * x_spacing
+    substrate_length = 60 + (yn - 1) * y_spacing
+    substrate_thickness = 1.524
+    substrate_cells = 4
+
+    # setup feeding
+    feed_pos = -5.5  # feeding position in x-direction
+    feed_width = 2  # width of the feeding line
+    feed_R = 50  # feed resistance
+
+    # size of the simulation box around the array
+    SimBox = np.array([50 + substrate_width, 50 + substrate_length, 25])
+
     ### FDTD setup
     ## * Limit the simulation to 30k timesteps
     ## * Define a reduced end criteria of -50dB
@@ -157,7 +155,7 @@ def simulate(excite: int):
                 port_start,
                 port_stop,
                 "z",
-                excite=excite[i],
+                excite=True,
                 priority=5,
                 # delay=np.exp(-1j * 2 * np.pi * f0 * 0.5),
             )
@@ -176,7 +174,7 @@ def simulate(excite: int):
     return sim_path, nf2ff, ports
 
 
-def postprcess(sim_path, nf2ff, f0, fc, ports, outfile=str | None):
+def postprcess(sim_path, nf2ff, xn, yn, f0, fc, ports, outfile=str | None):
     ### Post-processing and plotting
     f = np.linspace(max(1e9, f0 - fc), f0 + fc, 501)
 
@@ -223,18 +221,10 @@ def postprcess(sim_path, nf2ff, f0, fc, ports, outfile=str | None):
     )
 
 
-print("Simulating all antennas...")
-excite = [1] * (xn * yn)
-sim_path, nf2ff, ports = simulate(excite)
-postprcess(sim_path, nf2ff, f0, fc, ports, outfile="farfield_all.h5")
+xn, yn = 4, 4
+sim_path, nf2ff, ports = simulate(xn=xn, yn=yn)
+postprcess(sim_path, nf2ff, xn, yn, f0, fc, ports, outfile=f"farfield_{xn}_{yn}.h5")
 
-
-# for i in range(xn * yn):
-#     print(f"Simulating antenna {i + 1}/{xn * yn}...")
-#     excite = [0] * (xn * yn)
-#     excite[i] = 1
-#     sim_path, nf2ff, ports = simulate(excite)
-#     postprcess(sim_path, nf2ff, f0, fc, ports, outfile=f"farfield_{i}.h5")
-
-
-print("Done.")
+xn, yn = 1, 1
+sim_path, nf2ff, ports = simulate(xn=xn, yn=yn)
+postprcess(sim_path, nf2ff, xn, yn, f0, fc, ports, outfile=f"farfield_{xn}_{yn}.h5")
