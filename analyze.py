@@ -122,7 +122,7 @@ def plot_ff_3d(
     # Add colorbar
     if logscale is not None:
         ticks = np.linspace(0, np.max(E_far), 9)
-        ticklabels = np.linspace(
+        _ticklabels = np.linspace(
             logscale, 10 * np.log10(nf2ff.get("Dmax", [1])[freq_index]), 9
         )
         plt.colorbar(
