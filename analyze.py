@@ -39,19 +39,21 @@ def read_nf2ff(nf2ff_path: Path):
     }
 
 
-def plot_ff_2d(nf2ff):
+def plot_ff_2d(nf2ff, ax: plt.Axes | None = None):
     theta = np.rad2deg(nf2ff["theta"])
     E_norm = nf2ff["E_norm"][0]
     Dmax = nf2ff["Dmax"]
     E_norm = 20.0 * np.log10(E_norm / np.max(E_norm)) + 10.0 * np.log10(Dmax[:, None])
 
-    plt.plot(theta, np.squeeze(E_norm[0]), "k-", linewidth=2, label="xz-plane")
-    plt.plot(theta, np.squeeze(E_norm[1]), "r--", linewidth=2, label="yz-plane")
-    plt.xlabel("Theta (deg)")
-    plt.ylabel("Directivity (dBi)")
-    plt.title("Directivity Plot")
-    plt.legend()
-    plt.grid()
+    if ax is None:
+        ax = plt.figure().add_subplot()
+    ax.plot(theta, np.squeeze(E_norm[0]), "k-", linewidth=2, label="xz-plane")
+    ax.plot(theta, np.squeeze(E_norm[1]), "r--", linewidth=2, label="yz-plane")
+    ax.set_xlabel("Theta (deg)")
+    ax.set_ylabel("Directivity (dBi)")
+    ax.set_title("Directivity Plot")
+    ax.legend()
+    ax.grid()
 
     return E_norm
 
@@ -62,6 +64,7 @@ def plot_ff_3d(
     freq_index: int = 0,
     logscale: float | None = None,
     normalize: bool = False,
+    ax: plt.Axes | None = None,
 ) -> plt.Axes:
     """
     Plot normalized 3D far field pattern.
@@ -111,8 +114,8 @@ def plot_ff_3d(
     z = E_far * np.cos(theta)
 
     # Create 3D plot
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection="3d")
+    if ax is None:
+        ax = plt.figure().add_subplot(projection="3d")
     c = plt.cm.viridis(E_far / np.max(E_far))
     surf = ax.plot_surface(x, y, z, facecolors=c, shade=False)
 

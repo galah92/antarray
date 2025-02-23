@@ -19,16 +19,25 @@ f0 = 0  # center frequency
 fc = 3e9  # 20 dB corner frequency
 
 
-def simulate(xn: int, yn: int):
+def simulate(
+    n_x: int,
+    n_y: int,
+    d_x: float | None = None,
+    d_y: float | None = None,
+):
     # define array size and dimensions
-    x_spacing = patch_width * 3
-    y_spacing = patch_length * 3
+    if d_x is None:
+        d_x = patch_width * 3
+    if d_y is None:
+        d_y = patch_length * 3
+
+    print(f"Simulating {n_x}x{n_y} array with {d_x=:.2f} and {d_y=:.2f}")
 
     # substrate setup
     substrate_epsR = 3.38
     substrate_kappa = 1e-3 * 2 * np.pi * 2.45e9 * EPS0 * substrate_epsR
-    substrate_width = 60 + (xn - 1) * x_spacing
-    substrate_length = 60 + (yn - 1) * y_spacing
+    substrate_width = 60 + (n_x - 1) * d_x
+    substrate_length = 60 + (n_y - 1) * d_y
     substrate_thickness = 1.524
     substrate_cells = 4
 
@@ -74,8 +83,8 @@ def simulate(xn: int, yn: int):
         + [SimBox[2]],
     )
 
-    ant_midX = (xn / 2 - np.arange(xn) - 0.5) * x_spacing
-    ant_midY = (yn / 2 - np.arange(yn) - 0.5) * y_spacing
+    ant_midX = (n_x / 2 - np.arange(n_x) - 0.5) * d_x
+    ant_midY = (n_y / 2 - np.arange(n_y) - 0.5) * d_y
 
     # Add mesh lines for patches and feeds
     for midX in ant_midX:
@@ -174,13 +183,13 @@ def simulate(xn: int, yn: int):
     return sim_path, nf2ff, ports
 
 
-def postprcess(sim_path, nf2ff, xn, yn, f0, fc, ports, outfile=str | None):
+def postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile=str | None):
     ### Post-processing and plotting
     f = np.linspace(max(1e9, f0 - fc), f0 + fc, 501)
 
     # Calculate total input power
     P_in = 0
-    for port_nr in range(1, xn * yn + 1):
+    for port_nr in range(1, n_x * n_y + 1):
         port = ports[port_nr - 1]
         port.CalcPort(sim_path, f)
         P_in += 0.5 * port.uf_tot * np.conj(port.if_tot)
@@ -198,6 +207,7 @@ def postprcess(sim_path, nf2ff, xn, yn, f0, fc, ports, outfile=str | None):
     # Claude's help
     idx = np.argmin(s11_dB)  # Find minimum S11 location
     f_res = f[idx]
+    print(f"{idx=}")
     print(f"Best match frequency: {f_res / 1e9:.2f} GHz with S11: {s11_dB[idx]:.2f} dB")
 
     # Proceed even if match isn't perfect
@@ -221,10 +231,8 @@ def postprcess(sim_path, nf2ff, xn, yn, f0, fc, ports, outfile=str | None):
     )
 
 
-xn, yn = 4, 4
-sim_path, nf2ff, ports = simulate(xn=xn, yn=yn)
-postprcess(sim_path, nf2ff, xn, yn, f0, fc, ports, outfile=f"farfield_{xn}_{yn}.h5")
-
-xn, yn = 1, 1
-sim_path, nf2ff, ports = simulate(xn=xn, yn=yn)
-postprcess(sim_path, nf2ff, xn, yn, f0, fc, ports, outfile=f"farfield_{xn}_{yn}.h5")
+n_ant = [[1, 1], [3, 3]]
+for n_x, n_y in n_ant:
+    outfile = f"farfield_{n_x}_{n_y}.h5"
+    sim_path, nf2ff, ports = simulate(n_x=n_x, n_y=n_y)
+    postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile)
