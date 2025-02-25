@@ -55,7 +55,112 @@ def plot_ff_2d(nf2ff, ax: plt.Axes | None = None):
     ax.legend()
     ax.grid()
 
-    return E_norm
+
+def plot_ff_polar(
+    E_total,
+    Dmax,
+    theta,
+    phi,
+    *,
+    title: str | None,
+    ax: plt.Axes | None = None,
+    filename: str | None = None,
+):
+    E_total = E_total / np.max(np.abs(E_total))
+    E_total_dbi = 20 * np.log10(np.abs(E_total)) + 10.0 * np.log10(Dmax[0])
+
+    fig, ax = plt.subplots(ncols=phi.size, subplot_kw={"projection": "polar"})
+    for i in range(phi.size):
+        ax[i].plot(theta, E_total_dbi[i], "r-", linewidth=1)
+        ax[i].set_thetagrids(np.arange(0, 360, 30))
+        ax[i].set_rgrids(np.arange(-20, 20, 10))
+        ax[i].set_rlim(-25, 15)
+        ax[i].set_theta_offset(np.pi / 2)  # make 0 degree at the top
+        ax[i].set_theta_direction(-1)  # clockwise
+        ax[i].set_rlabel_position(90)  # move radial label to the right
+        ax[i].grid(True, linestyle="--")
+        ax[i].tick_params(labelsize=6)
+        ax[i].set_title(f"phi = {np.degrees(phi[i]):.0f} deg")
+    fig.set_tight_layout(True)
+    if title:
+        fig.suptitle(title)
+    if filename:
+        fig.savefig(filename, dpi=600)
+
+
+def array_factor(theta, phi, xn, yn, dx, dy, frequency):
+    """
+    Calculate the array factor of a rectangular antenna array.
+
+    Parameters:
+    -----------
+    theta : float or numpy.ndarray
+        Elevation angle(s) in radians
+    phi : float or numpy.ndarray
+        Azimuth angle(s) in radians
+    xn : int
+        Number of elements in the x-direction
+    yn : int
+        Number of elements in the y-direction
+    dx : float
+        Element spacing in the x-direction in millimeters
+    dy : float
+        Element spacing in the y-direction in millimeters
+    frequency : float
+        Operating frequency in Hz
+
+    Returns:
+    --------
+    numpy.ndarray
+        Array factor magnitude
+    """
+    # Convert input to numpy arrays
+    theta = np.atleast_1d(theta)
+    phi = np.atleast_1d(phi)
+
+    # Calculate wavelength and convert spacing to wavelengths
+    c = 299792458  # Speed of light in m/s
+    wavelength_mm = (c / frequency) * 1000  # Wavelength in millimeters
+    dx_wavelengths = dx / wavelength_mm
+    dy_wavelengths = dy / wavelength_mm
+
+    # Initialize array factor
+    AF = np.zeros((len(theta), len(phi)), dtype=complex)
+
+    # Create arrays of element indices
+    x_indices = np.arange(xn)
+    y_indices = np.arange(yn)
+
+    # Wave number
+    k = 2 * np.pi
+
+    # Calculate array factor
+    for i, t in enumerate(theta):
+        sin_t = np.sin(t)
+        for j, p in enumerate(phi):
+            # Direction cosines
+            ux = sin_t * np.cos(p)
+            uy = sin_t * np.sin(p)
+
+            # Calculate array factor components
+            if xn > 1:
+                psi_x = k * dx_wavelengths * ux
+                # Simplified calculation using numpy
+                af_x = np.sum(np.exp(1j * x_indices * psi_x)) / xn
+            else:
+                af_x = 1
+
+            if yn > 1:
+                psi_y = k * dy_wavelengths * uy
+                # Simplified calculation using numpy
+                af_y = np.sum(np.exp(1j * y_indices * psi_y)) / yn
+            else:
+                af_y = 1
+
+            # Total array factor
+            AF[i, j] = af_x * af_y
+
+    return np.abs(AF)
 
 
 def plot_ff_3d(
