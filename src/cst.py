@@ -116,7 +116,7 @@ plt.xlabel("Frequency (GHz)")
 plt.savefig("S11.png", dpi=200)
 
 f_res = 2.45e9
-theta = np.arange(-180.0, 180.0, 2.0)
+theta = np.arange(-180.0, 180.0, 1.0)
 phi = np.array([0, 90.0])
 nf2ff_res = nf2ff.CalcNF2FF(sim_path, f_res, theta, phi, center=[0, 0, 1e-3])
 

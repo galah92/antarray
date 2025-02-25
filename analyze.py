@@ -62,30 +62,31 @@ def plot_ff_polar(
     theta,
     phi,
     *,
-    title: str | None,
+    title: str | None = None,
     ax: plt.Axes | None = None,
     filename: str | None = None,
 ):
     E_total = E_total / np.max(np.abs(E_total))
-    E_total_dbi = 20 * np.log10(np.abs(E_total)) + 10.0 * np.log10(Dmax[0])
+    E_total_dbi = 20 * np.log10(np.abs(E_total)) + 10.0 * np.log10(Dmax)
 
-    fig, ax = plt.subplots(ncols=phi.size, subplot_kw={"projection": "polar"})
-    for i in range(phi.size):
-        ax[i].plot(theta, E_total_dbi[i], "r-", linewidth=1)
-        ax[i].set_thetagrids(np.arange(0, 360, 30))
-        ax[i].set_rgrids(np.arange(-20, 20, 10))
-        ax[i].set_rlim(-25, 15)
-        ax[i].set_theta_offset(np.pi / 2)  # make 0 degree at the top
-        ax[i].set_theta_direction(-1)  # clockwise
-        ax[i].set_rlabel_position(90)  # move radial label to the right
-        ax[i].grid(True, linestyle="--")
-        ax[i].tick_params(labelsize=6)
-        ax[i].set_title(f"phi = {np.degrees(phi[i]):.0f} deg")
-    fig.set_tight_layout(True)
+    if ax is None:
+        fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+
+    ax.plot(theta, E_total_dbi, "r-", linewidth=1)
+    ax.set_thetagrids(np.arange(0, 360, 30))
+    ax.set_rgrids(np.arange(-20, 20, 10))
+    ax.set_rlim(-25, 15)
+    ax.set_theta_offset(np.pi / 2)  # make 0 degree at the top
+    ax.set_theta_direction(-1)  # clockwise
+    ax.set_rlabel_position(90)  # move radial label to the right
+    ax.grid(True, linestyle="--")
+    ax.tick_params(labelsize=6)
     if title:
-        fig.suptitle(title)
-    if filename:
-        fig.savefig(filename, dpi=600)
+        ax.set_title(title)
+    if ax is None:
+        fig.set_tight_layout(True)
+        if filename:
+            fig.savefig(filename, dpi=600)
 
 
 def array_factor(theta, phi, xn, yn, dx, dy, frequency):
