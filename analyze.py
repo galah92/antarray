@@ -60,7 +60,6 @@ def plot_ff_polar(
     E_total,
     Dmax,
     theta,
-    phi,
     *,
     title: str | None = None,
     ax: plt.Axes | None = None,
