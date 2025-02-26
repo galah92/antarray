@@ -57,7 +57,7 @@ def plot_ff_2d(nf2ff, ax: plt.Axes | None = None):
 
 
 def plot_ff_polar(
-    E_total,
+    E_norm,
     Dmax,
     theta,
     *,
@@ -65,13 +65,13 @@ def plot_ff_polar(
     ax: plt.Axes | None = None,
     filename: str | None = None,
 ):
-    E_total = E_total / np.max(np.abs(E_total))
-    E_total_dbi = 20 * np.log10(np.abs(E_total)) + 10.0 * np.log10(Dmax)
+    E_norm = E_norm / np.max(np.abs(E_norm))
+    E_norm = 20 * np.log10(np.abs(E_norm)) + 10.0 * np.log10(Dmax)
 
     if ax is None:
         fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
 
-    ax.plot(theta, E_total_dbi, "r-", linewidth=1)
+    ax.plot(theta, E_norm, "r-", linewidth=1)
     ax.set_thetagrids(np.arange(0, 360, 30))
     ax.set_rgrids(np.arange(-20, 20, 10))
     ax.set_rlim(-25, 15)
@@ -114,51 +114,52 @@ def array_factor(theta, phi, xn, yn, dx, dy, frequency):
     numpy.ndarray
         Array factor magnitude
     """
-    # Convert input to numpy arrays
-    theta = np.atleast_1d(theta)
-    phi = np.atleast_1d(phi)
+    # Convert input to numpy arrays if they aren't already
+    theta = np.asarray(theta)
+    phi = np.asarray(phi)
 
-    # Calculate wavelength and convert spacing to wavelengths
+    # Calculate wavelength and convert spacing to meters
     c = 299792458  # Speed of light in m/s
-    wavelength_mm = (c / frequency) * 1000  # Wavelength in millimeters
-    dx_wavelengths = dx / wavelength_mm
-    dy_wavelengths = dy / wavelength_mm
-
-    # Initialize array factor
-    AF = np.zeros((len(theta), len(phi)), dtype=complex)
-
-    # Create arrays of element indices
-    x_indices = np.arange(xn)
-    y_indices = np.arange(yn)
+    wavelength = c / frequency  # Wavelength in meters
+    dx_m = dx / 1000  # Convert from mm to meters
+    dy_m = dy / 1000  # Convert from mm to meters
 
     # Wave number
-    k = 2 * np.pi
+    k = 2 * np.pi / wavelength
+
+    # Initialize output array based on input shapes
+    if theta.ndim == 1 and phi.ndim == 1:
+        # Create a meshgrid for broadcasting
+        THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
+        AF = np.zeros((theta.size, phi.size), dtype=complex)
+    else:
+        # Assume pre-meshed inputs
+        THETA, PHI = theta, phi
+        AF = np.zeros_like(THETA, dtype=complex)
 
     # Calculate array factor
-    for i, t in enumerate(theta):
-        sin_t = np.sin(t)
-        for j, p in enumerate(phi):
-            # Direction cosines
-            ux = sin_t * np.cos(p)
-            uy = sin_t * np.sin(p)
+    sin_theta = np.sin(THETA)
+    cos_phi = np.cos(PHI)
+    sin_phi = np.sin(PHI)
 
-            # Calculate array factor components
-            if xn > 1:
-                psi_x = k * dx_wavelengths * ux
-                # Simplified calculation using numpy
-                af_x = np.sum(np.exp(1j * x_indices * psi_x)) / xn
-            else:
-                af_x = 1
+    # Phase differences
+    psi_x = k * dx_m * sin_theta * cos_phi
+    psi_y = k * dy_m * sin_theta * sin_phi
 
-            if yn > 1:
-                psi_y = k * dy_wavelengths * uy
-                # Simplified calculation using numpy
-                af_y = np.sum(np.exp(1j * y_indices * psi_y)) / yn
-            else:
-                af_y = 1
+    # Element positions
+    x_positions = np.arange(xn) - (xn - 1) / 2
+    y_positions = np.arange(yn) - (yn - 1) / 2
 
-            # Total array factor
-            AF[i, j] = af_x * af_y
+    # Calculate array factor by summing contributions from each element
+    for ix in range(xn):
+        for iy in range(yn):
+            # Phase for this element
+            phase = x_positions[ix] * psi_x + y_positions[iy] * psi_y
+            # Add contribution to array factor
+            AF += np.exp(1j * phase)
+
+    # Normalize by total number of elements
+    AF = AF / (xn * yn)
 
     return np.abs(AF)
 
