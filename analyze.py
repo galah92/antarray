@@ -88,7 +88,7 @@ def plot_ff_polar(
             fig.savefig(filename, dpi=600)
 
 
-def array_factor(theta, phi, xn, yn, dx, dy, frequency):
+def array_factor(theta, phi, freq, xn, yn, dx, dy):
     """
     Calculate the array factor of a rectangular antenna array.
 
@@ -106,8 +106,8 @@ def array_factor(theta, phi, xn, yn, dx, dy, frequency):
         Element spacing in the x-direction in millimeters
     dy : float
         Element spacing in the y-direction in millimeters
-    frequency : float
-        Operating frequency in Hz
+    freq : float
+        Operating freq in Hz
 
     Returns:
     --------
@@ -120,7 +120,7 @@ def array_factor(theta, phi, xn, yn, dx, dy, frequency):
 
     # Calculate wavelength and convert spacing to meters
     c = 299792458  # Speed of light in m/s
-    wavelength = c / frequency  # Wavelength in meters
+    wavelength = c / freq  # Wavelength in meters
     dx_m = dx / 1000  # Convert from mm to meters
     dy_m = dy / 1000  # Convert from mm to meters
 
@@ -209,7 +209,7 @@ def plot_sim_and_af(sim_dir, freq, xns, yn, dxs, figname: str | None = None):
             ax.plot(theta, openems_db, "r-", linewidth=1, label="OpenEMS Simulation")
 
             # Plot 2: Array Factor calculation (in blue)
-            AF = array_factor(theta, phi[0], xn, yn, dx, dy, freq)
+            AF = array_factor(theta, phi[0], freq, xn, yn, dx, dy)
             array_factor_E_norm = single_E_norm * AF.T
 
             # Normalize and calculate dB for Array Factor
