@@ -164,6 +164,86 @@ def array_factor(theta, phi, xn, yn, dx, dy, frequency):
     return np.abs(AF)
 
 
+def plot_sim_and_af(sim_dir, freq, xns, yn, dxs, figname: str | None = None):
+    if not sim_dir:
+        sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
+
+    freq = 2.45e9  # frequency in Hz
+    xns = np.array([1, 2, 4])  # number of antennas in x direction
+    yn = 1  # number of antennas in y direction
+    dxs = np.array([60, 90])  # distance between antennas in mm
+
+    # Load the single antenna pattern (for array factor calculation)
+    single_antenna_filename = f"farfield_1x1_60x60_{freq / 1e6:n}.h5"
+    single_antenna_nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
+    single_E_norm = single_antenna_nf2ff["E_norm"][0][0]
+    single_Dmax = single_antenna_nf2ff["Dmax"]
+    theta, phi = single_antenna_nf2ff["theta"], single_antenna_nf2ff["phi"]
+
+    # Create a figure with polar subplots
+    fig, axs = plt.subplots(
+        nrows=xns.size,
+        ncols=dxs.size,
+        figsize=4 * np.array([dxs.size, xns.size]),
+        subplot_kw={"projection": "polar"},
+    )
+    axs = axs.flatten()
+
+    # Loop through combinations and create combined plots
+    for i, xn in enumerate(xns):
+        for j, dx in enumerate(dxs):
+            ax = axs[i * dxs.size + j]
+            dy = dx
+
+            # Plot 1: OpenEMS full simulation (in red)
+            filename = f"farfield_{xn}x{yn}_{dx}x{dx}_{freq / 1e6:n}.h5"
+            openems_nf2ff = read_nf2ff(sim_dir / filename)
+            openems_E_norm = openems_nf2ff["E_norm"][0][0]
+            openems_Dmax = openems_nf2ff["Dmax"]
+
+            # Normalize and calculate dB for OpenEMS
+            openems_norm = openems_E_norm / np.max(np.abs(openems_E_norm))
+            openems_db = 20 * np.log10(np.abs(openems_norm)) + 10.0 * np.log10(
+                openems_Dmax
+            )
+            ax.plot(theta, openems_db, "r-", linewidth=1, label="OpenEMS Simulation")
+
+            # Plot 2: Array Factor calculation (in blue)
+            AF = array_factor(theta, phi[0], xn, yn, dx, dy, freq)
+            array_factor_E_norm = single_E_norm * AF.T
+
+            # Normalize and calculate dB for Array Factor
+            af_norm = array_factor_E_norm / np.max(np.abs(array_factor_E_norm))
+            array_Dmax = single_Dmax * (xn * yn)
+            af_db = 20 * np.log10(np.abs(af_norm)) + 10.0 * np.log10(array_Dmax)
+            ax.plot(theta, af_db, "g--", linewidth=1, label="Array Factor")
+
+            # Plot settings
+            ax.set_thetagrids(np.arange(30, 360, 30))
+            ax.set_rgrids(np.arange(-20, 20, 10))
+            ax.set_rlim(-25, 15)
+            ax.set_theta_offset(np.pi / 2)  # make 0 degree at the top
+            ax.set_theta_direction(-1)  # clockwise
+            ax.set_rlabel_position(90)  # move radial label to the right
+            ax.grid(True, linestyle="--")
+            ax.tick_params(labelsize=6)
+
+            c = 299_792_458
+            lambda0 = c / freq
+            lambda0_mm = lambda0 * 1e3
+            freq_ghz = freq / 1e9
+            title = (
+                f"{xn}x{yn} array, {dx}x{dy}mm, {freq_ghz:n}GHz, {dx / lambda0_mm:.2f}λ"
+            )
+            ax.set_title(title, fontsize=8)
+
+    fig.legend(["OpenEMS Simulation", "Array Factor"], fontsize=8)
+    fig.suptitle("OpenEMS Simulation vs Array Factor Comparison", y=0.99)
+    fig.set_tight_layout(True)
+    if figname:
+        fig.savefig(figname, dpi=600)
+
+
 def plot_ff_3d(
     nf2ff: dict[str, object],
     *,
