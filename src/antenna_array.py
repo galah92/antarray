@@ -132,10 +132,8 @@ def simulate(
 
     ### Create patches and feeds
     patch = CSX.AddMetal("patch")
-    port_number = 1
 
     ports = []
-    i = 0
     for midX in ant_midX:
         for midY in ant_midY:
             # Create patch
@@ -159,7 +157,7 @@ def simulate(
                 substrate_thickness,
             ]
             port = FDTD.AddLumpedPort(
-                port_number,
+                len(ports) + 1,
                 feed_R,
                 port_start,
                 port_stop,
@@ -169,8 +167,6 @@ def simulate(
                 # delay=np.exp(-1j * 2 * np.pi * f0 * 0.5),
             )
             ports.append(port)
-            port_number += 1
-            i += 1
 
     ### Add the nf2ff recording box
     nf2ff = FDTD.CreateNF2FFBox()
@@ -183,22 +179,19 @@ def simulate(
     return sim_path, nf2ff, ports
 
 
-def postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile=str | None):
-    ### Post-processing and plotting
-    f = np.linspace(max(1e9, f0 - fc), f0 + fc, 501)
-
+def postprcess(sim_path, nf2ff, f0, ports, outfile=str | None):
     # Calculate total input power
     P_in = 0
-    for port_nr in range(1, n_x * n_y + 1):
-        port = ports[port_nr - 1]
-        port.CalcPort(sim_path, f)
+    for port in ports:
+        port.CalcPort(sim_path, f0)
         P_in += 0.5 * port.uf_tot * np.conj(port.if_tot)
 
     # Plot S11 for first port
     port1 = ports[0]
     s11 = port1.uf_ref / port1.uf_inc
-    s11_dB = 20.0 * np.log10(np.abs(s11))
+    _s11_dB = 20.0 * np.log10(np.abs(s11))
 
+    # Calculate far field
     theta = np.arange(-180.0, 180.0, 1.0)
     phi = np.array([0, 90.0])
     print("Calculating 3D far field...")
@@ -218,4 +211,4 @@ for n_x, n_y in ants:
     for d in d_ant:
         outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}.h5"
         sim_path, nf2ff, ports = simulate(n_x=n_x, n_y=n_y, d_x=d, d_y=d)
-        postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile)
+        postprcess(sim_path, nf2ff, f0, ports, outfile)
