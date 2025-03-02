@@ -83,8 +83,8 @@ def simulate(
         + [SimBox[2]],
     )
 
-    ant_midX = (n_x / 2 - np.arange(n_x) - 0.5) * d_x
-    ant_midY = (n_y / 2 - np.arange(n_y) - 0.5) * d_y
+    ant_midX = (np.arange(n_x) - (n_x - 1) / 2) * d_x
+    ant_midY = (np.arange(n_y) - (n_y - 1) / 2) * d_y
 
     # Add mesh lines for patches and feeds
     for midX in ant_midX:
