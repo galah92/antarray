@@ -4,8 +4,8 @@ import subprocess as sp
 def main():
     image_name = "openems-image"
     # sim_path = "single_antenna.py"
-    # sim_path = "antenna_array.py"
-    sim_path = "cst.py"
+    sim_path = "antenna_array.py"
+    # sim_path = "cst.py"
 
     cmd = f"""
 	docker run -it --rm \

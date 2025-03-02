@@ -11,12 +11,12 @@ sim_path = Path(__file__).parent / "sim" / filename
 sim_path.mkdir(parents=True, exist_ok=True)
 
 ### Antenna array parameters
-patch_width = 32  # patch width (resonant length) in x-direction
-patch_length = 40  # patch length in y-direction
+patch_width = 32.5  # patch width (resonant length) in x-direction
+patch_length = 32.5  # patch length in y-direction
 
 # setup FDTD parameter & excitation function
-f0 = 0  # center frequency
-fc = 3e9  # 20 dB corner frequency
+f0 = 2.45e9  # center frequency
+fc = 0.5e9  # 20 dB corner frequency
 
 
 def simulate(
@@ -35,7 +35,7 @@ def simulate(
 
     # substrate setup
     substrate_epsR = 3.38
-    substrate_kappa = 1e-3 * 2 * np.pi * 2.45e9 * EPS0 * substrate_epsR
+    substrate_kappa = 0  # 1e-3 * 2 * np.pi * 2.45e9 * EPS0 * substrate_epsR
     substrate_width = 60 + (n_x - 1) * d_x
     substrate_length = 60 + (n_y - 1) * d_y
     substrate_thickness = 1.524
@@ -199,31 +199,12 @@ def postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile=str | None):
     s11 = port1.uf_ref / port1.uf_inc
     s11_dB = 20.0 * np.log10(np.abs(s11))
 
-    # Find resonance frequency
-    # idx = np.where((s11_dB < -10) & (s11_dB == np.min(s11_dB)))[0]
-    # if not len(idx) == 1:
-    #     raise Exception("No resonance frequency found for far-field calulation")
-    # f_res = f[idx[0]]
-    # Claude's help
-    idx = np.argmin(s11_dB)  # Find minimum S11 location
-    f_res = f[idx]
-    print(f"{idx=}")
-    print(f"Best match frequency: {f_res / 1e9:.2f} GHz with S11: {s11_dB[idx]:.2f} dB")
-
-    # Proceed even if match isn't perfect
-    if s11_dB[idx] > -5:
-        print(
-            "Warning: Poor impedance match, S11 minimum is only {:.2f} dB".format(
-                s11_dB[idx]
-            )
-        )
-
-    phi = np.arange(-180.0, 180.0, 2.0)
-    theta = np.arange(-180.0, 180.0, 2.0)
+    theta = np.arange(-180.0, 180.0, 1.0)
+    phi = np.array([0, 90.0])
     print("Calculating 3D far field...")
     _nf2ff_3d = nf2ff.CalcNF2FF(
         sim_path,
-        f_res,
+        f0,
         theta,
         phi,
         center=[0, 0, 1e-3],
@@ -231,8 +212,9 @@ def postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile=str | None):
     )
 
 
-n_ant = [[1, 1], [3, 3]]
-for n_x, n_y in n_ant:
+ants = [[1, 1], [1, 2], [1, 4], [2, 1], [4, 1]]
+d_x, d_y = 60, 60
+for n_x, n_y in ants:
     outfile = f"farfield_{n_x}_{n_y}.h5"
-    sim_path, nf2ff, ports = simulate(n_x=n_x, n_y=n_y)
+    sim_path, nf2ff, ports = simulate(n_x=n_x, n_y=n_y, d_x=d_x, d_y=d_y)
     postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile)
