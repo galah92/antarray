@@ -11,4 +11,7 @@ dependencies = [
     "numpy>=2.2.2",
     "ruff>=0.9.5",
     "scipy>=1.15.1",
+    "torch>=2.6.0",
+    "torchaudio>=2.6.0",
+    "torchvision>=0.21.0",
 ]
