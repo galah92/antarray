@@ -179,7 +179,7 @@ def simulate(
     return sim_path, nf2ff, ports
 
 
-def postprcess(sim_path, nf2ff, f0, ports, outfile=str | None):
+def postprocess(sim_path, nf2ff, f0, ports, outfile: str | None = None):
     # Calculate total input power
     P_in = 0
     for port in ports:
@@ -205,10 +205,11 @@ def postprcess(sim_path, nf2ff, f0, ports, outfile=str | None):
     )
 
 
-ants = [[1, 1], [1, 2], [1, 4], [2, 1], [4, 1]]
-d_ant = [60, 90]
-for n_x, n_y in ants:
-    for d in d_ant:
-        outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}.h5"
-        sim_path, nf2ff, ports = simulate(n_x=n_x, n_y=n_y, d_x=d, d_y=d)
-        postprcess(sim_path, nf2ff, f0, ports, outfile)
+if __name__ == "__main__":
+    ants = [[1, 1], [1, 2], [1, 4], [2, 1], [4, 1]]
+    d_ant = [60, 90]
+    for n_x, n_y in ants:
+        for d in d_ant:
+            outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}.h5"
+            sim_path, nf2ff, ports = simulate(n_x=n_x, n_y=n_y, d_x=d, d_y=d)
+            postprocess(sim_path, nf2ff, f0, ports, outfile)
