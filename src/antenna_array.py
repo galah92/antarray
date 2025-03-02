@@ -213,8 +213,9 @@ def postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile=str | None):
 
 
 ants = [[1, 1], [1, 2], [1, 4], [2, 1], [4, 1]]
-d_x, d_y = 60, 60
+d_ant = [60, 90]
 for n_x, n_y in ants:
-    outfile = f"farfield_{n_x}_{n_y}.h5"
-    sim_path, nf2ff, ports = simulate(n_x=n_x, n_y=n_y, d_x=d_x, d_y=d_y)
-    postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile)
+    for d in d_ant:
+        outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}.h5"
+        sim_path, nf2ff, ports = simulate(n_x=n_x, n_y=n_y, d_x=d, d_y=d)
+        postprcess(sim_path, nf2ff, n_x, n_y, f0, fc, ports, outfile)
