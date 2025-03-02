@@ -175,3 +175,5 @@ cython_debug/
 
 *.png
 .h5
+*.pt
+array_dataset
