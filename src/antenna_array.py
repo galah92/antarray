@@ -206,6 +206,10 @@ def simulate(
             n_x, n_y, d_x, d_y, f0, steering_theta, steering_phi
         )
 
+    # Convert phase shifts to time delays
+    # For a phase shift φ, the time delay t = φ/(2πf)
+    time_delays = phase_shifts / (2 * np.pi * f0)
+
     ports = []
     port_idx = 0
     for midX in ant_midX:
@@ -231,24 +235,15 @@ def simulate(
                 substrate_thickness,
             ]
 
-            # Apply phase shift for beamforming
-            phase_shift = phase_shifts[port_idx]
-            excite = True
-            if phase_shift != 0:
-                # Convert phase shift to complex excitation
-                delay = np.exp(-1j * phase_shift)
-            else:
-                delay = 1.0
-
             port = FDTD.AddLumpedPort(
                 port_idx + 1,
                 feed_R,
                 port_start,
                 port_stop,
                 "z",
-                excite=excite,
+                excite=True,
                 priority=5,
-                delay=delay,
+                delay=time_delays[port_idx],
             )
             ports.append(port)
             port_idx += 1
@@ -308,9 +303,9 @@ def postprocess(sim_path, nf2ff, f0, ports, outfile=None):
 
 
 if __name__ == "__main__":
-    ants = [[1, 1], [1, 2], [1, 4], [2, 1], [4, 1]]
-    d_ant = [60, 90]
-    steering_thetas = [0, 30, 45]
+    ants = [[1, 1], [2, 1], [4, 1]]
+    d_ant = [60]
+    steering_thetas = [15, 30, 45, 60]
     steering_phis = [0]
 
     # Run standard simulations without beam steering
