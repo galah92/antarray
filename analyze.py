@@ -263,7 +263,7 @@ def plot_sim_and_af(
     dxs = np.array(dxs)  # distance between antennas in mm
 
     # Load the single antenna pattern (for array factor calculation)
-    single_antenna_filename = f"farfield_1x1_60x60_{freq / 1e6:n}.h5"
+    single_antenna_filename = f"farfield_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
     single_antenna_nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
     single_E_norm = single_antenna_nf2ff["E_norm"][0][0]
     single_Dmax = single_antenna_nf2ff["Dmax"]
@@ -285,7 +285,7 @@ def plot_sim_and_af(
             dy = dx
 
             # Plot 1: OpenEMS full simulation (in red)
-            filename = f"farfield_{xn}x{yn}_{dx}x{dx}_{freq / 1e6:n}.h5"
+            filename = f"farfield_{xn}x{yn}_{dx}x{dx}_{freq / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
             try:
                 openems_nf2ff = read_nf2ff(sim_dir / filename)
                 openems_E_norm = openems_nf2ff["E_norm"][0][0]
@@ -299,8 +299,8 @@ def plot_sim_and_af(
                 ax.plot(
                     theta, openems_db, "r-", linewidth=1, label="OpenEMS Simulation"
                 )
-            except (FileNotFoundError, KeyError) as e:
-                print(f"Warning: Could not load simulation data for {filename}: {e}")
+            except (FileNotFoundError, KeyError):  # Could not load simulation data
+                pass
 
             # Plot 2: Array Factor calculation with beamforming
             # Calculate phase shifts for beamforming
@@ -317,13 +317,7 @@ def plot_sim_and_af(
             array_Dmax = single_Dmax * (xn * yn)
             af_db = 20 * np.log10(np.abs(af_norm)) + 10.0 * np.log10(array_Dmax)
 
-            # Label for array factor depends on whether beamforming is applied
-            af_label = (
-                "Array Factor with Beamforming"
-                if (steering_theta != 0 or steering_phi != 0)
-                else "Array Factor"
-            )
-            ax.plot(theta, af_db, "g--", linewidth=1, label=af_label)
+            ax.plot(theta, af_db, "g--", linewidth=1, label="Array Factor")
 
             # Plot settings
             ax.set_thetagrids(np.arange(30, 360, 30))
@@ -340,21 +334,12 @@ def plot_sim_and_af(
             lambda0_mm = lambda0 * 1e3
             freq_ghz = freq / 1e9
 
-            # Include beamforming info in the title
-            steering_info = (
-                f", steering: θ={steering_theta}°, φ={steering_phi}°"
-                if (steering_theta != 0 or steering_phi != 0)
-                else ""
-            )
-            title = f"{xn}x{yn} array, {dx}x{dy}mm, {freq_ghz:n}GHz, {dx / lambda0_mm:.2f}λ{steering_info}"
+            title = f"{xn}x{yn} array, {dx}x{dy}mm, {freq_ghz:n}GHz, {dx / lambda0_mm:.2f}λ, steering: θ={steering_theta}°, φ={steering_phi}°"
             ax.set_title(title, fontsize=8)
 
     # Create legend with appropriate labels
     legend_labels = ["OpenEMS Simulation"]
-    if steering_theta != 0 or steering_phi != 0:
-        legend_labels.append("Array Factor with Beamforming")
-    else:
-        legend_labels.append("Array Factor")
+    legend_labels.append("Array Factor")
     fig.legend(legend_labels, fontsize=8)
 
     # Add beamforming info to suptitle if applicable

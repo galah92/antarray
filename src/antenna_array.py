@@ -261,12 +261,10 @@ def simulate(
     if not post_proc_only:
         FDTD.Run(sim_path)
 
-    return sim_path, nf2ff, ports, steering_theta, steering_phi
+    return sim_path, nf2ff, ports
 
 
-def postprocess(
-    sim_path, nf2ff, f0, ports, steering_theta=0, steering_phi=0, outfile=None
-):
+def postprocess(sim_path, nf2ff, f0, ports, outfile=None):
     """
     Process OpenEMS simulation results
 
@@ -280,10 +278,6 @@ def postprocess(
         Center frequency
     ports : list
         List of port objects
-    steering_theta : float
-        Steering elevation angle in degrees
-    steering_phi : float
-        Steering azimuth angle in degrees
     outfile : str
         Output filename
     """
@@ -302,11 +296,6 @@ def postprocess(
     theta = np.arange(-180.0, 180.0, 1.0)
     phi = np.array([0, 90.0])
 
-    # Add beam steering information to output filename if needed
-    if outfile and (steering_theta != 0 or steering_phi != 0):
-        base_name, extension = outfile.rsplit(".", 1)
-        outfile = f"{base_name}_steer_t{steering_theta}_p{steering_phi}.{extension}"
-
     print("Calculating 3D far field...")
     _nf2ff_3d = nf2ff.CalcNF2FF(
         sim_path,
@@ -321,30 +310,21 @@ def postprocess(
 if __name__ == "__main__":
     ants = [[1, 1], [1, 2], [1, 4], [2, 1], [4, 1]]
     d_ant = [60, 90]
+    steering_thetas = [0, 30, 45]
+    steering_phis = [0]
 
     # Run standard simulations without beam steering
     for n_x, n_y in ants:
         for d in d_ant:
-            outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}.h5"
-            sim_path, nf2ff, ports, steer_theta, steer_phi = simulate(
-                n_x=n_x, n_y=n_y, d_x=d, d_y=d
-            )
-            postprocess(sim_path, nf2ff, f0, ports, steer_theta, steer_phi, outfile)
-
-    # Run simulations with beam steering for selected arrays
-    beam_steering_arrays = [[4, 1]]  # Only test beamforming on 4x1 arrays
-    steering_angles = [30, 60]  # Test 30° and 60° steering
-
-    for n_x, n_y in beam_steering_arrays:
-        for d in d_ant:
-            for steer_angle in steering_angles:
-                outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}.h5"
-                sim_path, nf2ff, ports, steer_theta, steer_phi = simulate(
-                    n_x=n_x,
-                    n_y=n_y,
-                    d_x=d,
-                    d_y=d,
-                    steering_theta=steer_angle,
-                    steering_phi=0,
-                )
-                postprocess(sim_path, nf2ff, f0, ports, steer_theta, steer_phi, outfile)
+            for steering_theta in steering_thetas:
+                for steering_phi in steering_phis:
+                    sim_path, nf2ff, ports = simulate(
+                        n_x=n_x,
+                        n_y=n_y,
+                        d_x=d,
+                        d_y=d,
+                        steering_theta=steering_theta,
+                        steering_phi=steering_phi,
+                    )
+                    outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
+                    postprocess(sim_path, nf2ff, f0, ports, outfile)
