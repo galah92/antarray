@@ -133,7 +133,7 @@ def array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts=None):
     # Initialize default phase shifts if none provided
     if phase_shifts is None:
         phase_shifts = np.zeros((xn, yn))
-    
+
     # Ensure phase_shifts has correct dimensions
     if phase_shifts.shape != (xn, yn):
         raise ValueError(f"Phase shifts must have shape ({xn}, {yn})")
@@ -165,7 +165,9 @@ def array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts=None):
     for ix in range(xn):
         for iy in range(yn):
             # Phase for this element (including phase shift for beamforming)
-            phase = x_positions[ix] * psi_x + y_positions[iy] * psi_y - phase_shifts[ix, iy]
+            phase = (
+                x_positions[ix] * psi_x + y_positions[iy] * psi_y - phase_shifts[ix, iy]
+            )
             # Add contribution to array factor
             AF += np.exp(1j * phase)
 
@@ -178,7 +180,7 @@ def array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts=None):
 def calculate_phase_shifts(xn, yn, dx, dy, freq, steering_theta, steering_phi):
     """
     Calculate phase shifts for antenna elements to steer the beam in a specific direction.
-    
+
     Parameters:
     -----------
     xn : int
@@ -195,7 +197,7 @@ def calculate_phase_shifts(xn, yn, dx, dy, freq, steering_theta, steering_phi):
         Steering elevation angle in degrees
     steering_phi : float
         Steering azimuth angle in degrees
-        
+
     Returns:
     --------
     numpy.ndarray
@@ -204,35 +206,37 @@ def calculate_phase_shifts(xn, yn, dx, dy, freq, steering_theta, steering_phi):
     # Convert angles to radians
     steering_theta_rad = np.deg2rad(steering_theta)
     steering_phi_rad = np.deg2rad(steering_phi)
-    
+
     # Calculate wavelength and convert spacing to meters
     c = 299792458  # Speed of light in m/s
     wavelength = c / freq  # Wavelength in meters
     dx_m = dx / 1000  # Convert from mm to meters
     dy_m = dy / 1000  # Convert from mm to meters
-    
+
     # Wave number
     k = 2 * np.pi / wavelength
-    
+
     # Element positions
     x_positions = np.arange(xn).reshape(-1, 1) - (xn - 1) / 2
     y_positions = np.arange(yn).reshape(1, -1) - (yn - 1) / 2
-    
+
     # Calculate phase shifts
     sin_theta = np.sin(steering_theta_rad)
     phase_x = k * dx_m * sin_theta * np.cos(steering_phi_rad) * x_positions
     phase_y = k * dy_m * sin_theta * np.sin(steering_phi_rad) * y_positions
-    
+
     phase_shifts = phase_x + phase_y
-    
+
     return phase_shifts
 
 
-def plot_sim_and_af(sim_dir, freq, xns, yn, dxs, figname=None, steering_theta=0, steering_phi=0):
+def plot_sim_and_af(
+    sim_dir, freq, xns, yn, dxs, figname=None, steering_theta=0, steering_phi=0
+):
     """
     Plot comparison between OpenEMS simulation and array factor calculation,
     optionally with beam steering.
-    
+
     Parameters:
     -----------
     sim_dir : Path
@@ -292,14 +296,18 @@ def plot_sim_and_af(sim_dir, freq, xns, yn, dxs, figname=None, steering_theta=0,
                 openems_db = 20 * np.log10(np.abs(openems_norm)) + 10.0 * np.log10(
                     openems_Dmax
                 )
-                ax.plot(theta, openems_db, "r-", linewidth=1, label="OpenEMS Simulation")
+                ax.plot(
+                    theta, openems_db, "r-", linewidth=1, label="OpenEMS Simulation"
+                )
             except (FileNotFoundError, KeyError) as e:
                 print(f"Warning: Could not load simulation data for {filename}: {e}")
 
             # Plot 2: Array Factor calculation with beamforming
             # Calculate phase shifts for beamforming
-            phase_shifts = calculate_phase_shifts(xn, yn, dx, dy, freq, steering_theta, steering_phi)
-            
+            phase_shifts = calculate_phase_shifts(
+                xn, yn, dx, dy, freq, steering_theta, steering_phi
+            )
+
             # Calculate array factor with phase shifts
             AF = array_factor(theta, phi[0], freq, xn, yn, dx, dy, phase_shifts)
             array_factor_E_norm = single_E_norm * AF.T
@@ -308,9 +316,13 @@ def plot_sim_and_af(sim_dir, freq, xns, yn, dxs, figname=None, steering_theta=0,
             af_norm = array_factor_E_norm / np.max(np.abs(array_factor_E_norm))
             array_Dmax = single_Dmax * (xn * yn)
             af_db = 20 * np.log10(np.abs(af_norm)) + 10.0 * np.log10(array_Dmax)
-            
+
             # Label for array factor depends on whether beamforming is applied
-            af_label = "Array Factor with Beamforming" if (steering_theta != 0 or steering_phi != 0) else "Array Factor"
+            af_label = (
+                "Array Factor with Beamforming"
+                if (steering_theta != 0 or steering_phi != 0)
+                else "Array Factor"
+            )
             ax.plot(theta, af_db, "g--", linewidth=1, label=af_label)
 
             # Plot settings
@@ -327,9 +339,13 @@ def plot_sim_and_af(sim_dir, freq, xns, yn, dxs, figname=None, steering_theta=0,
             lambda0 = c / freq
             lambda0_mm = lambda0 * 1e3
             freq_ghz = freq / 1e9
-            
+
             # Include beamforming info in the title
-            steering_info = f", steering: θ={steering_theta}°, φ={steering_phi}°" if (steering_theta != 0 or steering_phi != 0) else ""
+            steering_info = (
+                f", steering: θ={steering_theta}°, φ={steering_phi}°"
+                if (steering_theta != 0 or steering_phi != 0)
+                else ""
+            )
             title = f"{xn}x{yn} array, {dx}x{dy}mm, {freq_ghz:n}GHz, {dx / lambda0_mm:.2f}λ{steering_info}"
             ax.set_title(title, fontsize=8)
 
@@ -340,13 +356,10 @@ def plot_sim_and_af(sim_dir, freq, xns, yn, dxs, figname=None, steering_theta=0,
     else:
         legend_labels.append("Array Factor")
     fig.legend(legend_labels, fontsize=8)
-    
+
     # Add beamforming info to suptitle if applicable
-    suptitle = "OpenEMS Simulation vs Array Factor Comparison"
-    if steering_theta != 0 or steering_phi != 0:
-        suptitle += f" (Beamforming: θ={steering_theta}°, φ={steering_phi}°)"
-    fig.suptitle(suptitle, y=0.99)
-    
+    fig.suptitle("OpenEMS Simulation vs Array Factor Comparison", y=0.99)
+
     fig.set_tight_layout(True)
     if figname:
         fig.savefig(figname, dpi=600)

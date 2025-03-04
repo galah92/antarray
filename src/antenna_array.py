@@ -19,11 +19,75 @@ f0 = 2.45e9  # center frequency
 fc = 0.5e9  # 20 dB corner frequency
 
 
+def calculate_phase_shifts(n_x, n_y, d_x, d_y, freq, steering_theta, steering_phi):
+    """
+    Calculate phase shifts for antenna elements to steer the beam in a specific direction.
+
+    Parameters:
+    -----------
+    n_x : int
+        Number of elements in the x-direction
+    n_y : int
+        Number of elements in the y-direction
+    d_x : float
+        Element spacing in the x-direction in mm
+    d_y : float
+        Element spacing in the y-direction in mm
+    freq : float
+        Operating frequency in Hz
+    steering_theta : float
+        Steering elevation angle in degrees
+    steering_phi : float
+        Steering azimuth angle in degrees
+
+    Returns:
+    --------
+    numpy.ndarray
+        Phase shifts for each element in radians, with shape (n_x*n_y)
+    """
+    # Convert angles to radians
+    steering_theta_rad = np.deg2rad(steering_theta)
+    steering_phi_rad = np.deg2rad(steering_phi)
+
+    # Calculate wavelength and convert spacing to meters
+    c = 299792458  # Speed of light in m/s
+    wavelength = c / freq  # Wavelength in meters
+    dx_m = d_x / 1000  # Convert from mm to meters
+    dy_m = d_y / 1000  # Convert from mm to meters
+
+    # Wave number
+    k = 2 * np.pi / wavelength
+
+    # Initialize phase shifts array (in linear order, not matrix)
+    phase_shifts = np.zeros(n_x * n_y)
+
+    # Element positions
+    x_positions = (np.arange(n_x) - (n_x - 1) / 2) * d_x / 1000
+    y_positions = (np.arange(n_y) - (n_y - 1) / 2) * d_y / 1000
+
+    # Calculate phase shifts
+    sin_theta = np.sin(steering_theta_rad)
+
+    # Populate the phase shift array
+    idx = 0
+    for x_pos in x_positions:
+        for y_pos in y_positions:
+            # Calculate phase shift for this element
+            phase_x = k * x_pos * sin_theta * np.cos(steering_phi_rad)
+            phase_y = k * y_pos * sin_theta * np.sin(steering_phi_rad)
+            phase_shifts[idx] = phase_x + phase_y
+            idx += 1
+
+    return phase_shifts
+
+
 def simulate(
     n_x: int,
     n_y: int,
     d_x: float | None = None,
     d_y: float | None = None,
+    steering_theta: float = 0,
+    steering_phi: float = 0,
 ):
     # define array size and dimensions
     if d_x is None:
@@ -32,6 +96,8 @@ def simulate(
         d_y = patch_length * 3
 
     print(f"Simulating {n_x}x{n_y} array with {d_x=:.2f} and {d_y=:.2f}")
+    if steering_theta != 0 or steering_phi != 0:
+        print(f"Beam steering: theta={steering_theta}°, phi={steering_phi}°")
 
     # substrate setup
     substrate_epsR = 3.38
@@ -133,7 +199,15 @@ def simulate(
     ### Create patches and feeds
     patch = CSX.AddMetal("patch")
 
+    # Calculate phase shifts for beam steering
+    phase_shifts = np.zeros(n_x * n_y)
+    if steering_theta != 0 or steering_phi != 0:
+        phase_shifts = calculate_phase_shifts(
+            n_x, n_y, d_x, d_y, f0, steering_theta, steering_phi
+        )
+
     ports = []
+    port_idx = 0
     for midX in ant_midX:
         for midY in ant_midY:
             # Create patch
@@ -149,24 +223,35 @@ def simulate(
             ]
             patch.AddBox(priority=10, start=start, stop=stop)
 
-            # Add feed port
+            # Add feed port with phase shift
             port_start = [midX + feed_pos - feed_width / 2, midY - feed_width / 2, 0]
             port_stop = [
                 midX + feed_pos + feed_width / 2,
                 midY + feed_width / 2,
                 substrate_thickness,
             ]
+
+            # Apply phase shift for beamforming
+            phase_shift = phase_shifts[port_idx]
+            excite = True
+            if phase_shift != 0:
+                # Convert phase shift to complex excitation
+                delay = np.exp(-1j * phase_shift)
+            else:
+                delay = 1.0
+
             port = FDTD.AddLumpedPort(
-                len(ports) + 1,
+                port_idx + 1,
                 feed_R,
                 port_start,
                 port_stop,
                 "z",
-                excite=True,
+                excite=excite,
                 priority=5,
-                # delay=np.exp(-1j * 2 * np.pi * f0 * 0.5),
+                delay=delay,
             )
             ports.append(port)
+            port_idx += 1
 
     ### Add the nf2ff recording box
     nf2ff = FDTD.CreateNF2FFBox()
@@ -176,10 +261,32 @@ def simulate(
     if not post_proc_only:
         FDTD.Run(sim_path)
 
-    return sim_path, nf2ff, ports
+    return sim_path, nf2ff, ports, steering_theta, steering_phi
 
 
-def postprocess(sim_path, nf2ff, f0, ports, outfile: str | None = None):
+def postprocess(
+    sim_path, nf2ff, f0, ports, steering_theta=0, steering_phi=0, outfile=None
+):
+    """
+    Process OpenEMS simulation results
+
+    Parameters:
+    -----------
+    sim_path : Path
+        Path to simulation results
+    nf2ff : object
+        Far field calculation object
+    f0 : float
+        Center frequency
+    ports : list
+        List of port objects
+    steering_theta : float
+        Steering elevation angle in degrees
+    steering_phi : float
+        Steering azimuth angle in degrees
+    outfile : str
+        Output filename
+    """
     # Calculate total input power
     P_in = 0
     for port in ports:
@@ -194,6 +301,12 @@ def postprocess(sim_path, nf2ff, f0, ports, outfile: str | None = None):
     # Calculate far field
     theta = np.arange(-180.0, 180.0, 1.0)
     phi = np.array([0, 90.0])
+
+    # Add beam steering information to output filename if needed
+    if outfile and (steering_theta != 0 or steering_phi != 0):
+        base_name, extension = outfile.rsplit(".", 1)
+        outfile = f"{base_name}_steer_t{steering_theta}_p{steering_phi}.{extension}"
+
     print("Calculating 3D far field...")
     _nf2ff_3d = nf2ff.CalcNF2FF(
         sim_path,
@@ -208,8 +321,30 @@ def postprocess(sim_path, nf2ff, f0, ports, outfile: str | None = None):
 if __name__ == "__main__":
     ants = [[1, 1], [1, 2], [1, 4], [2, 1], [4, 1]]
     d_ant = [60, 90]
+
+    # Run standard simulations without beam steering
     for n_x, n_y in ants:
         for d in d_ant:
             outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}.h5"
-            sim_path, nf2ff, ports = simulate(n_x=n_x, n_y=n_y, d_x=d, d_y=d)
-            postprocess(sim_path, nf2ff, f0, ports, outfile)
+            sim_path, nf2ff, ports, steer_theta, steer_phi = simulate(
+                n_x=n_x, n_y=n_y, d_x=d, d_y=d
+            )
+            postprocess(sim_path, nf2ff, f0, ports, steer_theta, steer_phi, outfile)
+
+    # Run simulations with beam steering for selected arrays
+    beam_steering_arrays = [[4, 1]]  # Only test beamforming on 4x1 arrays
+    steering_angles = [30, 60]  # Test 30° and 60° steering
+
+    for n_x, n_y in beam_steering_arrays:
+        for d in d_ant:
+            for steer_angle in steering_angles:
+                outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}.h5"
+                sim_path, nf2ff, ports, steer_theta, steer_phi = simulate(
+                    n_x=n_x,
+                    n_y=n_y,
+                    d_x=d,
+                    d_y=d,
+                    steering_theta=steer_angle,
+                    steering_phi=0,
+                )
+                postprocess(sim_path, nf2ff, f0, ports, steer_theta, steer_phi, outfile)
