@@ -303,9 +303,9 @@ def postprocess(sim_path, nf2ff, f0, ports, outfile=None):
 
 
 if __name__ == "__main__":
-    ants = [[1, 1], [2, 1], [4, 1]]
+    ants = [[32, 1]]
     d_ant = [60]
-    steering_thetas = [15, 30, 45, 60]
+    steering_thetas = [15]
     steering_phis = [0]
 
     # Run standard simulations without beam steering
@@ -313,6 +313,10 @@ if __name__ == "__main__":
         for d in d_ant:
             for steering_theta in steering_thetas:
                 for steering_phi in steering_phis:
+                    outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
+                    if (sim_path / outfile).exists():
+                        print(f"Skipping {outfile}")
+                        continue
                     sim_path, nf2ff, ports = simulate(
                         n_x=n_x,
                         n_y=n_y,
@@ -321,5 +325,4 @@ if __name__ == "__main__":
                         steering_theta=steering_theta,
                         steering_phi=steering_phi,
                     )
-                    outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
                     postprocess(sim_path, nf2ff, f0, ports, outfile)
