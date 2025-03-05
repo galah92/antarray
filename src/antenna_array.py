@@ -303,9 +303,9 @@ def postprocess(sim_path, nf2ff, f0, ports, outfile=None):
 
 
 if __name__ == "__main__":
-    ants = [[32, 1]]
+    ants = [(16, 16)]
     d_ant = [60]
-    steering_thetas = [15]
+    steering_thetas = [0, 15]
     steering_phis = [0]
 
     # Run standard simulations without beam steering

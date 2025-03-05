@@ -231,7 +231,14 @@ def calculate_phase_shifts(xn, yn, dx, dy, freq, steering_theta, steering_phi):
 
 
 def plot_sim_and_af(
-    sim_dir, freq, xns, yn, dxs, figname=None, steering_theta=0, steering_phi=0
+    sim_dir,
+    freq,
+    xns,
+    yn,
+    dxs,
+    steering_theta=0,
+    steering_phi=0,
+    figname: bool | str = True,
 ):
     """
     Plot comparison between OpenEMS simulation and array factor calculation,
@@ -347,6 +354,8 @@ def plot_sim_and_af(
 
     fig.set_tight_layout(True)
     if figname:
+        if figname is True:
+            figname = f"ff_{freq_ghz:.0f}GHz_steer_t{steering_theta}_p{steering_phi}"
         fig.savefig(figname, dpi=600)
 
 
