@@ -317,98 +317,14 @@ def generate_dataset(
     n_theta = len(theta)
     n_phi = len(phi)
 
-    # Arrays to store patterns and labels
-    patterns = np.zeros((n_samples, n_phi, n_theta))  # Store 2D radiation patterns
-    labels = np.zeros((n_samples, xn, yn))  # Store individual element phase shifts
-
     # Generate dataset
     print(f"Generating dataset with {n_samples} samples...")
     steering_info = []  # Store steering angles for beamforming
-
-    for i in tqdm(range(n_samples)):
-        # Generate phase shifts for each element
-        if phase_method == "random":
-            phase_shifts = generate_element_phase_shifts(
-                xn, yn, "random", min_phase=-180, max_phase=180
-            )
-        elif phase_method == "gradient":
-            # Generate a random gradient direction and strength for variety
-            start_phase = np.random.uniform(-180, 0)
-            end_phase = np.random.uniform(0, 180)
-            phase_shifts = generate_element_phase_shifts(
-                xn, yn, "gradient", start_phase=start_phase, end_phase=end_phase
-            )
-        elif phase_method == "zones":
-            n_zones = np.random.choice([4, 9, 16])  # 2x2, 3x3 or 4x4 zones
-            phase_values = np.random.uniform(-np.pi, np.pi, size=n_zones)
-            phase_shifts = generate_element_phase_shifts(
-                xn, yn, "zones", n_zones=n_zones, phase_values=phase_values
-            )
-        elif phase_method == "beamforming":
-            # Generate random steering angles with wider range to make effect more visible
-            theta_steering = np.random.uniform(-70, 70)  # -70° to 70° elevation
-            phi_steering = np.random.choice(
-                [0, 90, 180, 270]
-            )  # Use cardinal directions for clearer visualization
-
-            phase_shifts = generate_element_phase_shifts(
-                xn,
-                yn,
-                "beamforming",
-                theta_steering=theta_steering,
-                phi_steering=phi_steering,
-                freq=freq,
-                dx=dx,
-                dy=dy,
-            )
-            steering_info.append((theta_steering, phi_steering))
-        else:
-            # Mix of methods for more variety
-            method = np.random.choice(["random", "beamforming", "zones"])
-            if method == "beamforming":
-                theta_steering = np.random.uniform(-60, 60)
-                phi_steering = np.random.uniform(0, 360)
-                phase_shifts = generate_element_phase_shifts(
-                    xn,
-                    yn,
-                    method,
-                    theta_steering=theta_steering,
-                    phi_steering=phi_steering,
-                    freq=freq,
-                    dx=dx,
-                    dy=dy,
-                )
-            else:
-                phase_shifts = generate_element_phase_shifts(xn, yn, method)
-
-        # Calculate array factor for all phi and theta values at once
-        AF = calculate_array_factor_with_element_phases(
-            theta, phi, freq, xn, yn, dx, dy, phase_shifts
-        )
-
-        # Multiply by single element pattern to get total pattern
-        # The shape of AF is (n_phi, n_theta) after the calculation
-        total_pattern = single_E_norm[0] * AF
-
-        # Normalize
-        total_pattern = total_pattern / np.max(np.abs(total_pattern))
-
-        # Convert to dB (normalized directivity)
-        array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
-        total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + 10.0 * np.log10(
-            array_gain
-        )
-
-        # Store pattern and label
-        patterns[i] = total_pattern_db
-        labels[i] = phase_shifts  # Store the phase shifts as labels
 
     # Create output directory if it doesn't exist
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
     with h5py.File(outfile, "w") as h5f:
-        h5f.create_dataset("patterns", data=patterns)
-        h5f.create_dataset("labels", data=labels)
         h5f.create_dataset("theta", data=theta)
         h5f.create_dataset("phi", data=phi)
 
@@ -421,11 +337,92 @@ def generate_dataset(
         )
         h5f.attrs["phase_method"] = phase_method
 
+        # Store 2D radiation patterns
+        patterns = h5f.create_dataset("patterns", shape=(n_samples, n_phi, n_theta))
+        # Store individual element phase shifts
+        labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
+
+        for i in tqdm(range(n_samples)):
+            # Generate phase shifts for each element
+            if phase_method == "random":
+                phase_shifts = generate_element_phase_shifts(
+                    xn, yn, "random", min_phase=-180, max_phase=180
+                )
+            elif phase_method == "gradient":
+                # Generate a random gradient direction and strength for variety
+                start_phase = np.random.uniform(-180, 0)
+                end_phase = np.random.uniform(0, 180)
+                phase_shifts = generate_element_phase_shifts(
+                    xn, yn, "gradient", start_phase=start_phase, end_phase=end_phase
+                )
+            elif phase_method == "zones":
+                n_zones = np.random.choice([4, 9, 16])  # 2x2, 3x3 or 4x4 zones
+                phase_values = np.random.uniform(-np.pi, np.pi, size=n_zones)
+                phase_shifts = generate_element_phase_shifts(
+                    xn, yn, "zones", n_zones=n_zones, phase_values=phase_values
+                )
+            elif phase_method == "beamforming":
+                # Generate random steering angles with wider range to make effect more visible
+                theta_steering = np.random.uniform(-70, 70)  # -70° to 70° elevation
+                phi_steering = np.random.choice(
+                    [0, 90, 180, 270]
+                )  # Use cardinal directions for clearer visualization
+
+                phase_shifts = generate_element_phase_shifts(
+                    xn,
+                    yn,
+                    "beamforming",
+                    theta_steering=theta_steering,
+                    phi_steering=phi_steering,
+                    freq=freq,
+                    dx=dx,
+                    dy=dy,
+                )
+                steering_info.append((theta_steering, phi_steering))
+            else:
+                # Mix of methods for more variety
+                method = np.random.choice(["random", "beamforming", "zones"])
+                if method == "beamforming":
+                    theta_steering = np.random.uniform(-60, 60)
+                    phi_steering = np.random.uniform(0, 360)
+                    phase_shifts = generate_element_phase_shifts(
+                        xn,
+                        yn,
+                        method,
+                        theta_steering=theta_steering,
+                        phi_steering=phi_steering,
+                        freq=freq,
+                        dx=dx,
+                        dy=dy,
+                    )
+                else:
+                    phase_shifts = generate_element_phase_shifts(xn, yn, method)
+
+            # Calculate array factor for all phi and theta values at once
+            AF = calculate_array_factor_with_element_phases(
+                theta, phi, freq, xn, yn, dx, dy, phase_shifts
+            )
+
+            # Multiply by single element pattern to get total pattern
+            # The shape of AF is (n_phi, n_theta) after the calculation
+            total_pattern = single_E_norm[0] * AF
+
+            # Normalize
+            total_pattern = total_pattern / np.max(np.abs(total_pattern))
+
+            # Convert to dB (normalized directivity)
+            array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
+            total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + 10.0 * np.log10(
+                array_gain
+            )
+
+            # Store pattern and label
+            patterns[i] = total_pattern_db
+            labels[i] = phase_shifts  # Store the phase shifts as labels
+
         # Store steering info if using beamforming
         if phase_method == "beamforming" and steering_info:
             h5f.create_dataset("steering_info", data=np.array(steering_info))
-
-    print(f"Dataset generated with {n_samples} samples and saved to {outfile}")
 
 
 def load_dataset(dataset_file: Path):
@@ -539,7 +536,7 @@ def plot_samples(dataset, n_samples=5, output_dir=None):
 if __name__ == "__main__":
     # Default simulation directory
     sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
-    outfile = Path.cwd() / "dataset" / "farfield_dataset.h5"
+    outfile = Path.cwd() / "dataset" / "farfield_dataset_3.h5"
 
     # Filename format typically matches what's used in analyze.py
     single_antenna_filename = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
