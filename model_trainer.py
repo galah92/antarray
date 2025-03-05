@@ -327,7 +327,10 @@ def train_model(
 
         # Step the scheduler
         if scheduler:
-            scheduler.step()
+            if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(history["val_loss"][-1])  # Pass the validation loss
+            else:
+                scheduler.step()
 
         print()
 
@@ -342,7 +345,7 @@ def train_model(
     return model, history
 
 
-def evaluate_model(model, test_loader, device="cuda", num_examples=5):
+def evaluate_model(model, test_loader, device="cuda", num_examples=5, save_dir=None):
     """
     Evaluate the model and visualize results.
 
@@ -356,6 +359,8 @@ def evaluate_model(model, test_loader, device="cuda", num_examples=5):
         Device to use ('cuda' or 'cpu')
     num_examples : int
         Number of examples to visualize
+    save_dir : str or Path, optional
+        Directory to save visualization plots
 
     Returns:
     --------
@@ -442,19 +447,30 @@ def evaluate_model(model, test_loader, device="cuda", num_examples=5):
             plt.colorbar(im2, ax=axs[2])
 
             plt.tight_layout()
-            plt.show()
+
+            if save_dir:
+                save_dir.mkdir(exist_ok=True, parents=True)
+                save_path = Path(save_dir) / f"prediction_example_{i}.png"
+                plt.savefig(save_path, dpi=300, bbox_inches="tight")
+                print(f"Prediction example saved to {save_path}")
+            else:
+                plt.show()
+
+            plt.close()
 
     return metrics
 
 
-def visualize_training_history(history):
+def visualize_training_history(history, save_path=None):
     """
-    Visualize training history.
+    Visualize training history and optionally save the plot.
 
     Parameters:
     -----------
     history : dict
         Dictionary containing training history
+    save_path : str or Path, optional
+        Path to save the plot. If None, plot will be shown.
     """
     # Create subplots
     fig, axs = plt.subplots(2, 1, figsize=(10, 10))
@@ -478,10 +494,20 @@ def visualize_training_history(history):
         axs[1].grid(True)
 
     plt.tight_layout()
-    plt.show()
+
+    if save_path:
+        # Ensure the directory exists
+        save_path = Path(save_path)
+        save_path.parent.mkdir(exist_ok=True, parents=True)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Training history plot saved to {save_path}")
+    else:
+        plt.show()
+
+    plt.close()
 
 
-def visualize_element_phase_shifts(phase_shifts):
+def visualize_element_phase_shifts(phase_shifts, save_path=None):
     """
     Visualize element phase shifts.
 
@@ -489,6 +515,8 @@ def visualize_element_phase_shifts(phase_shifts):
     -----------
     phase_shifts : numpy.ndarray
         Phase shift matrix with shape (xn, yn)
+    save_path : str or Path, optional
+        Path to save the plot. If None, plot will be shown.
     """
     plt.figure(figsize=(8, 6))
     im = plt.imshow(
@@ -500,7 +528,17 @@ def visualize_element_phase_shifts(phase_shifts):
     plt.colorbar(im)
     plt.grid(False)
     plt.tight_layout()
-    plt.show()
+
+    if save_path:
+        # Ensure the directory exists
+        save_path = Path(save_path)
+        save_path.parent.mkdir(exist_ok=True, parents=True)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Element phase shifts plot saved to {save_path}")
+    else:
+        plt.show()
+
+    plt.close()
 
 
 def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cuda"):
@@ -526,6 +564,10 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
         output_dir = Path(output_dir)
 
     output_dir.mkdir(exist_ok=True, parents=True)
+
+    # Create subdirectories for plots
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(exist_ok=True, parents=True)
 
     # Set device
     device = torch.device(
@@ -627,12 +669,19 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
     )
     print(f"Model saved to {model_save_path}")
 
-    # Visualize training history
-    visualize_training_history(history)
+    # Visualize and save training history
+    history_plot_path = plots_dir / "training_history.png"
+    visualize_training_history(history, save_path=history_plot_path)
 
-    # Evaluate model
+    # Evaluate model and save prediction examples
     print("Evaluating model on test set...")
-    metrics = evaluate_model(model, test_loader, device, num_examples=5)
+    metrics = evaluate_model(
+        model,
+        test_loader,
+        device,
+        num_examples=5,
+        save_dir=plots_dir / "prediction_examples",
+    )
 
     # Save metrics
     metrics_path = output_dir / "metrics.txt"
