@@ -124,10 +124,12 @@ def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
         raise ValueError(f"Unknown method: {method}")
 
 
-def calculate_array_factor_with_element_phases(theta, phi, freq, xn, yn, dx, dy, phase_shifts):
+def calculate_array_factor_with_element_phases(
+    theta, phi, freq, xn, yn, dx, dy, phase_shifts
+):
     """
     Calculate array factor with individual element phase shifts.
-    
+
     Parameters:
     -----------
     theta : numpy.ndarray
@@ -146,7 +148,7 @@ def calculate_array_factor_with_element_phases(theta, phi, freq, xn, yn, dx, dy,
         Element spacing in y direction (mm)
     phase_shifts : numpy.ndarray
         Phase shift for each element in radians, shape (xn, yn)
-    
+
     Returns:
     --------
     numpy.ndarray
@@ -167,29 +169,38 @@ def calculate_array_factor_with_element_phases(theta, phi, freq, xn, yn, dx, dy,
 
     # Create meshgrid for calculations
     THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
-    
-    # Initialize output array
-    AF = np.zeros((phi.size, theta.size), dtype=complex)
 
-    # Element positions
+    # Calculate sin(theta) and sin/cos(phi) once
+    sin_theta = np.sin(THETA)
+    cos_phi = np.cos(PHI)
+    sin_phi = np.sin(PHI)
+
+    # Element positions (centered around origin)
     x_positions = np.arange(xn) - (xn - 1) / 2
     y_positions = np.arange(yn) - (yn - 1) / 2
 
-    # Calculate array factor
-    for ix in range(xn):
-        for iy in range(yn):
-            # Phase for each theta and phi combination
-            sin_theta = np.sin(THETA)
-            cos_phi = np.cos(PHI)
-            sin_phi = np.sin(PHI)
-            psi_x = k * dx_m * sin_theta * cos_phi
-            psi_y = k * dy_m * sin_theta * sin_phi
-            
-            # Reshape for proper broadcasting
-            phase = (x_positions[ix] * psi_x.T + y_positions[iy] * psi_y.T - phase_shifts[ix, iy])
-            
-            # Add contribution to array factor
-            AF += np.exp(1j * phase)
+    # Reshape arrays for broadcasting
+    # Make sin_theta, cos_phi, sin_phi shape: (len(phi), len(theta), 1, 1)
+    sin_theta = sin_theta.T[:, :, np.newaxis, np.newaxis]
+    cos_phi = cos_phi.T[:, :, np.newaxis, np.newaxis]
+    sin_phi = sin_phi.T[:, :, np.newaxis, np.newaxis]
+
+    # Make x_positions shape: (1, 1, xn, 1) and y_positions shape: (1, 1, 1, yn)
+    x_positions = x_positions.reshape(1, 1, xn, 1)
+    y_positions = y_positions.reshape(1, 1, 1, yn)
+
+    # Make phase_shifts shape: (1, 1, xn, yn)
+    phase_shifts = phase_shifts.reshape(1, 1, xn, yn)
+
+    # Calculate phase terms for all elements at once
+    psi_x = k * dx_m * sin_theta * cos_phi
+    psi_y = k * dy_m * sin_theta * sin_phi
+
+    # Compute the total phase for all elements and all angles at once
+    total_phase = x_positions * psi_x + y_positions * psi_y - phase_shifts
+
+    # Sum the complex exponentials across all elements
+    AF = np.sum(np.exp(1j * total_phase), axis=(2, 3))
 
     # Normalize by total number of elements
     AF = AF / (xn * yn)
@@ -249,11 +260,10 @@ def check_grating_lobes(freq, dx, dy):
 
 def generate_dataset(
     sim_dir_path: Path,
-    output_dir_path: Path,
+    outfile: Path,
     single_antenna_filename: str,
     n_samples: int = 1000,
     phase_method: str = "random",
-    visualize_samples: int = 0,
 ):
     """
     Generate a dataset of farfield radiation patterns with individual element phase shifts.
@@ -270,8 +280,6 @@ def generate_dataset(
         Number of samples to generate
     phase_method : str
         Method to generate phase shifts: "random", "gradient", "zones", "beamforming"
-    visualize_samples : int
-        Number of samples to visualize (0 to disable visualization)
     """
     # Fixed parameters for the 16x16 array
     xn = yn = 16  # 16x16 array
@@ -293,9 +301,6 @@ def generate_dataset(
             print(f"  - {grating_info['dy_critical_angle']:.1f}° in the Y direction")
     else:
         print("No grating lobes expected (element spacing <= λ/2)")
-
-    # Create output directory if it doesn't exist
-    output_dir_path.mkdir(parents=True, exist_ok=True)
 
     # Load the single antenna pattern
     single_antenna_path = sim_dir_path / single_antenna_filename
@@ -380,95 +385,28 @@ def generate_dataset(
         AF = calculate_array_factor_with_element_phases(
             theta, phi, freq, xn, yn, dx, dy, phase_shifts
         )
-        
+
         # Multiply by single element pattern to get total pattern
         # The shape of AF is (n_phi, n_theta) after the calculation
         total_pattern = single_E_norm[0] * AF
-        
+
         # Normalize
         total_pattern = total_pattern / np.max(np.abs(total_pattern))
-        
+
         # Convert to dB (normalized directivity)
         array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
-        total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + 10.0 * np.log10(array_gain)
-        
+        total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + 10.0 * np.log10(
+            array_gain
+        )
+
         # Store pattern and label
         patterns[i] = total_pattern_db
         labels[i] = phase_shifts  # Store the phase shifts as labels
 
-        # Visualize some samples if requested
-        if visualize_samples > 0 and i < visualize_samples:
-            # Create figure with three subplots: pattern, phase shifts, and polar pattern
-            fig, axs = plt.subplots(1, 3, figsize=(18, 6))
+    # Create output directory if it doesn't exist
+    outfile.parent.mkdir(parents=True, exist_ok=True)
 
-            # Plot radiation pattern at phi=0
-            phi_idx = np.argmin(np.abs(phi - 0))
-            axs[0].plot(np.rad2deg(theta), patterns[i, phi_idx])
-            axs[0].set_title("Radiation Pattern (dB) at phi=0°")
-            axs[0].set_xlabel("Theta (degrees)")
-            axs[0].set_ylabel("Directivity (dBi)")
-            axs[0].grid(True)
-            axs[0].set_xlim([0, 180])
-            axs[0].set_ylim([-30, np.max(patterns[i]) + 1])
-
-            # Plot phase shifts
-            im = axs[1].imshow(
-                np.rad2deg(phase_shifts),
-                cmap="viridis",
-                origin="lower",
-                interpolation="nearest",
-                vmin=-180,
-                vmax=180,
-            )
-
-            if phase_method == "beamforming":
-                theta_s, phi_s = steering_info[i]
-                axs[1].set_title(f"Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)")
-            else:
-                axs[1].set_title("Element Phase Shifts (degrees)")
-
-            axs[1].set_xlabel("Element Y index")
-            axs[1].set_ylabel("Element X index")
-            plt.colorbar(im, ax=axs[1])
-
-            # Plot polar pattern
-            axs[2] = plt.subplot(1, 3, 3, projection="polar")
-            phi_idx = np.argmin(np.abs(phi - 0))  # phi=0 cut
-            norm_pattern = patterns[i, phi_idx] - np.max(
-                patterns[i]
-            )  # Normalize to 0 dB max
-
-            # Map theta from [0,pi] to [0,2pi] for polar plot
-            plot_theta = theta  # Radial coordinate
-            plot_r = norm_pattern  # Pattern value
-
-            axs[2].plot(plot_theta, plot_r)
-            axs[2].set_theta_zero_location("N")  # 0 degrees at the top
-            axs[2].set_theta_direction(-1)  # clockwise
-            axs[2].set_rlim(-40, 5)  # dB limits
-            axs[2].set_title("Polar Pattern (phi=0°)")
-            axs[2].grid(True)
-
-            # Save visualization
-            viz_dir = output_dir_path / "visualizations"
-            viz_dir.mkdir(exist_ok=True)
-            plt.tight_layout()
-
-            if phase_method == "beamforming":
-                plt.savefig(
-                    viz_dir
-                    / f"pattern_steer_theta{theta_s:.1f}_phi{phi_s:.1f}_{i}.png",
-                    dpi=300,
-                )
-            else:
-                plt.savefig(viz_dir / f"pattern_and_phases_{i}.png", dpi=300)
-            plt.close()
-
-    # Save dataset
-    print(f"Saving dataset to {output_dir_path}")
-    dataset_file = output_dir_path / "farfield_patterns_dataset.h5"
-
-    with h5py.File(dataset_file, "w") as h5f:
+    with h5py.File(outfile, "w") as h5f:
         h5f.create_dataset("patterns", data=patterns)
         h5f.create_dataset("labels", data=labels)
         h5f.create_dataset("theta", data=theta)
@@ -487,8 +425,7 @@ def generate_dataset(
         if phase_method == "beamforming" and steering_info:
             h5f.create_dataset("steering_info", data=np.array(steering_info))
 
-    print(f"Dataset generated with {n_samples} samples and saved to {dataset_file}")
-    return dataset_file
+    print(f"Dataset generated with {n_samples} samples and saved to {outfile}")
 
 
 def load_dataset(dataset_file: Path):
@@ -520,7 +457,7 @@ def load_dataset(dataset_file: Path):
     return dataset
 
 
-def visualize_dataset_samples(dataset, n_samples=5):
+def plot_samples(dataset, n_samples=5, output_dir=None):
     """
     Visualize a few samples from the dataset.
 
@@ -595,34 +532,27 @@ def visualize_dataset_samples(dataset, n_samples=5):
 
         plt.tight_layout()
         plt.show()
+        if output_dir:
+            plt.savefig(output_dir / f"sample_{idx}.png")
 
 
 if __name__ == "__main__":
-    # Example usage
-    sim_dir = (
-        Path.cwd() / "src" / "sim" / "antenna_array"
-    )  # Default simulation directory
-    output_dir = Path.cwd() / "dataset" / "farfield_patterns"
+    # Default simulation directory
+    sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
+    outfile = Path.cwd() / "dataset" / "farfield_dataset.h5"
 
     # Filename format typically matches what's used in analyze.py
     single_antenna_filename = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
 
     # Generate dataset
-    dataset_file = generate_dataset(
+    generate_dataset(
         sim_dir_path=sim_dir,
-        output_dir_path=output_dir,
+        outfile=outfile,
         single_antenna_filename=single_antenna_filename,
-        n_samples=500,  # Generate 500 samples
-        phase_method="beamforming",  # Use proper beamforming for steering
-        visualize_samples=5,  # Visualize 5 samples
+        n_samples=1_000,
+        phase_method="beamforming",
     )
 
     # Load and visualize the generated dataset
-    dataset = load_dataset(dataset_file)
-    print(f"Dataset loaded: {len(dataset['patterns'])} samples")
-    print(
-        f"Array configuration: {dataset['array_size']}, {dataset['spacing']}, {dataset['frequency'] / 1e9:.2f} GHz"
-    )
-
-    # Visualize a few samples
-    visualize_dataset_samples(dataset, n_samples=3)
+    dataset = load_dataset(outfile)
+    plot_samples(dataset, n_samples=3, output_dir=outfile.parent)
