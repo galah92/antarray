@@ -124,17 +124,15 @@ def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
         raise ValueError(f"Unknown method: {method}")
 
 
-def calculate_array_factor_with_element_phases(
-    theta, phi, freq, xn, yn, dx, dy, phase_shifts
-):
+def calculate_array_factor_with_element_phases(theta, phi, freq, xn, yn, dx, dy, phase_shifts):
     """
     Calculate array factor with individual element phase shifts.
-
+    
     Parameters:
     -----------
-    theta : float or numpy.ndarray
+    theta : numpy.ndarray
         Elevation angle(s) in radians
-    phi : float or numpy.ndarray
+    phi : numpy.ndarray
         Azimuth angle(s) in radians
     freq : float
         Operating frequency in Hz
@@ -148,11 +146,11 @@ def calculate_array_factor_with_element_phases(
         Element spacing in y direction (mm)
     phase_shifts : numpy.ndarray
         Phase shift for each element in radians, shape (xn, yn)
-
+    
     Returns:
     --------
     numpy.ndarray
-        Array factor magnitude
+        Array factor magnitude with shape (len(phi), len(theta))
     """
     # Convert input to numpy arrays if they aren't already
     theta = np.asarray(theta)
@@ -167,12 +165,11 @@ def calculate_array_factor_with_element_phases(
     # Wave number
     k = 2 * np.pi / wavelength
 
-    # Initialize output array based on input shapes
-    if phi.ndim == 0:  # Single value
-        AF = np.zeros_like(theta, dtype=complex)
-    else:  # Array of values
-        THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
-        AF = np.zeros((theta.size, phi.size), dtype=complex)
+    # Create meshgrid for calculations
+    THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
+    
+    # Initialize output array
+    AF = np.zeros((phi.size, theta.size), dtype=complex)
 
     # Element positions
     x_positions = np.arange(xn) - (xn - 1) / 2
@@ -181,28 +178,16 @@ def calculate_array_factor_with_element_phases(
     # Calculate array factor
     for ix in range(xn):
         for iy in range(yn):
-            if phi.ndim == 0:  # Single phi value
-                # Phase for each theta
-                psi_x = k * dx_m * np.sin(theta) * np.cos(phi)
-                psi_y = k * dy_m * np.sin(theta) * np.sin(phi)
-                phase = (
-                    x_positions[ix] * psi_x
-                    + y_positions[iy] * psi_y
-                    - phase_shifts[ix, iy]
-                )
-            else:  # Multiple phi values
-                # Phase for each theta and phi combination
-                sin_theta = np.sin(THETA)
-                cos_phi = np.cos(PHI)
-                sin_phi = np.sin(PHI)
-                psi_x = k * dx_m * sin_theta * cos_phi
-                psi_y = k * dx_m * sin_theta * sin_phi
-                phase = (
-                    x_positions[ix] * psi_x
-                    + y_positions[iy] * psi_y
-                    - phase_shifts[ix, iy]
-                )
-
+            # Phase for each theta and phi combination
+            sin_theta = np.sin(THETA)
+            cos_phi = np.cos(PHI)
+            sin_phi = np.sin(PHI)
+            psi_x = k * dx_m * sin_theta * cos_phi
+            psi_y = k * dy_m * sin_theta * sin_phi
+            
+            # Reshape for proper broadcasting
+            phase = (x_positions[ix] * psi_x.T + y_positions[iy] * psi_y.T - phase_shifts[ix, iy])
+            
             # Add contribution to array factor
             AF += np.exp(1j * phase)
 
@@ -391,31 +376,24 @@ def generate_dataset(
             else:
                 phase_shifts = generate_element_phase_shifts(xn, yn, method)
 
-        # Calculate array factor for each phi and theta
-        patterns_for_all_phi = []
-        for phi_idx, phi_val in enumerate(phi):
-            # Calculate array factor for this phi value and all theta values
-            AF = calculate_array_factor_with_element_phases(
-                theta, phi_val, freq, xn, yn, dx, dy, phase_shifts
-            )
-
-            # Multiply by single element pattern to get total pattern
-            element_pattern = single_E_norm[0, phi_idx]  # Use first frequency
-            total_pattern = element_pattern * AF
-
-            # Normalize
-            total_pattern = total_pattern / np.max(np.abs(total_pattern))
-
-            # Convert to dB (normalized directivity)
-            array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
-            total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + 10.0 * np.log10(
-                array_gain
-            )
-
-            patterns_for_all_phi.append(total_pattern_db)
-
+        # Calculate array factor for all phi and theta values at once
+        AF = calculate_array_factor_with_element_phases(
+            theta, phi, freq, xn, yn, dx, dy, phase_shifts
+        )
+        
+        # Multiply by single element pattern to get total pattern
+        # The shape of AF is (n_phi, n_theta) after the calculation
+        total_pattern = single_E_norm[0] * AF
+        
+        # Normalize
+        total_pattern = total_pattern / np.max(np.abs(total_pattern))
+        
+        # Convert to dB (normalized directivity)
+        array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
+        total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + 10.0 * np.log10(array_gain)
+        
         # Store pattern and label
-        patterns[i] = np.array(patterns_for_all_phi)
+        patterns[i] = total_pattern_db
         labels[i] = phase_shifts  # Store the phase shifts as labels
 
         # Visualize some samples if requested
