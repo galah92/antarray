@@ -1,13 +1,10 @@
-#!/usr/bin/env python3
-import os
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import h5py
 
-# Import functions from analyze.py
-from analyze import read_nf2ff, array_factor
+from analyze import read_nf2ff
 
 
 def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
@@ -429,7 +426,7 @@ def generate_dataset(
             # Plot radiation pattern at phi=0
             phi_idx = np.argmin(np.abs(phi - 0))
             axs[0].plot(np.rad2deg(theta), patterns[i, phi_idx])
-            axs[0].set_title(f"Radiation Pattern (dB) at phi=0°")
+            axs[0].set_title("Radiation Pattern (dB) at phi=0°")
             axs[0].set_xlabel("Theta (degrees)")
             axs[0].set_ylabel("Directivity (dBi)")
             axs[0].grid(True)
@@ -471,7 +468,7 @@ def generate_dataset(
             axs[2].set_theta_zero_location("N")  # 0 degrees at the top
             axs[2].set_theta_direction(-1)  # clockwise
             axs[2].set_rlim(-40, 5)  # dB limits
-            axs[2].set_title(f"Polar Pattern (phi=0°)")
+            axs[2].set_title("Polar Pattern (phi=0°)")
             axs[2].grid(True)
 
             # Save visualization
@@ -574,7 +571,7 @@ def visualize_dataset_samples(dataset, n_samples=5):
         # Plot radiation pattern at phi=0
         phi_idx = 0  # Assuming phi[0]=0
         axs[0].plot(np.rad2deg(theta), pattern[phi_idx])
-        axs[0].set_title(f"Radiation Pattern (dB) at phi=0°")
+        axs[0].set_title("Radiation Pattern (dB) at phi=0°")
         axs[0].set_xlabel("Theta (degrees)")
         axs[0].set_ylabel("Directivity (dBi)")
         axs[0].grid(True)
@@ -615,7 +612,7 @@ def visualize_dataset_samples(dataset, n_samples=5):
         axs[2].set_theta_zero_location("N")  # 0 degrees at the top
         axs[2].set_theta_direction(-1)  # clockwise
         axs[2].set_rlim(-40, 5)  # dB limits
-        axs[2].set_title(f"Polar Pattern (phi=0°)")
+        axs[2].set_title("Polar Pattern (phi=0°)")
         axs[2].grid(True)
 
         plt.tight_layout()
