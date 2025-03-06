@@ -208,6 +208,89 @@ def calculate_array_factor_with_element_phases(
     return np.abs(AF)
 
 
+def array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy):
+    """
+    Parameters:
+    -----------
+    theta : numpy.ndarray
+        Elevation angle(s) in radians
+    phi : numpy.ndarray
+        Azimuth angle(s) in radians
+    freq : float
+        Operating frequency in Hz
+    xn : int
+        Number of elements in x direction
+    yn : int
+        Number of elements in y direction
+    dx : float
+        Element spacing in x direction (mm)
+    dy : float
+        Element spacing in y direction (mm)
+
+    Returns:
+    --------
+    numpy.ndarray
+    """
+    # Convert input to numpy arrays if they aren't already
+    theta = np.asarray(theta)
+    phi = np.asarray(phi)
+
+    # Calculate wavelength and convert spacing to meters
+    c = 299792458  # Speed of light in m/s
+    wavelength = c / freq  # Wavelength in meters
+    dx_m = dx / 1000  # Convert from mm to meters
+    dy_m = dy / 1000  # Convert from mm to meters
+
+    # Wave number
+    k = 2 * np.pi / wavelength
+
+    # Create meshgrid for calculations
+    THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
+
+    # Calculate sin(theta) and sin/cos(phi) once
+    sin_theta = np.sin(THETA)
+    cos_phi = np.cos(PHI)
+    sin_phi = np.sin(PHI)
+
+    # Element positions (centered around origin)
+    x_positions = np.arange(xn) - (xn - 1) / 2
+    y_positions = np.arange(yn) - (yn - 1) / 2
+
+    # Reshape arrays for broadcasting
+    # Make sin_theta, cos_phi, sin_phi shape: (len(phi), len(theta), 1, 1)
+    sin_theta = sin_theta.T[:, :, np.newaxis, np.newaxis]
+    cos_phi = cos_phi.T[:, :, np.newaxis, np.newaxis]
+    sin_phi = sin_phi.T[:, :, np.newaxis, np.newaxis]
+
+    # Make x_positions shape: (1, 1, xn, 1) and y_positions shape: (1, 1, 1, yn)
+    x_positions = x_positions.reshape(1, 1, xn, 1)
+    y_positions = y_positions.reshape(1, 1, 1, yn)
+
+    # Calculate phase terms for all elements at once
+    psi_x = k * dx_m * sin_theta * cos_phi
+    psi_y = k * dy_m * sin_theta * sin_phi
+
+    # Compute the partial phase for all elements and all angles at once
+    partial_phase = x_positions * psi_x + y_positions * psi_y
+    return partial_phase
+
+
+def array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts):
+    # Make phase_shifts shape: (1, 1, xn, yn)
+    phase_shifts = phase_shifts.reshape(1, 1, xn, yn)
+
+    # Compute the total phase for all elements and all angles at once
+    total_phase = partial_phase - phase_shifts
+
+    # Sum the complex exponentials across all elements
+    AF = np.sum(np.exp(1j * total_phase), axis=(2, 3))
+
+    # Normalize by total number of elements
+    AF = AF / (xn * yn)
+
+    return np.abs(AF)
+
+
 # Add this function to help understand grating lobes
 def check_grating_lobes(freq, dx, dy):
     """
@@ -317,6 +400,8 @@ def generate_dataset(
     n_theta = len(theta)
     n_phi = len(phi)
 
+    partial_phase = array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy)
+
     # Generate dataset
     print(f"Generating dataset with {n_samples} samples...")
     steering_info = []  # Store steering angles for beamforming
@@ -324,7 +409,7 @@ def generate_dataset(
     # Create output directory if it doesn't exist
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
-    with h5py.File(outfile, "w") as h5f:
+    with h5py.File(outfile, "x") as h5f:
         h5f.create_dataset("theta", data=theta)
         h5f.create_dataset("phi", data=phi)
 
@@ -399,9 +484,7 @@ def generate_dataset(
                     phase_shifts = generate_element_phase_shifts(xn, yn, method)
 
             # Calculate array factor for all phi and theta values at once
-            AF = calculate_array_factor_with_element_phases(
-                theta, phi, freq, xn, yn, dx, dy, phase_shifts
-            )
+            AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
 
             # Multiply by single element pattern to get total pattern
             # The shape of AF is (n_phi, n_theta) after the calculation
@@ -536,7 +619,7 @@ def plot_samples(dataset, n_samples=5, output_dir=None):
 if __name__ == "__main__":
     # Default simulation directory
     sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
-    outfile = Path.cwd() / "dataset" / "farfield_dataset_3.h5"
+    outfile = Path.cwd() / "dataset" / "farfield_dataset.h5"
 
     # Filename format typically matches what's used in analyze.py
     single_antenna_filename = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
@@ -546,7 +629,7 @@ if __name__ == "__main__":
         sim_dir_path=sim_dir,
         outfile=outfile,
         single_antenna_filename=single_antenna_filename,
-        n_samples=1_000,
+        n_samples=10_000,
         phase_method="beamforming",
     )
 
