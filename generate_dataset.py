@@ -555,22 +555,23 @@ def plot_samples(dataset, n_samples=5, output_dir=None):
         replace=False,
     )
 
+    theta = dataset["theta"]
+
     for idx in indices:
         # Create figure with three subplots: pattern, phase shifts, and polar pattern
         fig, axs = plt.subplots(1, 3, figsize=(18, 6))
 
         pattern = dataset["patterns"][idx]
         phase_shifts = dataset["labels"][idx]
-        theta = dataset["theta"]
 
         # Plot radiation pattern at phi=0
-        phi_idx = 0  # Assuming phi[0]=0
+        phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
         axs[0].plot(np.rad2deg(theta), pattern[phi_idx])
         axs[0].set_title("Radiation Pattern (dB) at phi=0°")
         axs[0].set_xlabel("Theta (degrees)")
         axs[0].set_ylabel("Directivity (dBi)")
         axs[0].grid(True)
-        axs[0].set_xlim([0, 180])
+        # axs[0].set_xlim([-180, 180])
         axs[0].set_ylim([-30, np.max(pattern) + 1])
 
         # Plot phase shifts
@@ -596,7 +597,7 @@ def plot_samples(dataset, n_samples=5, output_dir=None):
 
         # Plot polar pattern
         axs[2] = plt.subplot(1, 3, 3, projection="polar")
-        phi_idx = 0  # phi=0 cut
+        phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
         norm_pattern = pattern[phi_idx] - np.max(pattern)  # Normalize to 0 dB max
 
         # Map theta from [0,pi] to [0,2pi] for polar plot
@@ -635,4 +636,4 @@ if __name__ == "__main__":
 
     # Load and visualize the generated dataset
     dataset = load_dataset(outfile)
-    plot_samples(dataset, n_samples=3, output_dir=outfile.parent)
+    plot_samples(dataset, n_samples=1, output_dir=outfile.parent)
