@@ -3,8 +3,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import h5py
+import typer
 
 from analyze import read_nf2ff
+
+
+app = typer.Typer()
 
 
 def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
@@ -617,23 +621,108 @@ def plot_samples(dataset, n_samples=5, output_dir=None):
             plt.savefig(output_dir / f"sample_{idx}.png")
 
 
-if __name__ == "__main__":
-    # Default simulation directory
-    sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
-    outfile = Path.cwd() / "dataset" / "farfield_dataset.h5"
+DEFAULT_DATASET_PATH = Path.cwd() / "dataset" / "farfield_dataset.h5"
+DEFAULT_DATASET_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # Filename format typically matches what's used in analyze.py
-    single_antenna_filename = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
+DEFAULT_OUTPUT_DIR = Path.cwd() / "dataset" / "plots"
+DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Generate dataset
-    generate_dataset(
-        sim_dir_path=sim_dir,
-        outfile=outfile,
-        single_antenna_filename=single_antenna_filename,
-        n_samples=10_000,
-        phase_method="beamforming",
+
+@app.command()
+def plot_sample(
+    idx: int,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+):
+    """
+    Visualize a single sample from the dataset.
+
+    Parameters:
+    -----------
+    dataset : dict
+        Dataset loaded with load_dataset
+    idx : int
+        Index of the sample to visualize
+    """
+    dataset = load_dataset(dataset_path)
+    theta = dataset["theta"]
+
+    # Create figure with three subplots: pattern, phase shifts, and polar pattern
+    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
+
+    pattern = dataset["patterns"][idx]
+    phase_shifts = dataset["labels"][idx]
+
+    # Plot radiation pattern at phi=0
+    phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
+    axs[0].plot(np.rad2deg(theta), pattern[phi_idx])
+    axs[0].set_title("Radiation Pattern (dB) at phi=0°")
+    axs[0].set_xlabel("Theta (degrees)")
+    axs[0].set_ylabel("Directivity (dBi)")
+    axs[0].grid(True)
+    # axs[0].set_xlim([-180, 180])
+    axs[0].set_ylim([-30, np.max(pattern) + 1])
+
+    # Plot phase shifts
+    im = axs[1].imshow(
+        np.rad2deg(phase_shifts),
+        cmap="viridis",
+        origin="lower",
+        interpolation="nearest",
+        vmin=-180,
+        vmax=180,
     )
 
-    # Load and visualize the generated dataset
-    dataset = load_dataset(outfile)
-    plot_samples(dataset, n_samples=1, output_dir=outfile.parent)
+    # Add steering info if available
+    if "steering_info" in dataset and idx < len(dataset["steering_info"]):
+        theta_s, phi_s = dataset["steering_info"][idx]
+        axs[1].set_title(f"Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)")
+    else:
+        axs[1].set_title("Element Phase Shifts (degrees)")
+
+    axs[1].set_xlabel("Element Y index")
+    axs[1].set_ylabel("Element X index")
+    plt.colorbar(im, ax=axs[1])
+
+    # Plot polar pattern
+    axs[2] = plt.subplot(1, 3, 3, projection="polar")
+    phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
+    norm_pattern = pattern[phi_idx] - np.max(pattern)  # Normalize to 0 dB max
+
+    # Map theta from [0,pi] to [0,2pi] for polar plot
+    plot_theta = theta  # Radial coordinate
+    plot_r = norm_pattern  # Pattern value
+
+    axs[2].plot(plot_theta, plot_r)
+    axs[2].set_theta_zero_location("N")  # 0 degrees at the top
+    axs[2].set_theta_direction(-1)  # clockwise
+    axs[2].set_rlim(-40, 5)  # dB limits
+    axs[2].set_title("Polar Pattern (phi=0°)")
+    axs[2].grid(True)
+
+    fig.set_tight_layout(True)
+    if output_dir:
+        fig.savefig(output_dir / f"sample_{idx}.png", dpi=600)
+
+
+if __name__ == "__main__":
+    # # Default simulation directory
+    # sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
+    # outfile = Path.cwd() / "dataset" / "farfield_dataset.h5"
+
+    # # Filename format typically matches what's used in analyze.py
+    # single_antenna_filename = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
+
+    # # Generate dataset
+    # generate_dataset(
+    #     sim_dir_path=sim_dir,
+    #     outfile=outfile,
+    #     single_antenna_filename=single_antenna_filename,
+    #     n_samples=10_000,
+    #     phase_method="beamforming",
+    # )
+
+    # # Load and visualize the generated dataset
+    # dataset = load_dataset(outfile)
+    # plot_samples(dataset, n_samples=1, output_dir=outfile.parent)
+    app()
