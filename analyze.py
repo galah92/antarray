@@ -360,45 +360,25 @@ def plot_sim_and_af(
 
 
 def plot_ff_3d(
-    nf2ff: dict[str, object],
+    theta: np.ndarray,
+    phi: np.ndarray,
+    E_norm: np.ndarray,
+    freq: float,
     *,
     freq_index: int = 0,
     logscale: float | None = None,
     normalize: bool = False,
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
-    """
-    Plot normalized 3D far field pattern.
-
-    Args:
-        nf2ff: Dictionary containing the output of calc_nf2ff function with keys:
-            - E_norm: List of numpy arrays containing E-field norm data
-            - freq: Array of frequencies
-            - theta: Array of theta coordinates
-            - phi: Array of phi coordinates
-            - Dmax: Array of maximum directivities (optional)
-        freq_index: Index of frequency to plot (default: 0)
-        logscale: If set, shows far field with logarithmic scale and sets
-                 the dB value for point of origin. Values below will be clamped.
-        normalize: Whether to normalize linear plot (default: False).
-                 Note: Log-plot is always normalized.
-
-    Returns:
-        matplotlib.pyplot.Axes object
-
-    Example:
-        >>> plot_ff_3d(nf2ff, freq_index=0, logscale=-20)
-    """
     # Extract and normalize E-field data if requested
     if normalize or logscale is not None:
-        E_far = nf2ff["E_norm"][freq_index] / np.max(nf2ff["E_norm"][freq_index])
+        E_far = E_norm[freq_index] / np.max(E_norm[freq_index])
     else:
-        E_far = nf2ff["E_norm"][freq_index]
+        E_far = E_norm[freq_index]
 
     # Apply logarithmic scaling if requested
-    freq = nf2ff["freq"][freq_index]
     if logscale is not None:
-        E_far = 20 * np.log10(E_far) / -logscale + 1
+        E_far = 20 * np.log10(np.abs(E_far)) / -logscale + 1
         E_far = E_far * (E_far > 0)  # Clamp negative values
         title = f"Electrical far field [dB] @ f = {freq:.2e} Hz"
     elif not normalize:
@@ -407,74 +387,31 @@ def plot_ff_3d(
         title = f"Normalized electrical far field @ f = {freq:.2e} Hz"
 
     # Create coordinate meshgrid
-    theta, phi = np.meshgrid(nf2ff["theta"], nf2ff["phi"], indexing="xy")
+    theta, phi = np.meshgrid(theta, phi, indexing="xy")
 
     # Calculate cartesian coordinates
     x = E_far * np.sin(theta) * np.cos(phi)
     y = E_far * np.sin(theta) * np.sin(phi)
     z = E_far * np.cos(theta)
 
+    z[E_far < 0] = np.nan  # hide negative values
+
     # Create 3D plot
     if ax is None:
         ax = plt.figure().add_subplot(projection="3d")
-    c = plt.cm.viridis(E_far / np.max(E_far))
-    surf = ax.plot_surface(x, y, z, facecolors=c, shade=False)
+
+    surf = ax.plot_surface(x, y, z, cmap="viridis_r")
 
     # Configure plot settings
-    ax.set_box_aspect([1, 1, 1])
-
-    # Add colorbar
-    if logscale is not None:
-        ticks = np.linspace(0, np.max(E_far), 9)
-        _ticklabels = np.linspace(
-            logscale, 10 * np.log10(nf2ff.get("Dmax", [1])[freq_index]), 9
-        )
-        plt.colorbar(
-            surf,
-            ax=ax,
-            ticks=ticks,
-            format=lambda x, _: f"{float(x):.1f}",
-        )
-    else:
-        plt.colorbar(surf, ax=ax)
-
+    ax.view_init(elev=20.0, azim=-100)
+    ax.set_aspect("equalxy")
+    ax.set_box_aspect(None, zoom=1.25)
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_zlabel("z")
+    ax.set_xlim(-25, 25)
+    ax.set_ylim(-25, 25)
 
     ax.set_title(title)
 
     return ax
-
-
-def example_usage():
-    """Example showing how to use the plot_ff_3d function."""
-    # Create sample data (normally this would come from calc_nf2ff)
-    theta = np.linspace(0, np.pi, 100)
-    phi = np.linspace(0, 2 * np.pi, 2)
-
-    # Create sample E_norm data (dipole-like pattern)
-    theta_mesh, phi_mesh = np.meshgrid(theta, phi, indexing="xy")
-    E_norm = np.sin(theta_mesh)
-
-    # Create sample nf2ff dictionary
-    nf2ff = {
-        "E_norm": [E_norm],  # List containing one array
-        "freq": [1e9],  # 1 GHz
-        "theta": theta,
-        "phi": phi,
-        "Dmax": [1.5],
-    }
-
-    # Plot with different options
-    plot_ff_3d(nf2ff)
-    # plt.figure()
-    # plot_ff_3d(nf2ff, logscale=-20)
-    # plt.figure()
-    # plot_ff_3d(nf2ff, normalize=True)
-
-    plt.show()
-
-
-if __name__ == "__main__":
-    example_usage()

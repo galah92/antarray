@@ -5,10 +5,10 @@ from tqdm import tqdm
 import h5py
 import typer
 
-from analyze import read_nf2ff
+from analyze import read_nf2ff, plot_ff_3d
 
 
-app = typer.Typer(no_args_is_help=True)
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 
 def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
@@ -604,23 +604,18 @@ def plot_sample(
     theta = dataset["theta"]
 
     # Create figure with three subplots: pattern, phase shifts, and polar pattern
-    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
+    fig = plt.figure(figsize=[18, 6])
+    ax0 = fig.add_subplot(1, 3, 1)
+    ax1 = fig.add_subplot(1, 3, 2, projection="3d")
+    ax2 = fig.add_subplot(1, 3, 3, projection="polar")
+    axs = [ax0, ax1, ax2]
+    # fig, axs = plt.subplots(1, 3, figsize=(18, 6))
 
     pattern = dataset["patterns"][idx]
     phase_shifts = dataset["labels"][idx]
 
-    # Plot radiation pattern at phi=0
-    phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
-    axs[0].plot(np.rad2deg(theta), pattern[phi_idx])
-    axs[0].set_title("Radiation Pattern (dB) at phi=0°")
-    axs[0].set_xlabel("Theta (degrees)")
-    axs[0].set_ylabel("Directivity (dBi)")
-    axs[0].grid(True)
-    # axs[0].set_xlim([-180, 180])
-    axs[0].set_ylim([-30, np.max(pattern) + 1])
-
     # Plot phase shifts
-    im = axs[1].imshow(
+    axs[0].imshow(
         np.rad2deg(phase_shifts),
         cmap="viridis",
         origin="lower",
@@ -632,16 +627,23 @@ def plot_sample(
     # Add steering info if available
     if "steering_info" in dataset and idx < len(dataset["steering_info"]):
         theta_s, phi_s = dataset["steering_info"][idx]
-        axs[1].set_title(f"Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)")
+        axs[0].set_title(f"Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)")
     else:
-        axs[1].set_title("Element Phase Shifts (degrees)")
+        axs[0].set_title("Element Phase Shifts (degrees)")
 
-    axs[1].set_xlabel("Element Y index")
-    axs[1].set_ylabel("Element X index")
-    plt.colorbar(im, ax=axs[1])
+    axs[0].set_xlabel("Element X index")
+    axs[0].set_ylabel("Element Y index")
+
+    # Plot 3D radiation pattern
+    plot_ff_3d(
+        theta,
+        dataset["phi"],
+        pattern[None, ...],  # Add freq dimension (first one) for 3D plot
+        freq=dataset["frequency"],
+        ax=axs[1],
+    )
 
     # Plot polar pattern
-    axs[2] = plt.subplot(1, 3, 3, projection="polar")
     phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
     norm_pattern = pattern[phi_idx] - np.max(pattern)  # Normalize to 0 dB max
 
