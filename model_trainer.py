@@ -695,9 +695,7 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
 
 if __name__ == "__main__":
     # Example usage
-    dataset_path = (
-        Path.cwd() / "dataset" / "farfield_patterns" / "farfield_patterns_dataset.h5"
-    )
+    dataset_path = Path.cwd() / "dataset" / "farfield_dataset.h5"
     output_dir = Path.cwd() / "model_results"
 
     # Check if CUDA is available

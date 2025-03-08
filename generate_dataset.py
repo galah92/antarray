@@ -541,7 +541,18 @@ def load_dataset(dataset_file: Path):
     return dataset
 
 
-def plot_samples(dataset, n_samples=5, output_dir=None):
+DEFAULT_DATASET_PATH = Path.cwd() / "dataset" / "farfield_dataset.h5"
+DEFAULT_DATASET_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+DEFAULT_OUTPUT_DIR = Path.cwd() / "dataset" / "plots"
+DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def plot_samples(
+    n_samples: int = 1,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+):
     """
     Visualize a few samples from the dataset.
 
@@ -553,79 +564,15 @@ def plot_samples(dataset, n_samples=5, output_dir=None):
         Number of samples to visualize
     """
     # Choose n_samples random indices
+    dataset = load_dataset(dataset_path)
     indices = np.random.choice(
         len(dataset["patterns"]),
         size=min(n_samples, len(dataset["patterns"])),
         replace=False,
     )
 
-    theta = dataset["theta"]
-
     for idx in indices:
-        # Create figure with three subplots: pattern, phase shifts, and polar pattern
-        fig, axs = plt.subplots(1, 3, figsize=(18, 6))
-
-        pattern = dataset["patterns"][idx]
-        phase_shifts = dataset["labels"][idx]
-
-        # Plot radiation pattern at phi=0
-        phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
-        axs[0].plot(np.rad2deg(theta), pattern[phi_idx])
-        axs[0].set_title("Radiation Pattern (dB) at phi=0°")
-        axs[0].set_xlabel("Theta (degrees)")
-        axs[0].set_ylabel("Directivity (dBi)")
-        axs[0].grid(True)
-        # axs[0].set_xlim([-180, 180])
-        axs[0].set_ylim([-30, np.max(pattern) + 1])
-
-        # Plot phase shifts
-        im = axs[1].imshow(
-            np.rad2deg(phase_shifts),
-            cmap="viridis",
-            origin="lower",
-            interpolation="nearest",
-            vmin=-180,
-            vmax=180,
-        )
-
-        # Add steering info if available
-        if "steering_info" in dataset and idx < len(dataset["steering_info"]):
-            theta_s, phi_s = dataset["steering_info"][idx]
-            axs[1].set_title(f"Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)")
-        else:
-            axs[1].set_title("Element Phase Shifts (degrees)")
-
-        axs[1].set_xlabel("Element Y index")
-        axs[1].set_ylabel("Element X index")
-        plt.colorbar(im, ax=axs[1])
-
-        # Plot polar pattern
-        axs[2] = plt.subplot(1, 3, 3, projection="polar")
-        phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
-        norm_pattern = pattern[phi_idx] - np.max(pattern)  # Normalize to 0 dB max
-
-        # Map theta from [0,pi] to [0,2pi] for polar plot
-        plot_theta = theta  # Radial coordinate
-        plot_r = norm_pattern  # Pattern value
-
-        axs[2].plot(plot_theta, plot_r)
-        axs[2].set_theta_zero_location("N")  # 0 degrees at the top
-        axs[2].set_theta_direction(-1)  # clockwise
-        axs[2].set_rlim(-40, 5)  # dB limits
-        axs[2].set_title("Polar Pattern (phi=0°)")
-        axs[2].grid(True)
-
-        plt.tight_layout()
-        plt.show()
-        if output_dir:
-            plt.savefig(output_dir / f"sample_{idx}.png")
-
-
-DEFAULT_DATASET_PATH = Path.cwd() / "dataset" / "farfield_dataset.h5"
-DEFAULT_DATASET_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-DEFAULT_OUTPUT_DIR = Path.cwd() / "dataset" / "plots"
-DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        plot_sample(idx, dataset_path, output_dir)
 
 
 @app.command()
