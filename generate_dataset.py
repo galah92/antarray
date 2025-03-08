@@ -8,7 +8,7 @@ import typer
 from analyze import read_nf2ff
 
 
-app = typer.Typer()
+app = typer.Typer(no_args_is_help=True)
 
 
 def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
@@ -345,12 +345,20 @@ def check_grating_lobes(freq, dx, dy):
     }
 
 
-def generate_dataset(
-    sim_dir_path: Path,
-    outfile: Path,
-    single_antenna_filename: str,
-    n_samples: int = 1000,
-    phase_method: str = "random",
+DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
+DEFAULT_DATASET_DIR = Path.cwd() / "dataset"
+DEFAULT_OUTFILE = "farfield_dataset.h5"
+DEFAULT_SINGLE_ANT_FILENAME = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
+
+
+@app.command()
+def generate(
+    n_samples: int = 1_000,
+    phase_method: str = "beamforming",
+    sim_dir_path: Path = DEFAULT_SIM_DIR,
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    outfile: Path = DEFAULT_OUTFILE,
+    single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
     """
     Generate a dataset of farfield radiation patterns with individual element phase shifts.
@@ -411,6 +419,7 @@ def generate_dataset(
     steering_info = []  # Store steering angles for beamforming
 
     # Create output directory if it doesn't exist
+    outfile = dataset_dir / outfile
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
     with h5py.File(outfile, "x") as h5f:
@@ -653,23 +662,4 @@ def plot_sample(
 
 
 if __name__ == "__main__":
-    # # Default simulation directory
-    # sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
-    # outfile = Path.cwd() / "dataset" / "farfield_dataset.h5"
-
-    # # Filename format typically matches what's used in analyze.py
-    # single_antenna_filename = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
-
-    # # Generate dataset
-    # generate_dataset(
-    #     sim_dir_path=sim_dir,
-    #     outfile=outfile,
-    #     single_antenna_filename=single_antenna_filename,
-    #     n_samples=10_000,
-    #     phase_method="beamforming",
-    # )
-
-    # # Load and visualize the generated dataset
-    # dataset = load_dataset(outfile)
-    # plot_samples(dataset, n_samples=1, output_dir=outfile.parent)
     app()
