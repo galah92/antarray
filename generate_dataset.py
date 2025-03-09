@@ -347,6 +347,7 @@ def check_grating_lobes(freq, dx, dy):
 
 DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
 DEFAULT_DATASET_DIR = Path.cwd() / "dataset"
+DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_OUTFILE = "farfield_dataset.h5"
 DEFAULT_SINGLE_ANT_FILENAME = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
 
@@ -462,9 +463,8 @@ def generate(
             elif phase_method == "beamforming":
                 # Generate random steering angles with wider range to make effect more visible
                 theta_steering = np.random.uniform(-70, 70)  # -70° to 70° elevation
-                phi_steering = np.random.choice(
-                    [0, 90, 180, 270]
-                )  # Use cardinal directions for clearer visualization
+                # Use cardinal directions for clearer visualization
+                phi_steering = np.random.choice([0, 90, 180, 270])
 
                 phase_shifts = generate_element_phase_shifts(
                     xn,
@@ -518,7 +518,7 @@ def generate(
 
         # Store steering info if using beamforming
         if phase_method == "beamforming" and steering_info:
-            h5f.create_dataset("steering_info", data=np.array(steering_info))
+            h5f.attrs["steering_info"] = steering_info
 
 
 def load_dataset(dataset_file: Path):
@@ -550,16 +550,14 @@ def load_dataset(dataset_file: Path):
     return dataset
 
 
-DEFAULT_DATASET_PATH = Path.cwd() / "dataset" / "farfield_dataset.h5"
-DEFAULT_DATASET_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-DEFAULT_OUTPUT_DIR = Path.cwd() / "dataset" / "plots"
+DEFAULT_OUTPUT_DIR = DEFAULT_DATASET_DIR / "plots"
 DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def plot_samples(
     n_samples: int = 1,
-    dataset_path: Path = DEFAULT_DATASET_PATH,
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset_name: Path = DEFAULT_OUTFILE,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
 ):
     """
@@ -572,6 +570,7 @@ def plot_samples(
     n_samples : int
         Number of samples to visualize
     """
+    dataset_path = dataset_dir / dataset_name
     # Choose n_samples random indices
     dataset = load_dataset(dataset_path)
     indices = np.random.choice(
@@ -587,7 +586,8 @@ def plot_samples(
 @app.command()
 def plot_sample(
     idx: int,
-    dataset_path: Path = DEFAULT_DATASET_PATH,
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset_name: Path = DEFAULT_OUTFILE,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
 ):
     """
@@ -600,8 +600,11 @@ def plot_sample(
     idx : int
         Index of the sample to visualize
     """
+    dataset_path = dataset_dir / dataset_name
     dataset = load_dataset(dataset_path)
     theta = dataset["theta"]
+    theta_steering, phi_steering = dataset["steering_info"][0]
+    print(f"{theta_steering=:.0f}deg, {phi_steering=:.0f}deg")
 
     # Create figure with three subplots: pattern, phase shifts, and polar pattern
     fig = plt.figure(figsize=[18, 6])
