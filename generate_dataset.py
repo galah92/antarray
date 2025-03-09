@@ -740,6 +740,8 @@ def plot_sample(
     pattern = dataset["patterns"][idx]
     phase_shifts = dataset["labels"][idx]
 
+    pattern[pattern < 0] = 0  # Clip negative values to 0
+
     # Plot phase shifts
     axs[0].imshow(
         np.rad2deg(phase_shifts),
@@ -771,13 +773,9 @@ def plot_sample(
 
     # Plot polar pattern
     phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
-    norm_pattern = pattern[phi_idx] - np.max(pattern)  # Normalize to 0 dB max
-
-    # Map theta from [0,pi] to [0,2pi] for polar plot
-    plot_theta = theta  # Radial coordinate
-    plot_r = norm_pattern  # Pattern value
-
-    axs[2].plot(plot_theta, plot_r)
+    norm_pattern = pattern[phi_idx]
+    norm_pattern = norm_pattern - np.max(norm_pattern)  # Normalize to 0 dB max
+    axs[2].plot(theta, norm_pattern)
     axs[2].set_theta_zero_location("N")  # 0 degrees at the top
     axs[2].set_theta_direction(-1)  # clockwise
     axs[2].set_rlim(-40, 5)  # dB limits

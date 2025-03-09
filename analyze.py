@@ -394,8 +394,6 @@ def plot_ff_3d(
     y = E_far * np.sin(theta) * np.sin(phi)
     z = E_far * np.cos(theta)
 
-    z[E_far < 0] = np.nan  # hide negative values
-
     # Create 3D plot
     if ax is None:
         ax = plt.figure().add_subplot(projection="3d")
