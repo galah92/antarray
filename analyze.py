@@ -400,7 +400,7 @@ def plot_ff_3d(
     if ax is None:
         ax = plt.figure().add_subplot(projection="3d")
 
-    surf = ax.plot_surface(x, y, z, cmap="viridis_r")
+    ax.plot_surface(x, y, z, cmap="viridis_r")
 
     # Configure plot settings
     ax.view_init(elev=20.0, azim=-100)
