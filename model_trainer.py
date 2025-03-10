@@ -595,6 +595,9 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
     patterns = dataset["patterns"]
     labels = dataset["labels"]
 
+    patterns[patterns < 0] = 0  # Set negative values to 0
+    patterns = patterns / 20  # Normalize
+
     # Print dataset info
     print(f"Dataset loaded: {len(patterns)} samples")
     print(f"Pattern shape: {patterns.shape}")
@@ -653,7 +656,7 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
     # Define loss function and optimizer
     criterion = CircularLoss()
     # Use AdamW optimizer
-    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.01)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5, verbose=True
     )
@@ -710,6 +713,7 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
 if __name__ == "__main__":
     # Example usage
     dataset_path = Path.cwd() / "dataset" / "farfield_dataset.h5"
+    dataset_path = Path.cwd() / "dataset" / "ff_beamforming.h5"
     output_dir = Path.cwd() / "model_results"
 
     # Check if CUDA is available
@@ -718,7 +722,7 @@ if __name__ == "__main__":
     main(
         dataset_path=dataset_path,
         output_dir=output_dir,
-        batch_size=64,  # Increase batch size
+        batch_size=128,
         num_epochs=100,
         device=device,
     )
