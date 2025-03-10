@@ -542,6 +542,7 @@ def generate_beamforming(
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     outfile: Path = DEFAULT_OUTFILE,
+    overwrite: bool = False,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
     # Fixed parameters for the 16x16 array
@@ -593,7 +594,8 @@ def generate_beamforming(
     outfile = dataset_dir / outfile
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
-    with h5py.File(outfile, "x") as h5f:
+    mode = "w" if overwrite else "x"
+    with h5py.File(outfile, mode) as h5f:
         h5f.create_dataset("theta", data=theta)
         h5f.create_dataset("phi", data=phi)
 
