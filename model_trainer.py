@@ -8,8 +8,13 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
+import typer
 
+import analyze
 from generate_dataset import load_dataset
+
+
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 
 class RadiationPatternDataset(Dataset):
@@ -520,6 +525,64 @@ def visualize_training_history(history, save_path=None):
     plt.close()
 
 
+DEFAULT_MODELS_DIR = Path.cwd() / "model_results"
+DEFAULT_MODELS_DIR.mkdir(exist_ok=True, parents=True)
+DEFAULT_MODEL_PATH = DEFAULT_MODELS_DIR / "phase_shift_prediction_model.pth"
+
+DEFAULT_DATA_DIR = Path.cwd() / "dataset"
+DEFAULT_DATA_DIR.mkdir(exist_ok=True, parents=True)
+DEFAULT_DATASET_PATH = DEFAULT_DATA_DIR / "ff_beamforming.h5"
+
+
+@app.command()
+def pred(
+    idx: int = 0,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    model_path: Path = DEFAULT_MODEL_PATH,
+    savefig: bool = True,
+):
+    dataset = load_dataset(dataset_path)
+    patterns, labels = dataset["patterns"], dataset["labels"]
+
+    pattern = patterns[idx][None, None, ...]  # Add batch and channel dimensions
+    pattern[pattern < 0] = 0  # Set negative values to 0
+    pattern = pattern / 20  # Normalize
+    label = labels[idx]
+
+    input_height, input_width = patterns.shape[1], patterns.shape[2]
+    output_size = (labels.shape[1], labels.shape[2])  # Typically (16, 16) for our array
+
+    checkpoint = torch.load(model_path)
+    model = PhaseShiftPredictionModel(
+        input_channels=1,
+        input_height=input_height,
+        input_width=input_width,
+        output_size=output_size,
+    )
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    model.eval()
+    with torch.no_grad():
+        outputs = model(torch.from_numpy(pattern)).numpy()
+
+    output = outputs.squeeze()
+
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+    analyze.plot_phase_shifts(label, title="Ground Truth Phase Shifts", ax=axs[0])
+    analyze.plot_phase_shifts(output, title="Predicted Phase Shifts", ax=axs[1])
+
+    # TODO: should we use diff or output - label?
+    diff = np.arctan2(np.sin(output - label), np.cos(output - label))
+    analyze.plot_phase_shifts(diff, title="Phase Shift Error", ax=axs[2])
+    # plot_phase_shifts(output - label, title="Phase Shift Error", ax=axs[2])
+
+    fig.set_tight_layout(True)
+
+    if savefig:
+        save_path = model_path.parent / f"prediction_example_{idx}.png"
+        plt.savefig(save_path, dpi=600, bbox_inches="tight")
+
+
 def visualize_element_phase_shifts(phase_shifts, save_path=None):
     """
     Visualize element phase shifts.
@@ -710,7 +773,8 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
     return model, history, metrics
 
 
-if __name__ == "__main__":
+@app.command()
+def old_main():
     # Example usage
     dataset_path = Path.cwd() / "dataset" / "farfield_dataset.h5"
     dataset_path = Path.cwd() / "dataset" / "ff_beamforming.h5"
@@ -726,3 +790,7 @@ if __name__ == "__main__":
         num_epochs=100,
         device=device,
     )
+
+
+if __name__ == "__main__":
+    app()

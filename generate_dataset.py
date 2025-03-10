@@ -7,6 +7,7 @@ import h5py
 import typer
 
 from analyze import read_nf2ff, plot_ff_3d
+import analyze
 
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
@@ -745,27 +746,12 @@ def plot_sample(
     # pattern[pattern < 0] = 0  # Clip negative values to 0
 
     # Plot phase shifts
-    # Convert to degrees and shift to -180 to 180 range
-    phase_shifts_clipped = (phase_shifts + np.pi) % (2 * np.pi) - np.pi
-    im = axs[0].imshow(
-        np.rad2deg(phase_shifts_clipped),
-        cmap="twilight_shifted",
-        origin="lower",
-        vmin=-180,
-        vmax=180,
-    )
-    cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
-    cbar.set_label("Phase Shift (degrees)")
-
-    # Add steering info if available
     if "steering_info" in dataset and idx < len(dataset["steering_info"]):
         theta_s, phi_s = dataset["steering_info"][idx]
-        axs[0].set_title(f"Element Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)")
+        phase_shift_title = f"Element Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)"
     else:
-        axs[0].set_title("Element Phase Shifts")
-
-    axs[0].set_xlabel("Element i index")
-    axs[0].set_ylabel("Element j index")
+        phase_shift_title = "Element Phase Shifts"
+    analyze.plot_phase_shifts(phase_shifts, title=phase_shift_title, ax=axs[0])
 
     # Plot 3D radiation pattern
     plot_ff_3d(
@@ -789,7 +775,7 @@ def plot_sample(
 
     fig.set_tight_layout(True)
     if output_dir:
-        fig.savefig(output_dir / f"sample_{idx}.png", dpi=600)
+        fig.savefig(output_dir / f"sample_{idx}.png", dpi=600, bbox_inches="tight")
 
 
 if __name__ == "__main__":

@@ -410,3 +410,28 @@ def plot_ff_3d(
     ax.set_title("3D Far Field Pattern")
 
     return ax
+
+
+def plot_phase_shifts(
+    phase_shifts,
+    title: str = "Phase Shifts",
+    colorbar: bool = True,
+    ax: plt.Axes | None = None,
+):
+    if not ax:
+        _, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+    phase_shifts_clipped = (phase_shifts + np.pi) % (2 * np.pi) - np.pi
+    im = ax.imshow(
+        np.rad2deg(phase_shifts_clipped),
+        cmap="twilight_shifted",  # Cyclic colormap for phase values
+        origin="lower",
+        vmin=-180,
+        vmax=180,
+    )
+    ax.set_xlabel("Element X index")
+    ax.set_ylabel("Element Y index")
+    ax.set_title(title)
+    if colorbar:
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label("Degrees")
