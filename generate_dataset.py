@@ -486,7 +486,6 @@ def generate(
                     dx=dx,
                     dy=dy,
                 )
-                steering_info.append((theta_steering, phi_steering))
             else:
                 # Mix of methods for more variety
                 method = np.random.choice(["random", "beamforming", "zones"])
@@ -527,10 +526,6 @@ def generate(
             # Store pattern and label
             patterns[i] = total_pattern_db
             labels[i] = phase_shifts  # Store the phase shifts as labels
-
-        # Store steering info if using beamforming
-        if phase_method == "beamforming" and steering_info:
-            h5f.attrs["steering_info"] = steering_info
 
 
 @app.command()
@@ -670,7 +665,7 @@ def load_dataset(dataset_file: Path):
             "labels": h5f["labels"][:],
             "theta": h5f["theta"][:],
             "phi": h5f["phi"][:],
-            "steering_info": h5f.get("steering_info", None),
+            "steering_info": h5f.get("steering_info", np.array([]))[:],
         }
 
         # Load metadata
@@ -747,27 +742,30 @@ def plot_sample(
     pattern = dataset["patterns"][idx]
     phase_shifts = dataset["labels"][idx]
 
-    pattern[pattern < 0] = 0  # Clip negative values to 0
+    # pattern[pattern < 0] = 0  # Clip negative values to 0
 
     # Plot phase shifts
-    axs[0].imshow(
-        np.rad2deg(phase_shifts),
-        cmap="viridis",
+    # Convert to degrees and shift to -180 to 180 range
+    phase_shifts_clipped = (phase_shifts + np.pi) % (2 * np.pi) - np.pi
+    im = axs[0].imshow(
+        np.rad2deg(phase_shifts_clipped),
+        cmap="twilight_shifted",
         origin="lower",
-        interpolation="nearest",
         vmin=-180,
         vmax=180,
     )
+    cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
+    cbar.set_label("Phase Shift (degrees)")
 
     # Add steering info if available
     if "steering_info" in dataset and idx < len(dataset["steering_info"]):
         theta_s, phi_s = dataset["steering_info"][idx]
-        axs[0].set_title(f"Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)")
+        axs[0].set_title(f"Element Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)")
     else:
-        axs[0].set_title("Element Phase Shifts (degrees)")
+        axs[0].set_title("Element Phase Shifts")
 
-    axs[0].set_xlabel("Element X index")
-    axs[0].set_ylabel("Element Y index")
+    axs[0].set_xlabel("Element i index")
+    axs[0].set_ylabel("Element j index")
 
     # Plot 3D radiation pattern
     plot_ff_3d(
@@ -786,7 +784,7 @@ def plot_sample(
     axs[2].set_theta_zero_location("N")  # 0 degrees at the top
     axs[2].set_theta_direction(-1)  # clockwise
     axs[2].set_rlim(-40, 5)  # dB limits
-    axs[2].set_title("Polar Pattern (phi=0°)")
+    axs[2].set_title("2D Polar Pattern (φ=0°)")
     axs[2].grid(True)
 
     fig.set_tight_layout(True)

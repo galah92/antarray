@@ -380,14 +380,11 @@ def plot_ff_3d(
     if logscale is not None:
         E_far = 20 * np.log10(np.abs(E_far)) / -logscale + 1
         E_far = E_far * (E_far > 0)  # Clamp negative values
-        title = f"Electrical far field [dB] @ f = {freq:.2e} Hz"
-    elif not normalize:
-        title = f"Electrical far field [V/m] @ f = {freq:.2e} Hz"
-    else:
-        title = f"Normalized electrical far field @ f = {freq:.2e} Hz"
 
     # Create coordinate meshgrid
     theta, phi = np.meshgrid(theta, phi, indexing="xy")
+
+    E_far[E_far < 0] = 0  # Clip negative values to 0
 
     # Calculate cartesian coordinates
     x = E_far * np.sin(theta) * np.cos(phi)
@@ -398,7 +395,7 @@ def plot_ff_3d(
     if ax is None:
         ax = plt.figure().add_subplot(projection="3d")
 
-    ax.plot_surface(x, y, z, cmap="viridis_r")
+    ax.plot_surface(x, y, z, cmap="Spectral_r")
 
     # Configure plot settings
     ax.view_init(elev=20.0, azim=-100)
@@ -410,6 +407,6 @@ def plot_ff_3d(
     ax.set_xlim(-25, 25)
     ax.set_ylim(-25, 25)
 
-    ax.set_title(title)
+    ax.set_title("3D Far Field Pattern")
 
     return ax

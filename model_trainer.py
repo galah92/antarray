@@ -156,22 +156,27 @@ class PhaseShiftPredictionModel(nn.Module):
                 nn.BatchNorm2d(256),
                 nn.ReLU(),
                 nn.MaxPool2d(2),
+                # Fifth convolutional block
+                nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(512),
+                nn.ReLU(),
+                nn.MaxPool2d(2),
             )
 
             # Calculate the size of the feature maps after encoding
-            feature_size = input_height // 16  # After 4 MaxPool2d with stride=2
-            feature_width = input_width // 16
+            feature_size = input_height // 32  # After 5 MaxPool2d with stride=2
+            feature_width = input_width // 32
 
             # Fully connected layers
             self.fc = nn.Sequential(
                 nn.Flatten(),
-                nn.Linear(256 * feature_size * feature_width, 1024),
+                nn.Linear(512 * feature_size * feature_width, 2048),
                 nn.ReLU(),
                 nn.Dropout(0.5),
-                nn.Linear(1024, 512),
+                nn.Linear(2048, 1024),
                 nn.ReLU(),
                 nn.Dropout(0.5),
-                nn.Linear(512, output_size[0] * output_size[1]),
+                nn.Linear(1024, output_size[0] * output_size[1]),
             )
 
     def forward(self, x):
@@ -226,6 +231,7 @@ def train_model(
     num_epochs=25,
     device="cuda",
     log_interval=10,
+    clip_grad=1.0,
 ):
     """
     Train the model.
@@ -250,6 +256,8 @@ def train_model(
         Device to use for training ('cuda' or 'cpu')
     log_interval : int
         How often to log progress
+    clip_grad : float, optional
+        Maximum norm of the gradients for clipping
 
     Returns:
     --------
@@ -298,6 +306,11 @@ def train_model(
                     # Backward + optimize only in training phase
                     if phase == "train":
                         loss.backward()
+                        # Clip gradients
+                        if clip_grad is not None:
+                            torch.nn.utils.clip_grad_norm_(
+                                model.parameters(), clip_grad
+                            )
                         optimizer.step()
 
                 # Statistics
@@ -639,7 +652,8 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
 
     # Define loss function and optimizer
     criterion = CircularLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # Use AdamW optimizer
+    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5, verbose=True
     )
@@ -704,7 +718,7 @@ if __name__ == "__main__":
     main(
         dataset_path=dataset_path,
         output_dir=output_dir,
-        batch_size=32,
-        num_epochs=50,
+        batch_size=64,  # Increase batch size
+        num_epochs=100,
         device=device,
     )
