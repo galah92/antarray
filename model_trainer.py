@@ -583,40 +583,6 @@ def pred(
         plt.savefig(save_path, dpi=600, bbox_inches="tight")
 
 
-def visualize_element_phase_shifts(phase_shifts, save_path=None):
-    """
-    Visualize element phase shifts.
-
-    Parameters:
-    -----------
-    phase_shifts : numpy.ndarray
-        Phase shift matrix with shape (xn, yn)
-    save_path : str or Path, optional
-        Path to save the plot. If None, plot will be shown.
-    """
-    plt.figure(figsize=(8, 6))
-    im = plt.imshow(
-        np.rad2deg(phase_shifts), cmap="viridis", origin="lower", vmin=-180, vmax=180
-    )
-    plt.title("Element Phase Shifts (degrees)")
-    plt.xlabel("Element Y index")
-    plt.ylabel("Element X index")
-    plt.colorbar(im)
-    plt.grid(False)
-    plt.tight_layout()
-
-    if save_path:
-        # Ensure the directory exists
-        save_path = Path(save_path)
-        save_path.parent.mkdir(exist_ok=True, parents=True)
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        print(f"Element phase shifts plot saved to {save_path}")
-    else:
-        plt.show()
-
-    plt.close()
-
-
 def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cuda"):
     """
     Main training function.
