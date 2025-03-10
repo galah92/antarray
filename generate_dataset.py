@@ -362,6 +362,7 @@ def generate(
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     outfile: Path = DEFAULT_OUTFILE,
+    overwrite: bool = False,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
     """
@@ -420,13 +421,13 @@ def generate(
 
     # Generate dataset
     print(f"Generating dataset with {n_samples} samples...")
-    steering_info = []  # Store steering angles for beamforming
 
     # Create output directory if it doesn't exist
     outfile = dataset_dir / outfile
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
-    with h5py.File(outfile, "x") as h5f:
+    mode = "w" if overwrite else "x"
+    with h5py.File(outfile, mode) as h5f:
         h5f.create_dataset("theta", data=theta)
         h5f.create_dataset("phi", data=phi)
 
@@ -443,6 +444,10 @@ def generate(
         patterns = h5f.create_dataset("patterns", shape=(n_samples, n_phi, n_theta))
         # Store individual element phase shifts
         labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
+
+        if phase_method == "beamforming":
+            # Store steering info
+            steering_info = h5f.create_dataset("steering_info", shape=(n_samples, 2))
 
         for i in tqdm(range(n_samples)):
             # Generate phase shifts for each element
@@ -501,6 +506,9 @@ def generate(
                 else:
                     phase_shifts = generate_element_phase_shifts(xn, yn, method)
 
+            if phase_method == "beamforming":
+                steering_info[i] = [theta_steering, phi_steering]
+
             # Calculate array factor for all phi and theta values at once
             AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
 
@@ -513,9 +521,8 @@ def generate(
 
             # Convert to dB (normalized directivity)
             array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
-            total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + 10.0 * np.log10(
-                array_gain
-            )
+            array_gain_db = 10.0 * np.log10(array_gain)
+            total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + array_gain_db
 
             # Store pattern and label
             patterns[i] = total_pattern_db
@@ -581,7 +588,6 @@ def generate_beamforming(
 
     # Generate dataset
     print(f"Generating dataset with {n_samples} samples...")
-    steering_info = []  # Store steering angles for beamforming
 
     # Create output directory if it doesn't exist
     outfile = dataset_dir / outfile
@@ -604,6 +610,8 @@ def generate_beamforming(
         patterns = h5f.create_dataset("patterns", shape=(n_samples, n_phi, n_theta))
         # Store individual element phase shifts
         labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
+        # Store steering info
+        steering_info = h5f.create_dataset("steering_info", shape=(n_samples, 2))
 
         itr = itertools.product(theta_steerings, phi_steerings)
         for i, (theta_steering, phi_steering) in tqdm(enumerate(itr), total=n_samples):
@@ -618,7 +626,7 @@ def generate_beamforming(
                 dx=dx,
                 dy=dy,
             )
-            steering_info.append((theta_steering, phi_steering))
+            steering_info[i] = [theta_steering, phi_steering]
 
             # Calculate array factor for all phi and theta values at once
             AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
@@ -632,16 +640,12 @@ def generate_beamforming(
 
             # Convert to dB (normalized directivity)
             array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
-            total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + 10.0 * np.log10(
-                array_gain
-            )
+            array_gain_db = 10.0 * np.log10(array_gain)
+            total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + array_gain_db
 
             # Store pattern and label
             patterns[i] = total_pattern_db
             labels[i] = phase_shifts  # Store the phase shifts as labels
-
-        # Store steering info if using beamforming:
-        h5f.attrs["steering_info"] = steering_info
 
 
 def load_dataset(dataset_file: Path):
@@ -664,6 +668,7 @@ def load_dataset(dataset_file: Path):
             "labels": h5f["labels"][:],
             "theta": h5f["theta"][:],
             "phi": h5f["phi"][:],
+            "steering_info": h5f.get("steering_info", None),
         }
 
         # Load metadata
