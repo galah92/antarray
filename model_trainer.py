@@ -1,9 +1,11 @@
+import pickle
 import time
 from pathlib import Path
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 
+from sklearn import neighbors
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -809,6 +811,88 @@ def old_main():
         num_epochs=100,
         device=device,
     )
+
+
+@app.command()
+def run_knn(overwrite: bool = False):
+    dataset_path = Path.cwd() / "dataset" / "farfield_dataset.h5"
+    dataset_path = Path.cwd() / "dataset" / "ff_beamforming.h5"
+    output_dir = Path.cwd() / "model_results"
+
+    if output_dir is None:
+        output_dir = Path.cwd() / "model_results"
+    else:
+        output_dir = Path(output_dir)
+
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+    # Create subdirectories for plots
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(exist_ok=True, parents=True)
+
+    # Load dataset
+    print(f"Loading dataset from {dataset_path}")
+    dataset = load_dataset(dataset_path)
+
+    patterns, labels = dataset["patterns"], dataset["labels"]
+
+    # Flatten the features
+    patterns = patterns.reshape(patterns.shape[0], -1)
+    labels = labels.reshape(labels.shape[0], -1)
+
+    patterns[patterns < 0] = 0  # Set negative values to 0
+    patterns = patterns / 20  # Normalize
+
+    # Print dataset info
+    print(f"Dataset loaded: {len(patterns)} samples")
+    print(f"Pattern shape: {patterns.shape}")
+    print(f"Labels shape: {labels.shape}")
+
+    # Split data into train, validation, and test sets
+    X_train_val, X_test, y_train_val, y_test = train_test_split(
+        patterns, labels, test_size=0.2, random_state=42
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train_val, y_train_val, test_size=0.25, random_state=42
+    )
+
+    print(f"Training set: {len(X_train)} samples")
+    print(f"Validation set: {len(X_val)} samples")
+    print(f"Test set: {len(X_test)} samples")
+
+    knn = neighbors.KNeighborsRegressor(n_neighbors=5, weights="distance")
+    y_pred = knn.fit(X_train, y_train).predict(X_test)
+
+    loss = circular_loss(y_pred, y_test)
+    print(f"Val loss: {loss:.4f}")
+
+    mode = "wb" if overwrite else "xb"
+    with (output_dir / "knn_model.pkl").open(mode) as f:
+        pickle.dump(knn, f)
+
+
+def circular_loss(predictions: np.ndarray, targets: np.ndarray):
+    """
+    Compute the circular mean squared error.
+
+    Parameters:
+    -----------
+    predictions : numpy.ndarray
+        Predicted phase shifts in radians
+    targets : numpy.ndarray
+        Target phase shifts in radians
+
+    Returns:
+    --------
+    loss : numpy.ndarray
+        Mean squared error considering the circular nature of phases
+    """
+    # Calculate the difference and wrap to [-pi, pi]
+    diff = predictions - targets
+    diff = np.arctan2(np.sin(diff), np.cos(diff))
+
+    # Calculate MSE on the wrapped differences
+    return np.mean(diff**2)
 
 
 if __name__ == "__main__":
