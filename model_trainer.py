@@ -536,8 +536,9 @@ DEFAULT_DATASET_PATH = DEFAULT_DATA_DIR / "ff_beamforming.h5"
 
 
 @app.command()
-def pred(
-    idx: int = 0,
+def pred_beamforming(
+    theta_steer: int = 0,
+    phi_steer: int = 0,
     dataset_path: Path = DEFAULT_DATASET_PATH,
     model_path: Path = DEFAULT_MODEL_PATH,
     savefig: bool = True,
@@ -546,7 +547,10 @@ def pred(
     patterns, labels = dataset["patterns"], dataset["labels"]
     theta, phi = dataset["theta"], dataset["phi"]
     freq = dataset["frequency"]
-    theta_steer, phi_steer = dataset["steering_info"][idx]
+
+    # Find the index of the given steering angles: https://stackoverflow.com/a/25823710/5151909
+    steer_angles = (theta_steer, phi_steer)
+    idx = (dataset["steering_info"] == steer_angles).all(axis=1).nonzero()[0].min()
 
     pattern = patterns[idx][None, None, ...]  # Add batch and channel dimensions
     pattern[pattern < 0] = 0  # Set negative values to 0
@@ -599,7 +603,8 @@ def pred(
     fig.set_tight_layout(True)
 
     if savefig:
-        save_path = model_path.parent / f"prediction_example_{idx}.png"
+        filename = f"prediction_example_{idx}_t{theta_steer}_p{phi_steer}.png"
+        save_path = model_path.parent / filename
         plt.savefig(save_path, dpi=600, bbox_inches="tight")
 
 
