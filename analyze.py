@@ -368,8 +368,13 @@ def plot_ff_3d(
     freq_index: int = 0,
     logscale: float | None = None,
     normalize: bool = False,
+    title: str | None = None,
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
+    # Ensure E-field data is 3D (freq, phi, theta)
+    if len(E_norm.shape) == 2:
+        E_norm = E_norm[None, ...]
+
     # Extract and normalize E-field data if requested
     if normalize or logscale is not None:
         E_far = E_norm[freq_index] / np.max(E_norm[freq_index])
@@ -407,7 +412,9 @@ def plot_ff_3d(
     ax.set_xlim(-25, 25)
     ax.set_ylim(-25, 25)
 
-    ax.set_title("3D Far Field Pattern")
+    if title is None:
+        title = "3D Far Field Pattern"
+    ax.set_title(title)
 
     return ax
 

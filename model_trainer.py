@@ -544,6 +544,9 @@ def pred(
 ):
     dataset = load_dataset(dataset_path)
     patterns, labels = dataset["patterns"], dataset["labels"]
+    theta, phi = dataset["theta"], dataset["phi"]
+    freq = dataset["frequency"]
+    theta_steer, phi_steer = dataset["steering_info"][idx]
 
     pattern = patterns[idx][None, None, ...]  # Add batch and channel dimensions
     pattern[pattern < 0] = 0  # Set negative values to 0
@@ -568,17 +571,31 @@ def pred(
 
     output = outputs.squeeze()
 
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-    analyze.plot_phase_shifts(label, title="Ground Truth Phase Shifts", ax=axs[0])
-    analyze.plot_phase_shifts(output, title="Predicted Phase Shifts", ax=axs[1])
+    fig, axs = plt.subplots(2, 3, figsize=(18, 10))
+
+    analyze.plot_phase_shifts(label, title="Ground Truth Phase Shifts", ax=axs[0, 0])
+    analyze.plot_phase_shifts(output, title="Predicted Phase Shifts", ax=axs[0, 1])
 
     # TODO: should we use diff or output - label?
     diff = np.arctan2(np.sin(output - label), np.cos(output - label))
-    analyze.plot_phase_shifts(diff, title="Phase Shift Error", ax=axs[2])
-    # plot_phase_shifts(output - label, title="Phase Shift Error", ax=axs[2])
+    analyze.plot_phase_shifts(diff, title="Phase Shift Error", ax=axs[0, 2])
+    # plot_phase_shifts(output - label, title="Phase Shift Error", ax=axs[0, 2])
 
-    _output_ff = generate_dataset.ff_from_phase_shifts(output)
+    label_ff = generate_dataset.ff_from_phase_shifts(output)
+    axs[1, 0].remove()
+    axs[1, 0] = fig.add_subplot(2, 3, 4, projection="3d")
+    title = "Ground Truth Far Field Pattern"
+    analyze.plot_ff_3d(theta, phi, label_ff, freq=freq, title=title, ax=axs[1, 0])
 
+    output_ff = generate_dataset.ff_from_phase_shifts(label)
+    axs[1, 1].remove()
+    axs[1, 1] = fig.add_subplot(2, 3, 5, projection="3d")
+    title = "Predicted Far Field Pattern"
+    analyze.plot_ff_3d(theta, phi, output_ff, freq=freq, title=title, ax=axs[1, 1])
+
+    axs[1, 2].remove()
+
+    fig.suptitle(f"Prediction Example {idx} (θ={theta_steer:.1f}°, φ={phi_steer:.1f}°)")
     fig.set_tight_layout(True)
 
     if savefig:
