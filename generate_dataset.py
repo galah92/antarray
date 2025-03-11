@@ -1,5 +1,6 @@
 import itertools
 from pathlib import Path
+from matplotlib import animation
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -530,6 +531,50 @@ def generate(
 
 
 @app.command()
+def plot_dataset_phase_shifts(
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset_name: Path = "ff_beamforming.h5",
+    outfile: Path = "beamforming_phase_shifts.webp",
+):
+    with h5py.File(dataset_dir / dataset_name, "r") as h5f:
+        labels = h5f["labels"]
+
+        fig, ax = plt.subplots()
+        fig.set_tight_layout(True)
+
+        # Create a colorbar
+        sm = plt.cm.ScalarMappable(cmap="twilight_shifted")
+        cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label("Degrees")
+
+        def animate(i):
+            print(f"Plotting {i}")
+            ax.clear()
+            title = f"Ground Truth Phase Shifts {i:04d}"
+            analyze.plot_phase_shifts(labels[i], title=title, colorbar=False, ax=ax)
+            return (ax,)
+
+        frames = len(labels)
+        frames = 111 * 3
+        ani = animation.FuncAnimation(fig, animate, frames=frames)
+
+        # To save the animation using Pillow as a gif
+        writer = animation.PillowWriter(fps=15, bitrate=1800)
+        ani.save(dataset_dir / outfile, writer=writer)
+
+
+@app.command()
+def explore_dataset_phase_shifts(
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset_name: Path = "ff_beamforming.h5",
+):
+    with h5py.File(dataset_dir / dataset_name, "r") as h5f:
+        labels = h5f["labels"][:]
+        theta, phi = h5f["theta"][:], h5f["phi"][:]
+        print(theta.size, phi.size)
+
+
+@app.command()
 def generate_beamforming(
     theta_steering_start: float = -55,  # Degrees
     theta_steering_end: float = 55,  # Degrees
@@ -646,7 +691,6 @@ def generate_beamforming(
             labels[i] = phase_shifts  # Store the phase shifts as labels
 
 
-@app.command()
 def ff_from_phase_shifts(
     phase_shifts: np.ndarray,
     sim_dir_path: Path = DEFAULT_SIM_DIR,
