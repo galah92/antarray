@@ -646,6 +646,64 @@ def generate_beamforming(
             labels[i] = phase_shifts  # Store the phase shifts as labels
 
 
+@app.command()
+def ff_from_phase_shifts(
+    phase_shifts: np.ndarray,
+    sim_dir_path: Path = DEFAULT_SIM_DIR,
+    single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
+):
+    # Fixed parameters for the 16x16 array
+    xn = yn = 16  # 16x16 array
+    dx = dy = 60  # 60x60 mm spacing
+    freq = 2.45e9  # 2.45 GHz
+
+    # Check for grating lobes with the given parameters
+    grating_info = check_grating_lobes(freq, dx, dy)
+    print("Array spacing check:")
+    print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
+    print(
+        f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
+    )
+    if grating_info["has_grating_lobes"]:
+        print("WARNING: Grating lobes will be visible when steering beyond:")
+        if grating_info["dx_critical_angle"] is not None:
+            print(f"  - {grating_info['dx_critical_angle']:.1f}° in the X direction")
+        if grating_info["dy_critical_angle"] is not None:
+            print(f"  - {grating_info['dy_critical_angle']:.1f}° in the Y direction")
+    else:
+        print("No grating lobes expected (element spacing <= λ/2)")
+
+    # Load the single antenna pattern
+    single_antenna_path = sim_dir_path / single_antenna_filename
+    print(f"Loading single antenna pattern from {single_antenna_path}")
+    single_antenna_nf2ff = read_nf2ff(single_antenna_path)
+
+    # Extract necessary data
+    single_E_norm = single_antenna_nf2ff["E_norm"][0]
+    single_Dmax = single_antenna_nf2ff["Dmax"][0]  # Assuming single frequency
+    theta = single_antenna_nf2ff["theta"]
+    phi = single_antenna_nf2ff["phi"]
+
+    partial_phase = array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy)
+
+    # Calculate array factor for all phi and theta values at once
+    AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
+
+    # Multiply by single element pattern to get total pattern
+    # The shape of AF is (n_phi, n_theta) after the calculation
+    total_pattern = single_E_norm[0] * AF
+
+    # Normalize
+    total_pattern = total_pattern / np.max(np.abs(total_pattern))
+
+    # Convert to dB (normalized directivity)
+    array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
+    array_gain_db = 10.0 * np.log10(array_gain)
+    total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + array_gain_db
+
+    return total_pattern_db
+
+
 def load_dataset(dataset_file: Path):
     """
     Load the generated dataset.

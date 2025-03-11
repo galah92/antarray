@@ -12,6 +12,7 @@ import typer
 
 import analyze
 from generate_dataset import load_dataset
+import generate_dataset
 
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
@@ -575,6 +576,8 @@ def pred(
     diff = np.arctan2(np.sin(output - label), np.cos(output - label))
     analyze.plot_phase_shifts(diff, title="Phase Shift Error", ax=axs[2])
     # plot_phase_shifts(output - label, title="Phase Shift Error", ax=axs[2])
+
+    _output_ff = generate_dataset.ff_from_phase_shifts(output)
 
     fig.set_tight_layout(True)
 
