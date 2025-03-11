@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -606,6 +607,33 @@ def pred_beamforming(
         filename = f"prediction_example_{idx}_t{theta_steer}_p{phi_steer}.png"
         save_path = model_path.parent / filename
         plt.savefig(save_path, dpi=600, bbox_inches="tight")
+
+
+@app.command()
+def pred_beamforming_all(
+    theta_steer: int = 0,
+    phi_steer: int = 0,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    model_path: Path = DEFAULT_MODEL_PATH,
+    savefig: bool = True,
+):
+    # Get indices of test set
+    n_samples = 12321
+    indices = np.arange(n_samples)
+    _, indices_test = train_test_split(indices, test_size=0.2, random_state=42)
+
+    with h5py.File(dataset_path, "r") as h5f:
+        steering_info = h5f["steering_info"]
+
+        for idx in indices_test:
+            theta_steer, phi_steer = steering_info[idx]
+            pred_beamforming(
+                theta_steer=theta_steer,
+                phi_steer=phi_steer,
+                dataset_path=dataset_path,
+                model_path=model_path,
+                savefig=savefig,
+            )
 
 
 def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cuda"):
