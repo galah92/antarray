@@ -384,7 +384,7 @@ def plot_ff_3d(
     # Create coordinate meshgrid
     theta, phi = np.meshgrid(theta, phi, indexing="xy")
 
-    E_far[E_far < 0] = 0  # Clip negative values to 0
+    E_far = E_far.clip(min=0)  # Clip negative values to 0
 
     # Calculate cartesian coordinates
     x = E_far * np.sin(theta) * np.cos(phi)
