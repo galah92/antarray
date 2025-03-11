@@ -569,9 +569,23 @@ def explore_dataset_phase_shifts(
     dataset_name: Path = "ff_beamforming.h5",
 ):
     with h5py.File(dataset_dir / dataset_name, "r") as h5f:
-        labels = h5f["labels"][:]
-        theta, phi = h5f["theta"][:], h5f["phi"][:]
-        print(theta.size, phi.size)
+        phi_steering = np.arange(-55, 55 + 1)
+        n_phi = phi_steering.size
+        n_blocks = 5
+        labels = h5f["labels"]
+        blocks = labels[: n_blocks * n_phi, ...].reshape(n_blocks, n_phi, 16, 16)
+        blocks_diff = np.diff(blocks, axis=0)
+
+        # compare the difference between blocks
+        for i in range(blocks_diff.shape[0] - 1):
+            print(np.sum((blocks_diff[i] - blocks_diff[i + 1])))
+
+        print(np.sum(np.diff(blocks_diff, axis=0), axis=(1, 2, 3)))
+
+        print(blocks_diff[0][:3, :3, :3])
+        print(blocks_diff[1][:3, :3, :3])
+
+        # we proved that the difference between blocks is constant
 
 
 @app.command()
