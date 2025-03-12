@@ -534,10 +534,11 @@ def generate(
 def plot_dataset_phase_shifts(
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     dataset_name: Path = "ff_beamforming.h5",
-    outfile: Path = "beamforming_phase_shifts.webp",
+    outfile: Path = "beamforming_phase_shifts_theta.gif",
 ):
     with h5py.File(dataset_dir / dataset_name, "r") as h5f:
         labels = h5f["labels"]
+        steering_info = h5f["steering_info"]
 
         fig, ax = plt.subplots()
         fig.set_tight_layout(True)
@@ -550,16 +551,18 @@ def plot_dataset_phase_shifts(
         def animate(i):
             print(f"Plotting {i}")
             ax.clear()
-            title = f"Ground Truth Phase Shifts {i:04d}"
-            analyze.plot_phase_shifts(labels[i], title=title, colorbar=False, ax=ax)
+            j = i * 111
+            theta_s, phi_s = steering_info[j]
+            title = f"Phase Shifts (θ={theta_s:03.1f}°, φ={phi_s:03.1f}°) {i:04d}"
+            analyze.plot_phase_shifts(labels[j], title=title, colorbar=False, ax=ax)
             return (ax,)
 
         frames = len(labels)
-        frames = 111 * 3
+        frames = 111 * 2
         ani = animation.FuncAnimation(fig, animate, frames=frames)
 
         # To save the animation using Pillow as a gif
-        writer = animation.PillowWriter(fps=15, bitrate=1800)
+        writer = animation.PillowWriter(fps=20, bitrate=1800)
         ani.save(dataset_dir / outfile, writer=writer)
 
 
@@ -571,21 +574,26 @@ def explore_dataset_phase_shifts(
     with h5py.File(dataset_dir / dataset_name, "r") as h5f:
         phi_steering = np.arange(-55, 55 + 1)
         n_phi = phi_steering.size
-        n_blocks = 5
+        n_blocks = 111
         labels = h5f["labels"]
         blocks = labels[: n_blocks * n_phi, ...].reshape(n_blocks, n_phi, 16, 16)
-        blocks_diff = np.diff(blocks, axis=0)
 
-        # compare the difference between blocks
-        for i in range(blocks_diff.shape[0] - 1):
-            print(np.sum((blocks_diff[i] - blocks_diff[i + 1])))
+        def foo(blocks):
+            blocks_diff = np.diff(blocks, axis=0)
 
-        print(np.sum(np.diff(blocks_diff, axis=0), axis=(1, 2, 3)))
+            blocks_diffdiff = np.sum(np.diff(blocks_diff, axis=0), axis=(1, 2, 3))
+            print(blocks_diffdiff)
+            print(blocks_diffdiff.max())
+            print(blocks_diff[0, :2, :2, :2])
+            print("------------------------")
+            print(blocks_diff[1, :2, :2, :2])
+            print("------------------------")
+            print(blocks_diff[2, :2, :2, :2])
 
-        print(blocks_diff[0][:3, :3, :3])
-        print(blocks_diff[1][:3, :3, :3])
-
-        # we proved that the difference between blocks is constant
+        phi_blocks = blocks
+        foo(phi_blocks)
+        theta_blocks = blocks.transpose(1, 0, 2, 3)
+        foo(theta_blocks)
 
 
 @app.command()
