@@ -18,3 +18,9 @@ dependencies = [
     "tqdm>=4.67.1",
     "typer>=0.15.2",
 ]
+
+[tool.ruff.lint]
+select = [
+    # isort
+    "I",
+]

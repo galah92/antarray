@@ -1,22 +1,21 @@
 import pickle
 import time
 from pathlib import Path
-import h5py
-import numpy as np
-import matplotlib.pyplot as plt
 
-from sklearn import neighbors
+import h5py
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import train_test_split
 import typer
+from sklearn import neighbors
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Dataset
 
 import analyze
-from generate_dataset import load_dataset
 import generate_dataset
-
+from generate_dataset import load_dataset
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 

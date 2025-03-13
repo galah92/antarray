@@ -1,8 +1,8 @@
 from pathlib import Path
 
-import numpy as np
-import matplotlib.pyplot as plt
 import h5py
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 def read_nf2ff(nf2ff_path: Path):

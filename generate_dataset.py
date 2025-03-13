@@ -1,15 +1,15 @@
 import itertools
 from pathlib import Path
-from matplotlib import animation
-import numpy as np
-import matplotlib.pyplot as plt
-from tqdm import tqdm
+
 import h5py
+import matplotlib.pyplot as plt
+import numpy as np
 import typer
+from matplotlib import animation
+from tqdm import tqdm
 
-from analyze import read_nf2ff, plot_ff_3d
 import analyze
-
+from analyze import plot_ff_3d, read_nf2ff
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
