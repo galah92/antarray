@@ -62,130 +62,61 @@ class RadiationPatternDataset(Dataset):
         return pattern, phase_shift
 
 
-class PhaseShiftPredictionModel(nn.Module):
-    """
-    CNN model to predict phase shifts from radiation patterns.
-    Designed to handle smaller input dimensions (e.g., input_height=2)
-    """
-
+class PhaseShiftModel(nn.Module):
     def __init__(
-        self, input_channels=1, input_height=2, input_width=360, output_size=(16, 16)
+        self,
+        input_channels=1,  # Number of input channels (1 for single radiation pattern)
+        input_height=180,  # Number of phi values
+        input_width=180,  # Number of theta values
+        output_size=(16, 16),  # Size of the output phase shift matrix (xn, yn)
     ):
-        """
-        Initialize the model with architecture appropriate for small input dimensions.
-
-        Parameters:
-        -----------
-        input_channels : int
-            Number of input channels (1 for single radiation pattern)
-        input_height : int
-            Height of the input (number of phi values)
-        input_width : int
-            Width of the input (number of theta values)
-        output_size : tuple
-            Size of the output phase shift matrix (xn, yn)
-        """
-        super(PhaseShiftPredictionModel, self).__init__()
+        super().__init__()
 
         self.output_size = output_size
 
-        # For very small height (e.g., 2), we don't use pooling in that dimension
-        # Instead we'll use a different architecture optimized for this shape
-        if input_height <= 4:
-            # Special case for extremely small height (e.g., 2)
-            self.encoder = nn.Sequential(
-                # First layer processes each phi slice
-                nn.Conv2d(
-                    input_channels, 64, kernel_size=(1, 5), stride=1, padding=(0, 2)
-                ),
-                nn.BatchNorm2d(64),
-                nn.ReLU(),
-                # Second layer continues processing with no height reduction
-                nn.Conv2d(64, 128, kernel_size=(1, 5), stride=1, padding=(0, 2)),
-                nn.BatchNorm2d(128),
-                nn.ReLU(),
-                nn.MaxPool2d(
-                    kernel_size=(1, 2), stride=(1, 2)
-                ),  # Only pool along width
-                # Third layer
-                nn.Conv2d(128, 256, kernel_size=(1, 3), stride=1, padding=(0, 1)),
-                nn.BatchNorm2d(256),
-                nn.ReLU(),
-                nn.MaxPool2d(
-                    kernel_size=(1, 2), stride=(1, 2)
-                ),  # Only pool along width
-                # Fourth layer to extract higher-level features
-                nn.Conv2d(
-                    256, 512, kernel_size=(input_height, 3), stride=1, padding=(0, 1)
-                ),
-                nn.BatchNorm2d(512),
-                nn.ReLU(),
-                nn.MaxPool2d(
-                    kernel_size=(1, 2), stride=(1, 2)
-                ),  # Only pool along width
-            )
+        self.encoder = nn.Sequential(
+            # First convolutional block
+            nn.Conv2d(input_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            # Second convolutional block
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            # Third convolutional block
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            # Fourth convolutional block
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            # Fifth convolutional block
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+        )
 
-            # Calculate output size after convolutions
-            width_after_conv = input_width // 8  # After 3 width pooling operations
+        # Calculate the size of the feature maps after encoding
+        feature_size = input_height // 32  # After 5 MaxPool2d with stride=2
+        feature_width = input_width // 32
 
-            # Fully connected layers
-            self.fc = nn.Sequential(
-                nn.Flatten(),
-                nn.Linear(
-                    512 * 1 * width_after_conv, 1024
-                ),  # Height is now 1 due to kernel_size=(input_height, 3)
-                nn.ReLU(),
-                nn.Dropout(0.5),
-                nn.Linear(1024, 512),
-                nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(512, output_size[0] * output_size[1]),
-            )
-        else:
-            # Standard architecture for larger inputs
-            self.encoder = nn.Sequential(
-                # First convolutional block
-                nn.Conv2d(input_channels, 32, kernel_size=3, stride=1, padding=1),
-                nn.BatchNorm2d(32),
-                nn.ReLU(),
-                nn.MaxPool2d(2),
-                # Second convolutional block
-                nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-                nn.BatchNorm2d(64),
-                nn.ReLU(),
-                nn.MaxPool2d(2),
-                # Third convolutional block
-                nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-                nn.BatchNorm2d(128),
-                nn.ReLU(),
-                nn.MaxPool2d(2),
-                # Fourth convolutional block
-                nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
-                nn.BatchNorm2d(256),
-                nn.ReLU(),
-                nn.MaxPool2d(2),
-                # Fifth convolutional block
-                nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
-                nn.BatchNorm2d(512),
-                nn.ReLU(),
-                nn.MaxPool2d(2),
-            )
-
-            # Calculate the size of the feature maps after encoding
-            feature_size = input_height // 32  # After 5 MaxPool2d with stride=2
-            feature_width = input_width // 32
-
-            # Fully connected layers
-            self.fc = nn.Sequential(
-                nn.Flatten(),
-                nn.Linear(512 * feature_size * feature_width, 2048),
-                nn.ReLU(),
-                nn.Dropout(0.5),
-                nn.Linear(2048, 1024),
-                nn.ReLU(),
-                nn.Dropout(0.5),
-                nn.Linear(1024, output_size[0] * output_size[1]),
-            )
+        # Fully connected layers
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(512 * feature_size * feature_width, 2048),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(2048, 1024),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(1024, output_size[0] * output_size[1]),
+        )
 
     def forward(self, x):
         """Forward pass through the network."""
@@ -283,7 +214,7 @@ def train_model(
     best_model_wts = None
 
     for epoch in range(num_epochs):
-        print(f"Epoch {epoch + 1}/{num_epochs}")
+        print(f"Epoch {epoch + 1}/{num_epochs} lr={scheduler.get_last_lr()[0]}")
         print("-" * 10)
 
         # Each epoch has a training and validation phase
@@ -563,12 +494,7 @@ def pred_beamforming(
     output_size = (labels.shape[1], labels.shape[2])  # Typically (16, 16) for our array
 
     checkpoint = torch.load(model_path)
-    model = PhaseShiftPredictionModel(
-        input_channels=1,
-        input_height=input_height,
-        input_width=input_width,
-        output_size=output_size,
-    )
+    model = PhaseShiftModel()
     model.load_state_dict(checkpoint["model_state_dict"])
 
     model.eval()
@@ -637,102 +563,48 @@ def pred_beamforming_all(
             )
 
 
-def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cuda"):
-    """
-    Main training function.
+DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "ff_beamforming.h5"
+DEFAULT_OUTPUT_DIR: Path = Path.cwd() / "model_results"
 
-    Parameters:
-    -----------
-    dataset_path : str or Path
-        Path to the dataset H5 file
-    output_dir : str or Path, optional
-        Directory to save results
-    batch_size : int
-        Batch size for training
-    num_epochs : int
-        Number of training epochs
-    device : str
-        Device to use for training ('cuda' or 'cpu')
-    """
-    if output_dir is None:
-        output_dir = Path.cwd() / "model_results"
-    else:
-        output_dir = Path(output_dir)
 
+@app.command()
+def run_cnn(
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    batch_size: int = 128,
+    num_epochs: int = 100,
+):
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Create subdirectories for plots
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(exist_ok=True, parents=True)
 
-    # Set device
-    device = torch.device(
-        device if torch.cuda.is_available() and device == "cuda" else "cpu"
-    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
     # Load dataset
     print(f"Loading dataset from {dataset_path}")
     dataset = load_dataset(dataset_path)
 
-    patterns = dataset["patterns"]
-    labels = dataset["labels"]
+    patterns, labels = dataset["patterns"], dataset["labels"]
 
     patterns[patterns < 0] = 0  # Set negative values to 0
     patterns = patterns / 20  # Normalize
 
-    # Print dataset info
-    print(f"Dataset loaded: {len(patterns)} samples")
-    print(f"Pattern shape: {patterns.shape}")
-    print(f"Labels shape: {labels.shape}")
-
     # Split data into train, validation, and test sets
-    X_train_val, X_test, y_train_val, y_test = train_test_split(
-        patterns, labels, test_size=0.2, random_state=42
-    )
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train_val, y_train_val, test_size=0.25, random_state=42
-    )
-
-    print(f"Training set: {len(X_train)} samples")
-    print(f"Validation set: {len(X_val)} samples")
-    print(f"Test set: {len(X_test)} samples")
-
-    # Create datasets
-    train_dataset = RadiationPatternDataset(X_train, y_train)
-    val_dataset = RadiationPatternDataset(X_val, y_val)
-    test_dataset = RadiationPatternDataset(X_test, y_test)
+    ds = RadiationPatternDataset(patterns, labels)
+    gen = torch.Generator().manual_seed(42)
+    ds_splits = torch.utils.data.random_split(ds, [0.8, 0.1, 0.1], generator=gen)
+    train_ds, val_ds, test_ds = ds_splits
 
     # Create dataloaders
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, num_workers=4
-    )
-    val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, num_workers=4
-    )
-    test_loader = DataLoader(
-        test_dataset, batch_size=batch_size, shuffle=False, num_workers=4
-    )
+    train_loader = DataLoader(train_ds, batch_size, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_ds, batch_size, shuffle=False, num_workers=4)
+    test_loader = DataLoader(test_ds, batch_size, shuffle=False, num_workers=4)
 
-    # Initialize model
-    input_height, input_width = patterns.shape[1], patterns.shape[2]
-    output_size = (labels.shape[1], labels.shape[2])  # Typically (16, 16) for our array
+    model = PhaseShiftModel()
 
-    # Print input shape info for debugging
-    print(
-        f"Model input dimensions: channels=1, height={input_height}, width={input_width}"
-    )
-
-    # Initialize model with appropriate architecture
-    model = PhaseShiftPredictionModel(
-        input_channels=1,
-        input_height=input_height,
-        input_width=input_width,
-        output_size=output_size,
-    )
-
-    # Print model summary
-    print(model)
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total model parameters: {total_params:,}")
 
@@ -741,7 +613,7 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
     # Use AdamW optimizer
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.01)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=5, verbose=True
+        optimizer, mode="min", factor=0.5, patience=5
     )
 
     # Train model
@@ -794,35 +666,11 @@ def main(dataset_path, output_dir=None, batch_size=32, num_epochs=50, device="cu
 
 
 @app.command()
-def old_main():
-    # Example usage
-    dataset_path = Path.cwd() / "dataset" / "farfield_dataset.h5"
-    dataset_path = Path.cwd() / "dataset" / "ff_beamforming.h5"
-    output_dir = Path.cwd() / "model_results"
-
-    # Check if CUDA is available
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    main(
-        dataset_path=dataset_path,
-        output_dir=output_dir,
-        batch_size=128,
-        num_epochs=100,
-        device=device,
-    )
-
-
-@app.command()
-def run_knn(overwrite: bool = False):
-    dataset_path = Path.cwd() / "dataset" / "ff_beamforming.h5"
-    dataset_path = Path.cwd() / "dataset" / "ff_random.h5"
-    output_dir = Path.cwd() / "model_results"
-
-    if output_dir is None:
-        output_dir = Path.cwd() / "model_results"
-    else:
-        output_dir = Path(output_dir)
-
+def run_knn(
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    overwrite: bool = False,
+):
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Create subdirectories for plots
