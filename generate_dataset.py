@@ -534,7 +534,7 @@ def generate(
 def plot_dataset_phase_shifts(
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     dataset_name: Path = "ff_beamforming.h5",
-    outfile: Path = "beamforming_phase_shifts_theta.gif",
+    outfile: Path = "beamforming_phase_shifts.gif",
 ):
     with h5py.File(dataset_dir / dataset_name, "r") as h5f:
         labels = h5f["labels"]
@@ -543,6 +543,10 @@ def plot_dataset_phase_shifts(
         fig, ax = plt.subplots()
         fig.set_tight_layout(True)
 
+        ax.set_xlabel("Element X index")
+        ax.set_ylabel("Element Y index")
+        title = ax.set_title("Phase Shifts")
+
         # Create a colorbar
         sm = plt.cm.ScalarMappable(cmap="twilight_shifted")
         cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
@@ -550,18 +554,32 @@ def plot_dataset_phase_shifts(
         cbar.set_ticks(np.linspace(0, 1, 7))
         cbar.set_ticklabels(np.linspace(-180, 180, 7, dtype=np.int32))
 
+        im = ax.imshow(
+            np.zeros_like(labels[0]),
+            cmap="twilight_shifted",  # Cyclic colormap for phase values
+            origin="lower",
+            vmin=-180,
+            vmax=180,
+        )
+
         def animate(i):
             print(f"Plotting {i}")
-            ax.clear()
             j = i * 111
+
+            # Update the data for the plot
+            phase_shifts_clipped = (labels[j] + np.pi) % (2 * np.pi) - np.pi
+            im.set_data(np.rad2deg(phase_shifts_clipped))
+
+            # Update the title with steering info
             theta_s, phi_s = steering_info[j]
-            title = f"Phase Shifts (θ={theta_s:03.1f}°, φ={phi_s:03.1f}°) {i:04d}"
-            analyze.plot_phase_shifts(labels[j], title=title, colorbar=False, ax=ax)
-            return (ax,)
+            text = f"Phase Shifts (θ={theta_s:03.1f}°, φ={phi_s:03.1f}°) {i:04d}"
+            title.set_text(text)
+
+            return im, title
 
         frames = len(labels)
         frames = 111 * 2
-        ani = animation.FuncAnimation(fig, animate, frames=frames)
+        ani = animation.FuncAnimation(fig, animate, frames=frames, blit=True)
 
         # To save the animation using Pillow as a gif
         writer = animation.PillowWriter(fps=20, bitrate=1800)
