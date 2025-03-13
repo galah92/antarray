@@ -815,8 +815,8 @@ def old_main():
 
 @app.command()
 def run_knn(overwrite: bool = False):
-    dataset_path = Path.cwd() / "dataset" / "farfield_dataset.h5"
     dataset_path = Path.cwd() / "dataset" / "ff_beamforming.h5"
+    dataset_path = Path.cwd() / "dataset" / "ff_random.h5"
     output_dir = Path.cwd() / "model_results"
 
     if output_dir is None:
@@ -863,15 +863,50 @@ def run_knn(overwrite: bool = False):
     knn = neighbors.KNeighborsRegressor(n_neighbors=5, weights="distance")
     y_pred = knn.fit(X_train, y_train).predict(X_test)
 
+    # loss = circular_loss(y_pred, y_test, axis=(0, 1))
     loss = circular_loss(y_pred, y_test)
     print(f"Val loss: {loss:.4f}")
+
+    idx_test = (idx_test).nonzero()[0]
+
+    # save y_pred to h5 file
+    with h5py.File(output_dir / "knn_pred.h5", "w") as h5f:
+        h5f.create_dataset("y_pred", data=y_pred)
+        h5f.create_dataset("y_test", data=y_test)
+        h5f.create_dataset("loss", data=loss)
+        h5f.create_dataset("idx_test", data=idx_test)
 
     mode = "wb" if overwrite else "xb"
     with (output_dir / "knn_model.pkl").open(mode) as f:
         pickle.dump(knn, f)
 
 
-def circular_loss(predictions: np.ndarray, targets: np.ndarray):
+@app.command()
+def analyze_knn_pred():
+    output_dir = Path.cwd() / "model_results"
+    with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
+        y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
+        y_test = h5f["y_test"][:].reshape(-1, 16, 16)
+        idx_test = h5f["idx_test"][:]
+
+    for idx in range(len(y_pred)):
+        # idx = np.random.choice(len(y_pred), 1)[0]
+        print(idx_test[idx], y_pred.shape, y_test.shape)
+
+        fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+
+        title = "Ground Truth Phase Shifts"
+        analyze.plot_phase_shifts(y_test[idx], title=title, ax=axs[0])
+        title = "Predicted Phase Shifts"
+        analyze.plot_phase_shifts(y_pred[idx], title=title, ax=axs[1])
+
+        fig.suptitle(f"Prediction Example {idx_test[idx]}")
+        fig.set_tight_layout(True)
+        filename = f"knn_pred_example_{idx_test[idx]}.png"
+        fig.savefig(output_dir / filename, dpi=600, bbox_inches="tight")
+
+
+def circular_loss(predictions: np.ndarray, targets: np.ndarray, axis=None):
     """
     Compute the circular mean squared error.
 
@@ -892,7 +927,7 @@ def circular_loss(predictions: np.ndarray, targets: np.ndarray):
     diff = np.arctan2(np.sin(diff), np.cos(diff))
 
     # Calculate MSE on the wrapped differences
-    return np.mean(diff**2)
+    return np.mean(diff**2, axis=axis)
 
 
 if __name__ == "__main__":
