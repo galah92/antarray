@@ -547,6 +547,8 @@ def plot_dataset_phase_shifts(
         sm = plt.cm.ScalarMappable(cmap="twilight_shifted")
         cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label("Degrees")
+        cbar.set_ticks(np.linspace(0, 1, 7))
+        cbar.set_ticklabels(np.linspace(-180, 180, 7, dtype=np.int32))
 
         def animate(i):
             print(f"Plotting {i}")
