@@ -618,10 +618,11 @@ def explore_dataset_phase_shifts(
 
 @app.command()
 def generate_beamforming(
-    theta_steering_start: float = -55,  # Degrees
-    theta_steering_end: float = 55,  # Degrees
-    phi_steering_start: float = -55,  # Degrees
-    phi_steering_end: float = 55,  # Degrees
+    n_samples: int = 1_000,
+    theta_steering_start: float = -65,  # Degrees
+    theta_steering_end: float = 65,  # Degrees
+    phi_steering_start: float = -65,  # Degrees
+    phi_steering_end: float = 65,  # Degrees
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     outfile: Path = DEFAULT_OUTFILE,
@@ -666,10 +667,6 @@ def generate_beamforming(
 
     partial_phase = array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy)
 
-    theta_steerings = np.arange(theta_steering_start, theta_steering_end + 1)
-    phi_steerings = np.arange(phi_steering_start, phi_steering_end + 1)
-    n_samples = theta_steerings.size * phi_steerings.size
-
     # Generate dataset
     print(f"Generating dataset with {n_samples} samples...")
 
@@ -698,8 +695,11 @@ def generate_beamforming(
         # Store steering info
         steering_info = h5f.create_dataset("steering_info", shape=(n_samples, 2))
 
-        itr = itertools.product(theta_steerings, phi_steerings)
-        for i, (theta_steering, phi_steering) in tqdm(enumerate(itr), total=n_samples):
+        for i in tqdm(range(n_samples)):
+            # Generate random steering angles within the specified range
+            theta_steering = np.random.uniform(theta_steering_start, theta_steering_end)
+            phi_steering = np.random.uniform(phi_steering_start, phi_steering_end)
+
             # Generate phase shifts for each element
             phase_shifts = generate_element_phase_shifts(
                 xn,

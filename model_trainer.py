@@ -11,7 +11,7 @@ import torch.optim as optim
 import typer
 from sklearn import neighbors
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, random_split
 
 import analyze
 import generate_dataset
@@ -595,8 +595,7 @@ def run_cnn(
     # Split data into train, validation, and test sets
     ds = RadiationPatternDataset(patterns, labels)
     gen = torch.Generator().manual_seed(42)
-    ds_splits = torch.utils.data.random_split(ds, [0.8, 0.1, 0.1], generator=gen)
-    train_ds, val_ds, test_ds = ds_splits
+    train_ds, val_ds, test_ds = random_split(ds, [0.8, 0.1, 0.1], generator=gen)
 
     # Create dataloaders
     train_loader = DataLoader(train_ds, batch_size, shuffle=True, num_workers=4)
