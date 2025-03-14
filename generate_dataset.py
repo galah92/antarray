@@ -733,6 +733,27 @@ def generate_beamforming(
             labels[i] = phase_shifts  # Store the phase shifts as labels
 
 
+@app.command()
+def plot_beamforming_angles(
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset_name: Path = "ff_beamforming.h5",
+    outfile: Path | None = None,
+):
+    with h5py.File(dataset_dir / dataset_name, "r") as h5f:
+        theta, phi = h5f["steering_info"][:].T
+
+    fig, ax = plt.subplots()
+
+    ax.scatter(theta, phi, s=0.3)
+    ax.set_xlabel("Theta (degrees)")
+    ax.set_ylabel("Phi (degrees)")
+    ax.set_title(f"Beamforming Angles ({dataset_name})")
+    ax.set_aspect("equal", adjustable="box")
+
+    filename = outfile or dataset_name.with_suffix("")
+    fig.savefig(dataset_dir / filename, dpi=600)
+
+
 def ff_from_phase_shifts(
     phase_shifts: np.ndarray,
     sim_dir_path: Path = DEFAULT_SIM_DIR,

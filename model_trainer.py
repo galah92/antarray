@@ -127,7 +127,10 @@ class PhaseShiftModel(nn.Module):
         return x
 
 
-def cosine_angular_loss(inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+def cosine_angular_loss_torch(
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+) -> torch.Tensor:
     # Convert angles to unit vectors
     inputs_x, inputs_y = torch.cos(inputs), torch.sin(inputs)
     targets_x, targets_y = torch.cos(targets), torch.sin(targets)
@@ -587,7 +590,7 @@ def run_cnn(
     print(f"Total model parameters: {total_params:,}")
 
     # Define loss function and optimizer
-    criterion = cosine_angular_loss
+    criterion = cosine_angular_loss_torch
     # Use AdamW optimizer
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.01)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -688,18 +691,14 @@ def run_knn(
     knn = neighbors.KNeighborsRegressor(n_neighbors=5, weights="distance")
     y_pred = knn.fit(X_train, y_train).predict(X_test)
 
-    # loss = circular_loss(y_pred, y_test, axis=(0, 1))
-    loss = circular_loss(y_pred, y_test)
+    loss = cosine_angular_loss_np(y_pred, y_test)
     print(f"Val loss: {loss:.4f}")
-
-    idx_test = (idx_test).nonzero()[0]
 
     # save y_pred to h5 file
     with h5py.File(output_dir / "knn_pred.h5", "w") as h5f:
         h5f.create_dataset("y_pred", data=y_pred)
         h5f.create_dataset("y_test", data=y_test)
         h5f.create_dataset("loss", data=loss)
-        h5f.create_dataset("idx_test", data=idx_test)
 
     mode = "wb" if overwrite else "xb"
     with (output_dir / "knn_model.pkl").open(mode) as f:
@@ -731,28 +730,16 @@ def analyze_knn_pred():
         fig.savefig(output_dir / filename, dpi=600, bbox_inches="tight")
 
 
-def circular_loss(predictions: np.ndarray, targets: np.ndarray, axis=None):
-    """
-    Compute the circular mean squared error.
+def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray, axis=None):
+    # Convert angles to unit vectors
+    inputs_x, inputs_y = np.cos(inputs), np.sin(inputs)
+    targets_x, targets_y = np.cos(targets), np.sin(targets)
 
-    Parameters:
-    -----------
-    predictions : numpy.ndarray
-        Predicted phase shifts in radians
-    targets : numpy.ndarray
-        Target phase shifts in radians
+    # Cosine similarity between the vectors
+    cos_sim = inputs_x * targets_x + inputs_y * targets_y
 
-    Returns:
-    --------
-    loss : numpy.ndarray
-        Mean squared error considering the circular nature of phases
-    """
-    # Calculate the difference and wrap to [-pi, pi]
-    diff = predictions - targets
-    diff = np.arctan2(np.sin(diff), np.cos(diff))
-
-    # Calculate MSE on the wrapped differences
-    return np.mean(diff**2, axis=axis)
+    # Convert to distance (1 - similarity)
+    return np.mean(1 - cos_sim)
 
 
 if __name__ == "__main__":
