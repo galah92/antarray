@@ -651,6 +651,7 @@ def run_knn(
     dataset_path: Path = DEFAULT_DATASET_PATH,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     overwrite: bool = False,
+    n_neighbors: int = 5,
 ):
     output_dir.mkdir(exist_ok=True, parents=True)
 
@@ -688,7 +689,7 @@ def run_knn(
     print(f"Validation set: {len(X_val)} samples")
     print(f"Test set: {len(X_test)} samples")
 
-    knn = neighbors.KNeighborsRegressor(n_neighbors=5, weights="distance")
+    knn = neighbors.KNeighborsRegressor(n_neighbors=n_neighbors, weights="distance")
     y_pred = knn.fit(X_train, y_train).predict(X_test)
 
     loss = cosine_angular_loss_np(y_pred, y_test)
@@ -711,23 +712,23 @@ def analyze_knn_pred():
     with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
         y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
         y_test = h5f["y_test"][:].reshape(-1, 16, 16)
-        idx_test = h5f["idx_test"][:]
 
-    for idx in range(len(y_pred)):
-        # idx = np.random.choice(len(y_pred), 1)[0]
-        print(idx_test[idx], y_pred.shape, y_test.shape)
+    idx = np.random.choice(len(y_pred), 1)[0]
 
-        fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
 
-        title = "Ground Truth Phase Shifts"
-        analyze.plot_phase_shifts(y_test[idx], title=title, ax=axs[0])
-        title = "Predicted Phase Shifts"
-        analyze.plot_phase_shifts(y_pred[idx], title=title, ax=axs[1])
+    title = "Ground Truth Phase Shifts"
+    analyze.plot_phase_shifts(y_test[idx], title=title, ax=axs[0])
+    title = "Predicted Phase Shifts"
+    analyze.plot_phase_shifts(y_pred[idx], title=title, ax=axs[1])
 
-        fig.suptitle(f"Prediction Example {idx_test[idx]}")
-        fig.set_tight_layout(True)
-        filename = f"knn_pred_example_{idx_test[idx]}.png"
-        fig.savefig(output_dir / filename, dpi=600, bbox_inches="tight")
+    loss = cosine_angular_loss_np(y_pred, y_test)
+    fig.suptitle(f"Prediction Example {idx}: {loss:.4f}")
+    fig.set_tight_layout(True)
+    filename = f"knn_pred_example_{idx}.png"
+    fig.savefig(output_dir / filename, dpi=600, bbox_inches="tight")
+
+    print(f"Prediction example saved to {output_dir / filename}")
 
 
 def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray, axis=None):
