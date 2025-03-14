@@ -127,37 +127,16 @@ class PhaseShiftModel(nn.Module):
         return x
 
 
-class CircularLoss(nn.Module):
-    """
-    Custom loss function for circular/phase values.
-    Handles the cyclic nature of phase angles.
-    """
+def cosine_angular_loss(inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    # Convert angles to unit vectors
+    inputs_x, inputs_y = torch.cos(inputs), torch.sin(inputs)
+    targets_x, targets_y = torch.cos(targets), torch.sin(targets)
 
-    def __init__(self):
-        super(CircularLoss, self).__init__()
+    # Cosine similarity between the vectors
+    cos_sim = inputs_x * targets_x + inputs_y * targets_y
 
-    def forward(self, predictions, targets):
-        """
-        Compute the circular mean squared error.
-
-        Parameters:
-        -----------
-        predictions : torch.Tensor
-            Predicted phase shifts in radians
-        targets : torch.Tensor
-            Target phase shifts in radians
-
-        Returns:
-        --------
-        loss : torch.Tensor
-            Mean squared error considering the circular nature of phases
-        """
-        # Calculate the difference and wrap to [-pi, pi]
-        diff = predictions - targets
-        diff = torch.atan2(torch.sin(diff), torch.cos(diff))
-
-        # Calculate MSE on the wrapped differences
-        return torch.mean(diff**2)
+    # Convert to distance (1 - similarity)
+    return torch.mean(1 - cos_sim)
 
 
 def train_model(
@@ -608,7 +587,7 @@ def run_cnn(
     print(f"Total model parameters: {total_params:,}")
 
     # Define loss function and optimizer
-    criterion = CircularLoss()
+    criterion = cosine_angular_loss
     # Use AdamW optimizer
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.01)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
