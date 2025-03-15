@@ -101,10 +101,6 @@ def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
         dx_m = dx / 1000  # Convert from mm to meters
         dy_m = dy / 1000  # Convert from mm to meters
 
-        # Convert angles to radians
-        theta_rad = np.deg2rad(theta_steering)
-        phi_rad = np.deg2rad(phi_steering)
-
         # Wave number
         k = 2 * np.pi / wavelength
 
@@ -112,20 +108,35 @@ def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
         x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
         y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
 
-        # Calculate phase shifts for beamforming
-        sin_theta = np.sin(theta_rad)
-        cos_phi = np.cos(phi_rad)
-        sin_phi = np.sin(phi_rad)
-
         # Create 2D arrays of positions
         x_grid, y_grid = np.meshgrid(x_positions, y_positions, indexing="ij")
 
-        # Phase shifts to steer the beam
-        # IMPORTANT: Using positive sign for beamforming - we want to advance the phase
-        # to compensate for path differences so the waves arrive in phase in the steering direction
-        phase_shifts = k * sin_theta * (x_grid * cos_phi + y_grid * sin_phi)
+        # Set amplitude
+        amplitude = 1.0
 
-        return phase_shifts
+        # Remove NaN values from steering angles
+        theta_steering = theta_steering[~np.isnan(theta_steering)]
+        phi_steering = phi_steering[~np.isnan(phi_steering)]
+
+        # Convert angles to radians
+        thetas = np.deg2rad(theta_steering)
+        phis = np.deg2rad(phi_steering)
+
+        combined_excitation = np.zeros((xn, yn), dtype=complex)
+
+        for theta, phi in zip(thetas, phis):
+            # Calculate phase shifts for this beam
+            phase_shift = (
+                k * np.sin(theta) * (x_grid * np.cos(phi) + y_grid * np.sin(phi))
+            )
+
+            # Add this beam's excitation to the combined excitation
+            combined_excitation += amplitude * np.exp(1j * phase_shift)
+
+        # Extract phase from combined excitation
+        combined_phase = np.angle(combined_excitation)
+
+        return combined_phase
 
     else:
         raise ValueError(f"Unknown method: {method}")
@@ -619,10 +630,11 @@ def explore_dataset_phase_shifts(
 @app.command()
 def generate_beamforming(
     n_samples: int = 1_000,
-    theta_steering_start: float = -65,  # Degrees
-    theta_steering_end: float = 65,  # Degrees
-    phi_steering_start: float = -65,  # Degrees
-    phi_steering_end: float = 65,  # Degrees
+    theta_start: float = -65,  # Degrees
+    theta_end: float = 65,  # Degrees
+    phi_start: float = -65,  # Degrees
+    phi_end: float = 65,  # Degrees
+    max_n_beams: int = 1,
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     outfile: Path = DEFAULT_OUTFILE,
@@ -683,9 +695,6 @@ def generate_beamforming(
         h5f.attrs["array_size"] = f"{xn}x{yn}"
         h5f.attrs["spacing"] = f"{dx}x{dy}mm"
         h5f.attrs["frequency"] = freq
-        h5f.attrs["description"] = (
-            "Farfield radiation patterns dataset with individual element phase shifts"
-        )
         h5f.attrs["phase_method"] = "beamforming"
 
         # Store 2D radiation patterns
@@ -693,12 +702,19 @@ def generate_beamforming(
         # Store individual element phase shifts
         labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
         # Store steering info
-        steering_info = h5f.create_dataset("steering_info", shape=(n_samples, 2))
+        steering_info = h5f.create_dataset(
+            "steering_info", shape=(n_samples, 2, max_n_beams)
+        )
 
         for i in tqdm(range(n_samples)):
             # Generate random steering angles within the specified range
-            theta_steering = np.random.uniform(theta_steering_start, theta_steering_end)
-            phi_steering = np.random.uniform(phi_steering_start, phi_steering_end)
+            theta_steering = np.random.uniform(theta_start, theta_end, size=max_n_beams)
+            phi_steering = np.random.uniform(phi_start, phi_end, size=max_n_beams)
+
+            # Choose a random number of beams to simulate and fill the rest with NaN
+            n_beams = np.random.randint(max_n_beams) + 1
+            theta_steering[n_beams:] = np.nan
+            phi_steering[n_beams:] = np.nan
 
             # Generate phase shifts for each element
             phase_shifts = generate_element_phase_shifts(
@@ -894,8 +910,6 @@ def plot_sample(
     dataset_path = dataset_dir / dataset_name
     dataset = load_dataset(dataset_path)
     theta = dataset["theta"]
-    theta_steering, phi_steering = dataset["steering_info"][0]
-    print(f"{theta_steering=:.0f}deg, {phi_steering=:.0f}deg")
 
     # Create figure with three subplots: pattern, phase shifts, and polar pattern
     fig = plt.figure(figsize=[18, 6])
@@ -903,20 +917,13 @@ def plot_sample(
     ax1 = fig.add_subplot(1, 3, 2, projection="3d")
     ax2 = fig.add_subplot(1, 3, 3, projection="polar")
     axs = [ax0, ax1, ax2]
-    # fig, axs = plt.subplots(1, 3, figsize=(18, 6))
 
     pattern = dataset["patterns"][idx]
     phase_shifts = dataset["labels"][idx]
 
     # pattern[pattern < 0] = 0  # Clip negative values to 0
 
-    # Plot phase shifts
-    if "steering_info" in dataset and idx < len(dataset["steering_info"]):
-        theta_s, phi_s = dataset["steering_info"][idx]
-        phase_shift_title = f"Element Phase Shifts (θ={theta_s:.1f}°, φ={phi_s:.1f}°)"
-    else:
-        phase_shift_title = "Element Phase Shifts"
-    analyze.plot_phase_shifts(phase_shifts, title=phase_shift_title, ax=axs[0])
+    analyze.plot_phase_shifts(phase_shifts, title="Element Phase Shifts", ax=axs[0])
 
     # Plot 3D radiation pattern
     plot_ff_3d(
@@ -937,6 +944,14 @@ def plot_sample(
     axs[2].set_rlim(-40, 5)  # dB limits
     axs[2].set_title("2D Polar Pattern (φ=0°)")
     axs[2].grid(True)
+
+    steering_info = dataset["steering_info"][idx]
+    thetas_s, phis_s = steering_info
+    thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
+    thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
+    phis_s = np.array2string(phis_s, precision=2, separator=", ")
+    phase_shift_title = f"Element Phase Shifts (θ={thetas_s}°, φ={phis_s}°)"
+    fig.suptitle(phase_shift_title)
 
     fig.set_tight_layout(True)
     if output_dir:
