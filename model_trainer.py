@@ -707,22 +707,26 @@ def run_knn(
 
 
 @app.command()
-def analyze_knn_pred():
+def analyze_knn_pred(idx: int | None = None):
     output_dir = Path.cwd() / "model_results"
     with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
         y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
         y_test = h5f["y_test"][:].reshape(-1, 16, 16)
 
-    idx = np.random.choice(len(y_pred), 1)[0]
+    if idx is None:
+        idx = np.random.choice(len(y_pred), 1)[0]
 
-    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
 
     title = "Ground Truth Phase Shifts"
     analyze.plot_phase_shifts(y_test[idx], title=title, ax=axs[0])
     title = "Predicted Phase Shifts"
     analyze.plot_phase_shifts(y_pred[idx], title=title, ax=axs[1])
+    title = "Phase Shift Difference"
+    diff = y_test[idx] - y_pred[idx]
+    analyze.plot_phase_shifts(diff * 1, title=title, ax=axs[2])
 
-    loss = cosine_angular_loss_np(y_pred, y_test)
+    loss = cosine_angular_loss_np(y_pred[idx], y_test[idx])
     fig.suptitle(f"Prediction Example {idx}: {loss:.4f}")
     fig.set_tight_layout(True)
     filename = f"knn_pred_example_{idx}.png"
