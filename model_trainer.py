@@ -447,7 +447,7 @@ DEFAULT_MODEL_PATH = DEFAULT_MODELS_DIR / "phase_shift_prediction_model.pth"
 
 DEFAULT_DATA_DIR = Path.cwd() / "dataset"
 DEFAULT_DATA_DIR.mkdir(exist_ok=True, parents=True)
-DEFAULT_DATASET_PATH = DEFAULT_DATA_DIR / "ff_beamforming.h5"
+DEFAULT_DATASET_PATH = DEFAULT_DATA_DIR / "rand_bf_2d.h5"
 
 
 @app.command()
@@ -545,7 +545,7 @@ def pred_beamforming_all(
             )
 
 
-DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "ff_beamforming.h5"
+DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
 DEFAULT_OUTPUT_DIR: Path = Path.cwd() / "model_results"
 
 
