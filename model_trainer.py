@@ -721,14 +721,16 @@ def run_knn(
 def analyze_knn_pred(idx: int | None = None):
     output_dir = Path.cwd() / "model_results"
 
-    if idx is None:
-        idx = np.random.choice(len(y_pred), 1)[0]
-
     with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
         y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
         y_test = h5f["y_test"][:].reshape(-1, 16, 16)
-        thetas_s, phis_s = h5f["steering_info"][idx]
+        steering_info = h5f["steering_info"][:]
         theta, phi = h5f["theta"][:], h5f["phi"][:]
+
+    if idx is None:
+        idx = np.random.choice(len(y_pred), 1)[0]
+
+    thetas_s, phis_s = steering_info[idx]
 
     fig, axs = plt.subplots(2, 3, figsize=(18, 10))
 
@@ -778,10 +780,14 @@ def analyze_knn_beams():
         steer = h5f["steering_info"][:]
 
     theta_steer = steer[:, 0]
+    theta_diff = theta_steer[:, 0] - theta_steer[:, 1]
+    theta_diff = (theta_diff + 180) % 360 - 180
+
     phi_steer = steer[:, 1]
-    theta_diff = np.abs(theta_steer[:, 0] - theta_steer[:, 1])
-    phi_diff = np.abs(phi_steer[:, 0] - phi_steer[:, 1])
-    diff = theta_diff + phi_diff
+    phi_diff = phi_steer[:, 0] - phi_steer[:, 1]
+    phi_diff = (phi_diff + 180) % 360 - 180
+
+    diff = phi_diff
     diff = diff[~np.isnan(diff)]
     y = np.argmin(diff)
     print(y)
