@@ -664,6 +664,7 @@ def run_knn(
     dataset = load_dataset(dataset_path)
 
     patterns, labels = dataset["patterns"], dataset["labels"]
+    theta, phi = dataset["theta"], dataset["phi"]
     steering_info = dataset["steering_info"]
 
     # Flatten the features
@@ -679,8 +680,14 @@ def run_knn(
     print(f"Labels shape: {labels.shape}")
 
     # Split data into train, validation, and test sets
-    X_train_val, X_test, y_train_val, y_test = train_test_split(
-        patterns, labels, test_size=0.2, random_state=42
+    X_train_val, X_test, y_train_val, y_test, idx_train_val, idx_test = (
+        train_test_split(
+            patterns,
+            labels,
+            np.arange(labels.shape[0]),
+            test_size=0.2,
+            random_state=42,
+        )
     )
     X_train, X_val, y_train, y_val = train_test_split(
         X_train_val, y_train_val, test_size=0.25, random_state=42
@@ -701,7 +708,9 @@ def run_knn(
         h5f.create_dataset("y_pred", data=y_pred)
         h5f.create_dataset("y_test", data=y_test)
         h5f.create_dataset("loss", data=loss)
-        h5f.create_dataset("steering_info", data=steering_info)
+        h5f.create_dataset("steering_info", data=steering_info[idx_test])
+        h5f.create_dataset("theta", data=theta)
+        h5f.create_dataset("phi", data=phi)
 
     mode = "wb" if overwrite else "xb"
     with (output_dir / "knn_model.pkl").open(mode) as f:
@@ -719,16 +728,34 @@ def analyze_knn_pred(idx: int | None = None):
         y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
         y_test = h5f["y_test"][:].reshape(-1, 16, 16)
         thetas_s, phis_s = h5f["steering_info"][idx]
+        theta, phi = h5f["theta"][:], h5f["phi"][:]
 
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axs = plt.subplots(2, 3, figsize=(18, 10))
 
     title = "Ground Truth Phase Shifts"
-    analyze.plot_phase_shifts(y_test[idx], title=title, ax=axs[0])
+
+    analyze.plot_phase_shifts(y_test[idx], title=title, ax=axs[0, 0])
+
     title = "Predicted Phase Shifts"
-    analyze.plot_phase_shifts(y_pred[idx], title=title, ax=axs[1])
+    analyze.plot_phase_shifts(y_pred[idx], title=title, ax=axs[0, 1])
+
     title = "Phase Shift Difference"
     diff = y_test[idx] - y_pred[idx]
-    analyze.plot_phase_shifts(diff * 1, title=title, ax=axs[2])
+    analyze.plot_phase_shifts(diff * 1, title=title, ax=axs[0, 2])
+
+    pattern = generate_dataset.ff_from_phase_shifts(y_test[idx])
+    title = "Ground Truth Far Field Pattern"
+    axs[1, 0].remove()
+    axs[1, 0] = fig.add_subplot(2, 3, 4, projection="3d")
+    analyze.plot_ff_3d(theta, phi, pattern, title=title, ax=axs[1, 0])
+
+    pattern = generate_dataset.ff_from_phase_shifts(y_pred[idx])
+    title = "Predicted Far Field Pattern"
+    axs[1, 1].remove()
+    axs[1, 1] = fig.add_subplot(2, 3, 5, projection="3d")
+    analyze.plot_ff_3d(theta, phi, pattern, title=title, ax=axs[1, 1])
+
+    axs[1, 2].remove()
 
     thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
     thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
@@ -742,6 +769,23 @@ def analyze_knn_pred(idx: int | None = None):
     fig.savefig(output_dir / filename, dpi=600, bbox_inches="tight")
 
     print(f"Prediction example saved to {output_dir / filename}")
+
+
+@app.command()
+def analyze_knn_beams():
+    output_dir = Path.cwd() / "model_results"
+    with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
+        steer = h5f["steering_info"][:]
+
+    theta_steer = steer[:, 0]
+    phi_steer = steer[:, 1]
+    theta_diff = np.abs(theta_steer[:, 0] - theta_steer[:, 1])
+    phi_diff = np.abs(phi_steer[:, 0] - phi_steer[:, 1])
+    diff = theta_diff + phi_diff
+    diff = diff[~np.isnan(diff)]
+    y = np.argmin(diff)
+    print(y)
+    print(steer[y])
 
 
 def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray, axis=None):
