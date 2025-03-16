@@ -664,6 +664,7 @@ def run_knn(
     dataset = load_dataset(dataset_path)
 
     patterns, labels = dataset["patterns"], dataset["labels"]
+    steering_info = dataset["steering_info"]
 
     # Flatten the features
     patterns = patterns.reshape(patterns.shape[0], -1)
@@ -700,6 +701,7 @@ def run_knn(
         h5f.create_dataset("y_pred", data=y_pred)
         h5f.create_dataset("y_test", data=y_test)
         h5f.create_dataset("loss", data=loss)
+        h5f.create_dataset("steering_info", data=steering_info)
 
     mode = "wb" if overwrite else "xb"
     with (output_dir / "knn_model.pkl").open(mode) as f:
@@ -709,12 +711,14 @@ def run_knn(
 @app.command()
 def analyze_knn_pred(idx: int | None = None):
     output_dir = Path.cwd() / "model_results"
-    with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
-        y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
-        y_test = h5f["y_test"][:].reshape(-1, 16, 16)
 
     if idx is None:
         idx = np.random.choice(len(y_pred), 1)[0]
+
+    with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
+        y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
+        y_test = h5f["y_test"][:].reshape(-1, 16, 16)
+        thetas_s, phis_s = h5f["steering_info"][idx]
 
     fig, axs = plt.subplots(1, 3, figsize=(18, 5))
 
@@ -726,8 +730,13 @@ def analyze_knn_pred(idx: int | None = None):
     diff = y_test[idx] - y_pred[idx]
     analyze.plot_phase_shifts(diff * 1, title=title, ax=axs[2])
 
+    thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
+    thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
+    phis_s = np.array2string(phis_s, precision=2, separator=", ")
+
     loss = cosine_angular_loss_np(y_pred[idx], y_test[idx])
-    fig.suptitle(f"Prediction Example {idx}: {loss:.4f}")
+
+    fig.suptitle(f"Prediction Example {idx}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)")
     fig.set_tight_layout(True)
     filename = f"knn_pred_example_{idx}.png"
     fig.savefig(output_dir / filename, dpi=600, bbox_inches="tight")
