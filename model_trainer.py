@@ -664,18 +664,11 @@ def pred_beamforming(
 
     model.eval()
     with torch.no_grad():
-        outputs = model(torch.from_numpy(pattern)).numpy()
+        output = model(torch.from_numpy(pattern)).numpy().squeeze()
 
-    output = outputs.squeeze()
-
-    compare_phase_shifts(
-        output,
-        label,
-        theta,
-        phi,
-        title=f"Prediction Example {idx} (θ={theta_steer:.1f}°, φ={phi_steer:.1f}°)",
-        filepath=f"prediction_example_{idx}_t{theta_steer}_p{phi_steer}.png",
-    )
+    title = (f"Prediction Example {idx} (θ={theta_steer:.1f}°, φ={phi_steer:.1f}°)",)
+    filepath = (f"prediction_example_{idx}_t{theta_steer}_p{phi_steer}.png",)
+    compare_phase_shifts(output, label, theta, phi, title, filepath)
 
 
 DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
