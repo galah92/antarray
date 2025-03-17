@@ -725,17 +725,19 @@ DEFAULT_OUTPUT_DIR: Path = Path.cwd() / "model_results"
 
 @app.command()
 def run_cnn(
+    experiment: str,
+    overwrite: bool = False,
     dataset_path: Path = DEFAULT_DATASET_PATH,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     batch_size: int = 128,
     num_epochs: int = 100,
     lr: float = 1e-4,
 ):
-    output_dir.mkdir(exist_ok=True, parents=True)
+    output_path = output_dir / experiment
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"Output directory {output_path} already exists")
 
-    # Create subdirectories for plots
-    plots_dir = output_dir / "plots"
-    plots_dir.mkdir(exist_ok=True, parents=True)
+    output_path.mkdir(exist_ok=True, parents=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -789,7 +791,7 @@ def run_cnn(
     )
 
     # Save model
-    model_save_path = output_dir / "phase_shift_prediction_model.pth"
+    model_save_path = output_path / "phase_shift_prediction_model.pth"
     torch.save(
         {
             "model_state_dict": model.state_dict(),
@@ -801,7 +803,7 @@ def run_cnn(
     print(f"Model saved to {model_save_path}")
 
     # Visualize and save training history
-    visualize_training_history(history, save_path=plots_dir / "training_history.png")
+    visualize_training_history(history, save_path=output_path / "training_history.png")
 
     # Evaluate model and save prediction examples
     print("Evaluating model on test set...")
@@ -810,11 +812,11 @@ def run_cnn(
         test_loader,
         device,
         num_examples=5,
-        save_dir=plots_dir / "prediction_examples",
+        save_dir=output_path,
     )
 
     # Save metrics
-    metrics_path = output_dir / "metrics.txt"
+    metrics_path = output_path / "metrics.txt"
     with open(metrics_path, "w") as f:
         for key, value in metrics.items():
             f.write(f"{key}: {value}\n")
