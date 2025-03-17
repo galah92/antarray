@@ -332,7 +332,7 @@ def train_model(
     criterion,
     optimizer,
     scheduler=None,
-    num_epochs=25,
+    n_epochs=25,
     device="cuda",
     log_interval=10,
     clip_grad=1.0,
@@ -354,7 +354,7 @@ def train_model(
         Optimizer
     scheduler : torch.optim.lr_scheduler, optional
         Learning rate scheduler
-    num_epochs : int
+    n_epochs : int
         Number of epochs to train
     device : str
         Device to use for training ('cuda' or 'cpu')
@@ -378,8 +378,8 @@ def train_model(
     best_val_loss = float("inf")
     best_model_wts = None
 
-    for epoch in range(num_epochs):
-        print(f"Epoch {epoch + 1}/{num_epochs} lr={scheduler.get_last_lr()[0]}")
+    for epoch in range(n_epochs):
+        print(f"Epoch {epoch + 1}/{n_epochs} lr={scheduler.get_last_lr()[0]}")
         print("-" * 10)
 
         # Each epoch has a training and validation phase
@@ -725,7 +725,7 @@ def run_cnn(
     dataset_path: Path = DEFAULT_DATASET_PATH,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     batch_size: int = 128,
-    num_epochs: int = 100,
+    n_epochs: int = 100,
     lr: float = 1e-4,
 ):
     output_path = output_dir / experiment
@@ -781,7 +781,7 @@ def run_cnn(
         criterion,
         optimizer,
         scheduler=scheduler,
-        num_epochs=num_epochs,
+        n_epochs=n_epochs,
         device=device,
     )
 
