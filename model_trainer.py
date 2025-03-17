@@ -307,6 +307,24 @@ def cosine_angular_loss_torch(
     return torch.mean(1 - torch.cos(inputs - targets))
 
 
+class EarlyStopper:
+    def __init__(self, patience=1, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.min_val_loss = float("inf")
+
+    def early_stop(self, val_loss):
+        if val_loss < self.min_val_loss:
+            self.min_val_loss = val_loss
+            self.counter = 0
+        elif val_loss > (self.min_val_loss + self.min_delta):
+            self.counter += 1
+            if self.counter >= self.patience:
+                return True
+        return False
+
+
 def train_model(
     model,
     train_loader,
@@ -314,6 +332,7 @@ def train_model(
     criterion,
     optimizer,
     scheduler=None,
+    early_stopper: EarlyStopper | None = None,
     n_epochs=25,
     device="cuda",
     log_interval=10,
@@ -423,6 +442,11 @@ def train_model(
                 if epoch_loss < best_val_loss:
                     best_val_loss = epoch_loss
                     best_model_wts = model.state_dict().copy()
+
+        if early_stopper is not None:
+            if early_stopper.early_stop(history["val_loss"][-1]):
+                print("Early stopping...")
+                break
 
         # Step the scheduler
         if scheduler:
@@ -715,6 +739,7 @@ def run_cnn(
         criterion,
         optimizer,
         scheduler=scheduler,
+        early_stopper=EarlyStopper(patience=3, min_delta=1e-4),
         n_epochs=n_epochs,
         device=device,
     )
