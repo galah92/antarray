@@ -712,11 +712,11 @@ def run_cnn(
     train_ds, val_ds, test_ds = random_split(ds, [0.8, 0.1, 0.1], generator=gen)
 
     # Create dataloaders
-    train_loader = DataLoader(train_ds, batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_ds, batch_size, shuffle=False, num_workers=4)
-    test_loader = DataLoader(test_ds, batch_size, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_ds, batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size, shuffle=False, num_workers=2)
+    test_loader = DataLoader(test_ds, batch_size, shuffle=False, num_workers=2)
 
-    model = PhaseShiftModel()
+    model = PhaseShiftModel(conv_channels=[32, 64, 128, 256], fc_units=[1024, 512])
     # model = PhaseShiftPredictor()
     # model = LargePhaseShiftPredictor()
     # model = ResNetPhaseShiftPredictor()
@@ -726,7 +726,6 @@ def run_cnn(
 
     # Define loss function and optimizer
     criterion = cosine_angular_loss_torch
-    # Use AdamW optimizer
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
 
@@ -739,7 +738,7 @@ def run_cnn(
         criterion,
         optimizer,
         scheduler=scheduler,
-        early_stopper=EarlyStopper(patience=3, min_delta=1e-4),
+        early_stopper=EarlyStopper(patience=5, min_delta=1e-4),
         n_epochs=n_epochs,
         device=device,
     )
