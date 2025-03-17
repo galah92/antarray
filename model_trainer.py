@@ -127,19 +127,202 @@ class PhaseShiftModel(nn.Module):
         return x
 
 
+import torch.nn.functional as F
+
+
+class PhaseShiftPredictor(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+
+        self.global_pool = nn.AdaptiveAvgPool2d(
+            1
+        )  # Reduces feature size while preserving information
+        self.fc1 = nn.Linear(128, 64)
+        self.fc2 = nn.Linear(64, 16 * 16)  # Output phase shifts for 16x16 antenna array
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
+
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)  # No activation since phase angles are continuous
+
+        return x.view(-1, 16, 16)  # Output shape: (batch, 16, 16) for phase shifts
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class LargePhaseShiftPredictor(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        # First block: Conv + BatchNorm + ReLU
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(64)
+
+        # Second block: Conv + BatchNorm + ReLU
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(128)
+
+        # Third block: Conv + BatchNorm + ReLU
+        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1)
+        self.bn3 = nn.BatchNorm2d(256)
+
+        # Fourth block: Conv + BatchNorm + ReLU
+        self.conv4 = nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1)
+        self.bn4 = nn.BatchNorm2d(512)
+
+        # Fifth block: Conv + BatchNorm + ReLU
+        self.conv5 = nn.Conv2d(512, 1024, kernel_size=3, stride=1, padding=1)
+        self.bn5 = nn.BatchNorm2d(1024)
+
+        # Global average pooling
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(1024, 512)
+        self.fc2 = nn.Linear(512, 16 * 16)  # Output for 16x16 antenna array
+
+        # Dropout for regularization
+        self.dropout = nn.Dropout(0.5)
+
+    def forward(self, x):
+        # Block 1
+        x = F.relu(self.bn1(self.conv1(x)))
+
+        # Block 2
+        x = F.relu(self.bn2(self.conv2(x)))
+
+        # Block 3
+        x = F.relu(self.bn3(self.conv3(x)))
+
+        # Block 4
+        x = F.relu(self.bn4(self.conv4(x)))
+
+        # Block 5
+        x = F.relu(self.bn5(self.conv5(x)))
+
+        # Global average pooling
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
+
+        # Fully connected layers
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+
+        return x.view(-1, 16, 16)  # Output shape: (batch, 16, 16) for phase shifts
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class ResNetBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+
+        self.conv1 = nn.Conv2d(
+            in_channels, out_channels, kernel_size=3, stride=1, padding=1
+        )
+        self.bn1 = nn.BatchNorm2d(out_channels)
+
+        self.conv2 = nn.Conv2d(
+            out_channels, out_channels, kernel_size=3, stride=1, padding=1
+        )
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        # Skip connection (identity mapping)
+        self.skip = (
+            nn.Identity()
+            if in_channels == out_channels
+            else nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1)
+        )
+
+    def forward(self, x):
+        identity = self.skip(x)
+
+        # First convolution block
+        out = F.relu(self.bn1(self.conv1(x)))
+
+        # Second convolution block
+        out = self.bn2(self.conv2(out))
+
+        # Adding residual connection (skip connection)
+        out += identity
+        out = F.relu(out)
+
+        return out
+
+
+class ResNetPhaseShiftPredictor(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        # Initial convolution layer
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3)
+        self.bn1 = nn.BatchNorm2d(64)
+
+        # ResNet blocks
+        self.block1 = ResNetBlock(64, 128)
+        self.block2 = ResNetBlock(128, 256)
+        self.block3 = ResNetBlock(256, 512)
+        self.block4 = ResNetBlock(512, 1024)
+
+        # Global Average Pooling
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+
+        # Fully connected layers for output
+        self.fc1 = nn.Linear(1024, 512)
+        self.fc2 = nn.Linear(512, 16 * 16)  # Output for 16x16 antenna array
+
+        # Dropout for regularization
+        self.dropout = nn.Dropout(0.5)
+
+    def forward(self, x):
+        # Initial convolution + batchnorm
+        x = F.relu(self.bn1(self.conv1(x)))
+
+        # ResNet blocks
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.block4(x)
+
+        # Global average pooling
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
+
+        # Fully connected layers
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+
+        return x.view(-1, 16, 16)  # Output shape: (batch, 16, 16) for phase shifts
+
+
 def cosine_angular_loss_torch(
     inputs: torch.Tensor,
     targets: torch.Tensor,
 ) -> torch.Tensor:
-    # Convert angles to unit vectors
-    inputs_x, inputs_y = torch.cos(inputs), torch.sin(inputs)
-    targets_x, targets_y = torch.cos(targets), torch.sin(targets)
-
-    # Cosine similarity between the vectors
-    cos_sim = inputs_x * targets_x + inputs_y * targets_y
-
-    # Convert to distance (1 - similarity)
-    return torch.mean(1 - cos_sim)
+    return torch.mean(1 - torch.cos(inputs - targets))
 
 
 def train_model(
@@ -352,35 +535,15 @@ def evaluate_model(model, test_loader, device="cuda", num_examples=5, save_dir=N
 
             fig, axs = plt.subplots(1, 3, figsize=(18, 5))
 
-            # Plot target phase shifts
-            im0 = axs[0].imshow(
-                np.rad2deg(target), cmap="viridis", origin="lower", vmin=-180, vmax=180
-            )
-            axs[0].set_title("Ground Truth Phase Shifts")
-            axs[0].set_xlabel("Element Y index")
-            axs[0].set_ylabel("Element X index")
-            plt.colorbar(im0, ax=axs[0])
+            title = "Ground Truth Phase Shifts"
+            analyze.plot_phase_shifts(target, title=title, ax=axs[0])
+            title = "Ground Truth Phase Shifts"
+            analyze.plot_phase_shifts(pred, title=title, ax=axs[1])
+            title = "Phase Shift Error"
+            analyze.plot_phase_shifts(target - pred, title=title, ax=axs[1])
 
-            # Plot predicted phase shifts
-            im1 = axs[1].imshow(
-                np.rad2deg(pred), cmap="viridis", origin="lower", vmin=-180, vmax=180
-            )
-            axs[1].set_title("Predicted Phase Shifts")
-            axs[1].set_xlabel("Element Y index")
-            axs[1].set_ylabel("Element X index")
-            plt.colorbar(im1, ax=axs[1])
-
-            # Plot error
-            diff = np.rad2deg(np.arctan2(np.sin(pred - target), np.cos(pred - target)))
-            im2 = axs[2].imshow(
-                diff, cmap="coolwarm", origin="lower", vmin=-180, vmax=180
-            )
-            axs[2].set_title("Phase Error (degrees)")
-            axs[2].set_xlabel("Element Y index")
-            axs[2].set_ylabel("Element X index")
-            plt.colorbar(im2, ax=axs[2])
-
-            plt.tight_layout()
+            fig.suptitle(f"Prediction Example {idx}")
+            fig.set_tight_layout(True)
 
             if save_dir:
                 save_dir.mkdir(exist_ok=True, parents=True)
@@ -393,6 +556,45 @@ def evaluate_model(model, test_loader, device="cuda", num_examples=5, save_dir=N
             plt.close()
 
     return metrics
+
+
+def compare_phase_shifts(
+    output,
+    label,
+    theta,
+    phi,
+    title: str | None = None,
+    filepath: Path | None = None,
+):
+    fig, axs = plt.subplots(2, 3, figsize=(18, 10))
+
+    analyze.plot_phase_shifts(label, title="Ground Truth Phase Shifts", ax=axs[0, 0])
+    analyze.plot_phase_shifts(output, title="Predicted Phase Shifts", ax=axs[0, 1])
+
+    diff = output - label
+    # diff = np.arctan2(np.sin(output - label), np.cos(output - label))
+    analyze.plot_phase_shifts(diff, title="Phase Shift Error", ax=axs[0, 2])
+
+    label_ff = generate_dataset.ff_from_phase_shifts(output)
+    axs[1, 0].remove()
+    axs[1, 0] = fig.add_subplot(2, 3, 4, projection="3d")
+    title = "Ground Truth Far Field Pattern"
+    analyze.plot_ff_3d(theta, phi, label_ff, title=title, ax=axs[1, 0])
+
+    output_ff = generate_dataset.ff_from_phase_shifts(label)
+    axs[1, 1].remove()
+    axs[1, 1] = fig.add_subplot(2, 3, 5, projection="3d")
+    title = "Predicted Far Field Pattern"
+    analyze.plot_ff_3d(theta, phi, output_ff, title=title, ax=axs[1, 1])
+
+    axs[1, 2].remove()
+
+    if title is not None:
+        fig.suptitle(title)
+    fig.set_tight_layout(True)
+
+    if filepath:
+        plt.savefig(filepath, dpi=600, bbox_inches="tight")
 
 
 def visualize_training_history(history, save_path=None):
@@ -456,12 +658,10 @@ def pred_beamforming(
     phi_steer: int = 0,
     dataset_path: Path = DEFAULT_DATASET_PATH,
     model_path: Path = DEFAULT_MODEL_PATH,
-    savefig: bool = True,
 ):
     dataset = load_dataset(dataset_path)
     patterns, labels = dataset["patterns"], dataset["labels"]
     theta, phi = dataset["theta"], dataset["phi"]
-    freq = dataset["frequency"]
 
     # Find the index of the given steering angles: https://stackoverflow.com/a/25823710/5151909
     steer_angles = (theta_steer, phi_steer)
@@ -471,9 +671,6 @@ def pred_beamforming(
     pattern[pattern < 0] = 0  # Set negative values to 0
     pattern = pattern / 20  # Normalize
     label = labels[idx]
-
-    input_height, input_width = patterns.shape[1], patterns.shape[2]
-    output_size = (labels.shape[1], labels.shape[2])  # Typically (16, 16) for our array
 
     checkpoint = torch.load(model_path)
     model = PhaseShiftModel()
@@ -485,37 +682,14 @@ def pred_beamforming(
 
     output = outputs.squeeze()
 
-    fig, axs = plt.subplots(2, 3, figsize=(18, 10))
-
-    analyze.plot_phase_shifts(label, title="Ground Truth Phase Shifts", ax=axs[0, 0])
-    analyze.plot_phase_shifts(output, title="Predicted Phase Shifts", ax=axs[0, 1])
-
-    # TODO: should we use diff or output - label?
-    diff = np.arctan2(np.sin(output - label), np.cos(output - label))
-    analyze.plot_phase_shifts(diff, title="Phase Shift Error", ax=axs[0, 2])
-    # plot_phase_shifts(output - label, title="Phase Shift Error", ax=axs[0, 2])
-
-    label_ff = generate_dataset.ff_from_phase_shifts(output)
-    axs[1, 0].remove()
-    axs[1, 0] = fig.add_subplot(2, 3, 4, projection="3d")
-    title = "Ground Truth Far Field Pattern"
-    analyze.plot_ff_3d(theta, phi, label_ff, freq=freq, title=title, ax=axs[1, 0])
-
-    output_ff = generate_dataset.ff_from_phase_shifts(label)
-    axs[1, 1].remove()
-    axs[1, 1] = fig.add_subplot(2, 3, 5, projection="3d")
-    title = "Predicted Far Field Pattern"
-    analyze.plot_ff_3d(theta, phi, output_ff, freq=freq, title=title, ax=axs[1, 1])
-
-    axs[1, 2].remove()
-
-    fig.suptitle(f"Prediction Example {idx} (θ={theta_steer:.1f}°, φ={phi_steer:.1f}°)")
-    fig.set_tight_layout(True)
-
-    if savefig:
-        filename = f"prediction_example_{idx}_t{theta_steer}_p{phi_steer}.png"
-        save_path = model_path.parent / filename
-        plt.savefig(save_path, dpi=600, bbox_inches="tight")
+    compare_phase_shifts(
+        output,
+        label,
+        theta,
+        phi,
+        title=f"Prediction Example {idx} (θ={theta_steer:.1f}°, φ={phi_steer:.1f}°)",
+        filepath=f"prediction_example_{idx}_t{theta_steer}_p{phi_steer}.png",
+    )
 
 
 @app.command()
@@ -555,6 +729,7 @@ def run_cnn(
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     batch_size: int = 128,
     num_epochs: int = 100,
+    lr: float = 1e-4,
 ):
     output_dir.mkdir(exist_ok=True, parents=True)
 
@@ -585,6 +760,9 @@ def run_cnn(
     test_loader = DataLoader(test_ds, batch_size, shuffle=False, num_workers=4)
 
     model = PhaseShiftModel()
+    # model = PhaseShiftPredictor()
+    # model = LargePhaseShiftPredictor()
+    # model = ResNetPhaseShiftPredictor()
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total model parameters: {total_params:,}")
@@ -592,7 +770,7 @@ def run_cnn(
     # Define loss function and optimizer
     criterion = cosine_angular_loss_torch
     # Use AdamW optimizer
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.01)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5
     )
@@ -623,8 +801,7 @@ def run_cnn(
     print(f"Model saved to {model_save_path}")
 
     # Visualize and save training history
-    history_plot_path = plots_dir / "training_history.png"
-    visualize_training_history(history, save_path=history_plot_path)
+    visualize_training_history(history, save_path=plots_dir / "training_history.png")
 
     # Evaluate model and save prediction examples
     print("Evaluating model on test set...")
@@ -732,45 +909,24 @@ def analyze_knn_pred(idx: int | None = None):
 
     thetas_s, phis_s = steering_info[idx]
 
-    fig, axs = plt.subplots(2, 3, figsize=(18, 10))
-
-    title = "Ground Truth Phase Shifts"
-
-    analyze.plot_phase_shifts(y_test[idx], title=title, ax=axs[0, 0])
-
-    title = "Predicted Phase Shifts"
-    analyze.plot_phase_shifts(y_pred[idx], title=title, ax=axs[0, 1])
-
-    title = "Phase Shift Difference"
-    diff = y_test[idx] - y_pred[idx]
-    analyze.plot_phase_shifts(diff * 1, title=title, ax=axs[0, 2])
-
-    pattern = generate_dataset.ff_from_phase_shifts(y_test[idx])
-    title = "Ground Truth Far Field Pattern"
-    axs[1, 0].remove()
-    axs[1, 0] = fig.add_subplot(2, 3, 4, projection="3d")
-    analyze.plot_ff_3d(theta, phi, pattern, title=title, ax=axs[1, 0])
-
-    pattern = generate_dataset.ff_from_phase_shifts(y_pred[idx])
-    title = "Predicted Far Field Pattern"
-    axs[1, 1].remove()
-    axs[1, 1] = fig.add_subplot(2, 3, 5, projection="3d")
-    analyze.plot_ff_3d(theta, phi, pattern, title=title, ax=axs[1, 1])
-
-    axs[1, 2].remove()
-
     thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
     thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
     phis_s = np.array2string(phis_s, precision=2, separator=", ")
 
     loss = cosine_angular_loss_np(y_pred[idx], y_test[idx])
 
-    fig.suptitle(f"Prediction Example {idx}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)")
-    fig.set_tight_layout(True)
-    filename = f"knn_pred_example_{idx}.png"
-    fig.savefig(output_dir / filename, dpi=600, bbox_inches="tight")
+    filepath = output_dir / f"knn_pred_example_{idx}.png"
 
-    print(f"Prediction example saved to {output_dir / filename}")
+    compare_phase_shifts(
+        y_pred[idx],
+        y_test[idx],
+        theta,
+        phi,
+        title=f"Prediction Example {idx}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)",
+        filepath=filepath,
+    )
+
+    print(f"Prediction example saved to {filepath}")
 
 
 @app.command()
@@ -794,16 +950,8 @@ def analyze_knn_beams():
     print(steer[y])
 
 
-def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray, axis=None):
-    # Convert angles to unit vectors
-    inputs_x, inputs_y = np.cos(inputs), np.sin(inputs)
-    targets_x, targets_y = np.cos(targets), np.sin(targets)
-
-    # Cosine similarity between the vectors
-    cos_sim = inputs_x * targets_x + inputs_y * targets_y
-
-    # Convert to distance (1 - similarity)
-    return np.mean(1 - cos_sim)
+def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray):
+    return np.mean(1 - np.cos(inputs - targets))
 
 
 if __name__ == "__main__":
