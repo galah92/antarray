@@ -89,7 +89,7 @@ class PhaseShiftModel(nn.Module):
 
         # Calculate the size of the feature maps after encoding
         # After n channels MaxPool2d with stride=2
-        feature_size = np.prod(in_shape) // (2 ** len(conv_channels))
+        feature_size = np.prod(np.array(in_shape) // (2 ** len(conv_channels)))
 
         self.fc = nn.Sequential(nn.Flatten())
         fcs = [conv_channels[-1] * feature_size] + fc_units
@@ -703,10 +703,8 @@ def run_cnn(
     # Define loss function and optimizer
     criterion = cosine_angular_loss_torch
     # Use AdamW optimizer
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=5
-    )
+    optimizer = optim.AdamW(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
 
     # Train model
     print("Starting training...")
