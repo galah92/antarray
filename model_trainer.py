@@ -537,16 +537,11 @@ def evaluate_model(
     if num_examples > 0:
         indices = np.random.choice(len(all_preds), num_examples, replace=False)
 
-        for i, idx in enumerate(indices):
-            filepath = save_dir / f"prediction_example_{i}.png"
-            compare_phase_shifts(
-                all_preds[idx],
-                all_targets[idx],
-                theta,
-                phi,
-                title=f"Prediction Example {idx}",
-                filepath=filepath,
-            )
+        for idx in indices:
+            title = f"Prediction Example {idx}"
+            filepath = save_dir / f"prediction_example_{idx}.png"
+            pred, target = all_preds[idx], all_targets[idx]
+            compare_phase_shifts(pred, target, theta, phi, title, filepath)
 
             print(f"Prediction example saved to {filepath}")
 
@@ -589,7 +584,7 @@ def compare_phase_shifts(
     fig.set_tight_layout(True)
 
     if filepath:
-        plt.savefig(filepath, dpi=600, bbox_inches="tight")
+        fig.savefig(filepath, dpi=600, bbox_inches="tight")
 
 
 def visualize_training_history(history, save_path=None):
@@ -624,18 +619,14 @@ def visualize_training_history(history, save_path=None):
         axs[1].set_ylabel("Learning Rate")
         axs[1].grid(True)
 
-    plt.tight_layout()
+    fig.set_tight_layout(True)
 
     if save_path:
         # Ensure the directory exists
         save_path = Path(save_path)
         save_path.parent.mkdir(exist_ok=True, parents=True)
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Training history plot saved to {save_path}")
-    else:
-        plt.show()
-
-    plt.close()
 
 
 DEFAULT_MODELS_DIR = Path.cwd() / "experiments"
@@ -685,33 +676,6 @@ def pred_beamforming(
         title=f"Prediction Example {idx} (θ={theta_steer:.1f}°, φ={phi_steer:.1f}°)",
         filepath=f"prediction_example_{idx}_t{theta_steer}_p{phi_steer}.png",
     )
-
-
-@app.command()
-def pred_beamforming_all(
-    theta_steer: int = 0,
-    phi_steer: int = 0,
-    dataset_path: Path = DEFAULT_DATASET_PATH,
-    model_path: Path = DEFAULT_MODEL_PATH,
-    savefig: bool = True,
-):
-    # Get indices of test set
-    n_samples = 12321
-    indices = np.arange(n_samples)
-    _, indices_test = train_test_split(indices, test_size=0.2, random_state=42)
-
-    with h5py.File(dataset_path, "r") as h5f:
-        steering_info = h5f["steering_info"]
-
-        for idx in indices_test:
-            theta_steer, phi_steer = steering_info[idx]
-            pred_beamforming(
-                theta_steer=theta_steer,
-                phi_steer=phi_steer,
-                dataset_path=dataset_path,
-                model_path=model_path,
-                savefig=savefig,
-            )
 
 
 DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
@@ -821,16 +785,14 @@ def run_cnn(
 
 @app.command()
 def run_knn(
+    experiment: str,
+    overwrite: bool = False,
     dataset_path: Path = DEFAULT_DATASET_PATH,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
-    overwrite: bool = False,
     n_neighbors: int = 5,
 ):
-    output_dir.mkdir(exist_ok=True, parents=True)
-
-    # Create subdirectories for plots
-    plots_dir = output_dir / "plots"
-    plots_dir.mkdir(exist_ok=True, parents=True)
+    output_path = output_dir / experiment
+    output_path.mkdir(exist_ok=overwrite, parents=True)
 
     # Load dataset
     print(f"Loading dataset from {dataset_path}")
@@ -877,7 +839,7 @@ def run_knn(
     print(f"Val loss: {loss:.4f}")
 
     # save y_pred to h5 file
-    with h5py.File(output_dir / "knn_pred.h5", "w") as h5f:
+    with h5py.File(output_path / "knn_pred.h5", "w") as h5f:
         h5f.create_dataset("y_pred", data=y_pred)
         h5f.create_dataset("y_test", data=y_test)
         h5f.create_dataset("loss", data=loss)
@@ -886,7 +848,7 @@ def run_knn(
         h5f.create_dataset("phi", data=phi)
 
     mode = "wb" if overwrite else "xb"
-    with (output_dir / "knn_model.pkl").open(mode) as f:
+    with (output_path / "knn_model.pkl").open(mode) as f:
         pickle.dump(knn, f)
 
 
@@ -903,24 +865,17 @@ def analyze_knn_pred(idx: int | None = None):
     if idx is None:
         idx = np.random.choice(len(y_pred), 1)[0]
 
+    pred, test = y_pred[idx], y_test[idx]
     thetas_s, phis_s = steering_info[idx]
 
     thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
     thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
     phis_s = np.array2string(phis_s, precision=2, separator=", ")
 
-    loss = cosine_angular_loss_np(y_pred[idx], y_test[idx])
-
+    loss = cosine_angular_loss_np(pred, test)
+    title = f"Prediction Example {idx}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)"
     filepath = output_dir / f"knn_pred_example_{idx}.png"
-
-    compare_phase_shifts(
-        y_pred[idx],
-        y_test[idx],
-        theta,
-        phi,
-        title=f"Prediction Example {idx}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)",
-        filepath=filepath,
-    )
+    compare_phase_shifts(pred, test, theta, phi, title, filepath)
 
     print(f"Prediction example saved to {filepath}")
 
