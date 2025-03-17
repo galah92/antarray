@@ -66,64 +66,46 @@ class PhaseShiftModel(nn.Module):
     def __init__(
         self,
         input_channels=1,  # Number of input channels (1 for single radiation pattern)
-        input_height=180,  # Number of phi values
-        input_width=180,  # Number of theta values
-        output_size=(16, 16),  # Size of the output phase shift matrix (xn, yn)
+        in_shape=(180, 180),  # Shape of the input radiation pattern (n_phi, n_theta)
+        out_shape=(16, 16),  # Size of the output phase shift matrix (xn, yn)
+        # Number of channels in each convolutional layer
+        conv_channels=[32, 64, 128, 256, 512],
+        # Number of units in each fully connected layer
+        fc_units=[2048, 1024],
     ):
         super().__init__()
 
-        self.output_size = output_size
+        self.out_shape = out_shape
 
-        self.encoder = nn.Sequential(
-            # First convolutional block
-            nn.Conv2d(input_channels, 32, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            # Second convolutional block
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            # Third convolutional block
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            # Fourth convolutional block
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            # Fifth convolutional block
-            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-        )
+        self.conv = nn.Sequential()
+        ch = [input_channels] + conv_channels
+        for i in range(1, len(ch)):
+            self.conv += nn.Sequential(
+                nn.Conv2d(ch[i - 1], ch[i], kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(ch[i]),
+                nn.ReLU(),
+                nn.MaxPool2d(2),
+            )
 
         # Calculate the size of the feature maps after encoding
-        feature_size = input_height // 32  # After 5 MaxPool2d with stride=2
-        feature_width = input_width // 32
+        # After n channels MaxPool2d with stride=2
+        feature_size = np.prod(in_shape) // (2 ** len(conv_channels))
 
-        # Fully connected layers
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(512 * feature_size * feature_width, 2048),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(2048, 1024),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(1024, output_size[0] * output_size[1]),
-        )
+        self.fc = nn.Sequential(nn.Flatten())
+        fcs = [conv_channels[-1] * feature_size] + fc_units
+        for i in range(1, len(fcs)):
+            self.fc += nn.Sequential(
+                nn.Linear(fcs[i - 1], fcs[i]),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+            )
+
+        self.fc.append(nn.Linear(fcs[-1], np.prod(out_shape)))
 
     def forward(self, x):
-        """Forward pass through the network."""
-        x = self.encoder(x)
+        x = self.conv(x)
         x = self.fc(x)
-        # Reshape to the desired output size (batch_size, xn, yn)
-        x = x.view(-1, self.output_size[0], self.output_size[1])
+        x = x.view(-1, *self.out_shape)
         return x
 
 
