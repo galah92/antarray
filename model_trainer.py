@@ -729,10 +729,7 @@ def run_cnn(
     lr: float = 1e-4,
 ):
     output_path = output_dir / experiment
-    if output_path.exists() and not overwrite:
-        raise FileExistsError(f"Output directory {output_path} already exists")
-
-    output_path.mkdir(exist_ok=True, parents=True)
+    output_path.mkdir(exist_ok=overwrite, parents=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
