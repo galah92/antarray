@@ -638,7 +638,7 @@ def visualize_training_history(history, save_path=None):
     plt.close()
 
 
-DEFAULT_MODELS_DIR = Path.cwd() / "model_results"
+DEFAULT_MODELS_DIR = Path.cwd() / "experiments"
 DEFAULT_MODELS_DIR.mkdir(exist_ok=True, parents=True)
 DEFAULT_MODEL_PATH = DEFAULT_MODELS_DIR / "phase_shift_prediction_model.pth"
 
@@ -715,7 +715,7 @@ def pred_beamforming_all(
 
 
 DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
-DEFAULT_OUTPUT_DIR: Path = Path.cwd() / "model_results"
+DEFAULT_OUTPUT_DIR: Path = Path.cwd() / "experiments"
 
 
 @app.command()
@@ -895,7 +895,7 @@ def run_knn(
 
 @app.command()
 def analyze_knn_pred(idx: int | None = None):
-    output_dir = Path.cwd() / "model_results"
+    output_dir = Path.cwd() / "experiments"
 
     with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
         y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
@@ -930,7 +930,7 @@ def analyze_knn_pred(idx: int | None = None):
 
 @app.command()
 def analyze_knn_beams():
-    output_dir = Path.cwd() / "model_results"
+    output_dir = Path.cwd() / "experiments"
     with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
         steer = h5f["steering_info"][:]
 

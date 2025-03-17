@@ -177,4 +177,4 @@ cython_debug/
 .h5
 *.pt
 dataset
-model_results
+experiments
