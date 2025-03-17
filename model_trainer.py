@@ -462,7 +462,15 @@ def train_model(
     return model, history
 
 
-def evaluate_model(model, test_loader, device="cuda", num_examples=5, save_dir=None):
+def evaluate_model(
+    model,
+    test_loader,
+    theta,
+    phi,
+    device="cuda",
+    num_examples=5,
+    save_dir=None,
+):
     """
     Evaluate the model and visualize results.
 
@@ -530,30 +538,17 @@ def evaluate_model(model, test_loader, device="cuda", num_examples=5, save_dir=N
         indices = np.random.choice(len(all_preds), num_examples, replace=False)
 
         for i, idx in enumerate(indices):
-            pred = all_preds[idx]
-            target = all_targets[idx]
+            filepath = save_dir / f"prediction_example_{i}.png"
+            compare_phase_shifts(
+                all_preds[idx],
+                all_targets[idx],
+                theta,
+                phi,
+                title=f"Prediction Example {idx}",
+                filepath=filepath,
+            )
 
-            fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-
-            title = "Ground Truth Phase Shifts"
-            analyze.plot_phase_shifts(target, title=title, ax=axs[0])
-            title = "Ground Truth Phase Shifts"
-            analyze.plot_phase_shifts(pred, title=title, ax=axs[1])
-            title = "Phase Shift Error"
-            analyze.plot_phase_shifts(target - pred, title=title, ax=axs[1])
-
-            fig.suptitle(f"Prediction Example {idx}")
-            fig.set_tight_layout(True)
-
-            if save_dir:
-                save_dir.mkdir(exist_ok=True, parents=True)
-                save_path = Path(save_dir) / f"prediction_example_{i}.png"
-                plt.savefig(save_path, dpi=300, bbox_inches="tight")
-                print(f"Prediction example saved to {save_path}")
-            else:
-                plt.show()
-
-            plt.close()
+            print(f"Prediction example saved to {filepath}")
 
     return metrics
 
@@ -810,7 +805,9 @@ def run_cnn(
     metrics = evaluate_model(
         model,
         test_loader,
-        device,
+        theta=dataset["theta"],
+        phi=dataset["phi"],
+        device=device,
         num_examples=5,
         save_dir=output_path,
     )
