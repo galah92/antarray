@@ -416,8 +416,7 @@ def train_model(
 def evaluate_model(
     model,
     test_loader,
-    theta,
-    phi,
+    dataset_path: Path,
     device="cuda",
     num_examples=5,
     save_dir=None,
@@ -457,6 +456,10 @@ def evaluate_model(
         "mse": mse.item(),
         "rmse": np.sqrt(mse).item(),
     }
+
+    with h5py.File(dataset_path, "r") as h5f:
+        theta = h5f["theta"][:]
+        phi = h5f["phi"][:]
 
     # Visualize a few examples
     if num_examples > 0:
@@ -614,29 +617,9 @@ def run_cnn(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    # Load dataset
-    print(f"Loading dataset from {dataset_path}")
-    dataset = load_dataset(dataset_path)
-
-    patterns, labels = dataset["patterns"], dataset["labels"]
-
-    patterns[patterns < 0] = 0  # Set negative values to 0
-    patterns = patterns / 20  # Normalize
-
-    # Split data into train, validation, and test sets
-    ds = RadiationPatternDataset(patterns, labels)
-    gen = torch.Generator().manual_seed(42)
-    train_ds, val_ds, test_ds = random_split(ds, [0.8, 0.1, 0.1], generator=gen)
-
-    # Create dataloaders
-    train_loader = DataLoader(train_ds, batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size, shuffle=False, num_workers=2)
-    test_loader = DataLoader(test_ds, batch_size, shuffle=False, num_workers=2)
+    train_loader, val_loader, test_loader = create_dataloaders(dataset_path, batch_size)
 
     model = PhaseShiftModel(conv_channels=[32, 64, 128, 256], fc_units=[1024, 512])
-    # model = PhaseShiftPredictor()
-    # model = LargePhaseShiftPredictor()
-    # model = ResNetPhaseShiftPredictor()
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total model parameters: {total_params:,}")
@@ -661,16 +644,16 @@ def run_cnn(
     )
 
     # Save model
-    model_save_path = exp_path / DEFAULT_MODEL_NAME
+    model_path = exp_path / DEFAULT_MODEL_NAME
     torch.save(
         {
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "history": history,
         },
-        model_save_path,
+        model_path,
     )
-    print(f"Model saved to {model_save_path}")
+    print(f"Model saved to {model_path}")
 
     plot_training(experiment, overwrite=overwrite, exps_path=exps_path)
 
@@ -679,8 +662,7 @@ def run_cnn(
     metrics = evaluate_model(
         model,
         test_loader,
-        theta=dataset["theta"],
-        phi=dataset["phi"],
+        dataset_path,
         device=device,
         num_examples=5,
         save_dir=exp_path,
@@ -691,6 +673,29 @@ def run_cnn(
     metrics_path = exp_path / "metrics.json"
     metrics_path.write_text(metrics_json)
     print(f"Metrics saved to {metrics_path}")
+
+
+def create_dataloaders(dataset_path: Path, batch_size: int):
+    # Load dataset
+    print(f"Loading dataset from {dataset_path}")
+    dataset = load_dataset(dataset_path)
+
+    patterns, labels = dataset["patterns"], dataset["labels"]
+
+    patterns[patterns < 0] = 0  # Set negative values to 0
+    patterns = patterns / 20  # Normalize
+
+    # Split data into train, validation, and test sets
+    ds = RadiationPatternDataset(patterns, labels)
+    gen = torch.Generator().manual_seed(42)
+    train_ds, val_ds, test_ds = random_split(ds, [0.8, 0.1, 0.1], generator=gen)
+
+    # Create dataloaders
+    train_loader = DataLoader(train_ds, batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size, shuffle=False, num_workers=2)
+    test_loader = DataLoader(test_ds, batch_size, shuffle=False, num_workers=2)
+
+    return train_loader, val_loader, test_loader
 
 
 @app.command()
