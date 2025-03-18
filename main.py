@@ -619,7 +619,7 @@ def run_cnn(
 
     train_loader, val_loader, test_loader = create_dataloaders(dataset_path, batch_size)
 
-    model = PhaseShiftModel(conv_channels=[32, 64, 128, 256], fc_units=[1024, 512])
+    model = PhaseShiftModel()
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total model parameters: {total_params:,}")
@@ -628,6 +628,10 @@ def run_cnn(
     criterion = cosine_angular_loss_torch
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+    # optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    #     optimizer, mode="min", factor=0.5, patience=5
+    # )
 
     # Train model
     print("Starting training...")
