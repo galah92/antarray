@@ -1,10 +1,10 @@
 from pathlib import Path
-import numpy as np
-import matplotlib.pyplot as plt
 
+import matplotlib.pyplot as plt
+import numpy as np
 from CSXCAD import ContinuousStructure
 from openEMS import openEMS
-from openEMS.physical_constants import EPS0, C0
+from openEMS.physical_constants import C0, EPS0
 
 ### General parameter setup
 filename = Path(__file__).stem
