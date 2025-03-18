@@ -1,4 +1,5 @@
 import pickle
+import subprocess as sp
 import time
 from pathlib import Path
 
@@ -900,6 +901,22 @@ def analyze_knn_beams():
 
 def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray):
     return np.mean(1 - np.cos(inputs - targets))
+
+
+@app.command()
+def simulate(sim_path: str = "antenna_array.py"):
+    image_name = "openems-image"
+
+    cmd = f"""
+	docker run -it --rm \
+		-e DISPLAY=host.docker.internal:0 \
+		-v /tmp/.X11-unix:/tmp/.X11-unix \
+		-v ./src:/app/ \
+		-v /tmp:/tmp/ \
+		{image_name} \
+		python3 /app/{sim_path}
+	"""
+    sp.run(cmd, shell=True)
 
 
 if __name__ == "__main__":
