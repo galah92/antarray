@@ -27,9 +27,9 @@ app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 class RadiationPatternDataset(Dataset):
     def __init__(self, patterns, phase_shifts, transform=None):
         # Radiation patterns with shape (n_samples, n_phi, n_theta)
-        self.patterns = patterns
+        self.patterns = torch.from_numpy(patterns)
         # Phase shift matrices with shape (n_samples, xn, yn)
-        self.phase_shifts = phase_shifts
+        self.phase_shifts = torch.from_numpy(phase_shifts)
         # Optional transform to be applied to the patterns
         self.transform = transform
 
@@ -39,10 +39,6 @@ class RadiationPatternDataset(Dataset):
     def __getitem__(self, idx):
         pattern = self.patterns[idx]
         phase_shift = self.phase_shifts[idx]
-
-        # Convert to PyTorch tensors
-        pattern = torch.tensor(pattern, dtype=torch.float32)
-        phase_shift = torch.tensor(phase_shift, dtype=torch.float32)
 
         # Expand dims to create a channel dimension for the CNN
         pattern = pattern.unsqueeze(0)  # Shape becomes (1, n_phi, n_theta)
