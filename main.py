@@ -113,9 +113,6 @@ class PhaseShiftModel(nn.Module):
         return x
 
 
-import torch.nn.functional as F
-
-
 class PhaseShiftPredictor(nn.Module):
     def __init__(self):
         super().__init__()
@@ -209,11 +206,6 @@ class LargePhaseShiftPredictor(nn.Module):
         x = self.fc2(x)
 
         return x.view(-1, 16, 16)  # Output shape: (batch, 16, 16) for phase shifts
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 
 class ResNetBlock(nn.Module):
