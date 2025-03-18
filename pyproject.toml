@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "h5py>=3.12.1",
+    "h5py>=3.13.0",
     "ipykernel>=6.29.5",
     "matplotlib>=3.10.0",
     "numpy>=2.2.2",
