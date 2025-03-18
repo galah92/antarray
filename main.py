@@ -691,9 +691,6 @@ def run_cnn(
     metrics_path = exp_path / "metrics.json"
     metrics_path.write_text(metrics_json)
     print(f"Metrics saved to {metrics_path}")
-    print(metrics_json)
-
-    return model, history, metrics
 
 
 @app.command()
