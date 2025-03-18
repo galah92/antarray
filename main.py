@@ -308,10 +308,12 @@ def train_model(
     scheduler=None,
     early_stopper: EarlyStopper | None = None,
     n_epochs=25,
-    device="cuda",
     log_interval=10,
     clip_grad=1.0,
 ):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
     since = time.time()
     history = {"train_loss": [], "val_loss": [], "lr": []}
 
@@ -417,10 +419,11 @@ def evaluate_model(
     model,
     test_loader,
     dataset_path: Path,
-    device="cuda",
     num_examples=5,
     save_dir=None,
 ):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     model.eval()
     all_preds = []
     all_targets = []
@@ -614,9 +617,6 @@ def run_cnn(
     exp_path = exps_path / experiment
     exp_path.mkdir(exist_ok=overwrite, parents=True)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-
     train_loader, val_loader, test_loader = create_dataloaders(dataset_path, batch_size)
 
     model = PhaseShiftModel(conv_channels=[32, 64, 128, 256], fc_units=[1024, 512])
@@ -640,7 +640,6 @@ def run_cnn(
         scheduler=scheduler,
         early_stopper=EarlyStopper(patience=5, min_delta=1e-4),
         n_epochs=n_epochs,
-        device=device,
     )
 
     # Save model
@@ -663,7 +662,6 @@ def run_cnn(
         model,
         test_loader,
         dataset_path,
-        device=device,
         num_examples=5,
         save_dir=exp_path,
     )
