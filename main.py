@@ -6,6 +6,7 @@ from pathlib import Path
 
 import h5py
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
 import numpy as np
 import torch
 import torch.nn as nn
@@ -586,47 +587,8 @@ def compare_phase_shifts(
         fig.savefig(filepath, dpi=600, bbox_inches="tight")
 
 
-def visualize_training_history(history, save_path=None):
-    """
-    Visualize training history and optionally save the plot.
-
-    Parameters:
-    -----------
-    history : dict
-        Dictionary containing training history
-    save_path : str or Path, optional
-        Path to save the plot. If None, plot will be shown.
-    """
-    # Create subplots
-    fig, axs = plt.subplots(2, 1, figsize=(10, 10))
-
-    # Plot training and validation loss
-    epochs = range(1, len(history["train_loss"]) + 1)
-    axs[0].plot(epochs, history["train_loss"], "b-", label="Training Loss")
-    axs[0].plot(epochs, history["val_loss"], "r-", label="Validation Loss")
-    axs[0].set_title("Training and Validation Loss")
-    axs[0].set_xlabel("Epochs")
-    axs[0].set_ylabel("Loss")
-    axs[0].legend()
-    axs[0].grid(True)
-
-    # Plot learning rate
-    if "lr" in history and history["lr"]:
-        axs[1].plot(epochs, history["lr"], "g-")
-        axs[1].set_title("Learning Rate")
-        axs[1].set_xlabel("Epochs")
-        axs[1].set_ylabel("Learning Rate")
-        axs[1].grid(True)
-
-    fig.set_tight_layout(True)
-
-    if save_path:
-        # Ensure the directory exists
-        save_path = Path(save_path)
-        save_path.parent.mkdir(exist_ok=True, parents=True)
-        fig.savefig(save_path, dpi=300, bbox_inches="tight")
-        print(f"Training history plot saved to {save_path}")
-
+DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
+DEFAULT_OUTPUT_DIR: Path = Path.cwd() / "experiments"
 
 DEFAULT_MODELS_DIR = Path.cwd() / "experiments"
 DEFAULT_MODELS_DIR.mkdir(exist_ok=True, parents=True)
@@ -634,7 +596,54 @@ DEFAULT_MODEL_PATH = DEFAULT_MODELS_DIR / "phase_shift_prediction_model.pth"
 
 DEFAULT_DATA_DIR = Path.cwd() / "dataset"
 DEFAULT_DATA_DIR.mkdir(exist_ok=True, parents=True)
-DEFAULT_DATASET_PATH = DEFAULT_DATA_DIR / "rand_bf_2d.h5"
+DEFAULT_DAET_PATH = DEFAULT_DATA_DIR / "rand_bf_2d.h5"
+
+
+@app.command()
+def plot_training(
+    experiment: str,
+    overwrite: bool = False,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+):
+    exp_path = output_dir / experiment
+
+    save_path = exp_path / "training_history.png"
+    if save_path.exists() and not overwrite:
+        raise Exception(f"Training history plot already exists at {save_path}")
+
+    model_path = exp_path / "phase_shift_prediction_model.pth"
+    history = torch.load(model_path)["history"]
+
+    fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+
+    xticks = range(0, 100 + 1, 10)
+    yticks = np.arange(0, 1 + 0.1, 0.1)
+
+    axs[0].plot(history["train_loss"], "b-", label="Training Loss")
+    axs[0].plot(history["val_loss"], "r-", label="Validation Loss")
+    axs[0].set_xlim(xticks[0], xticks[-1])
+    axs[0].set_xticks(xticks)
+    axs[0].set_ylim(yticks[0], yticks[-1])
+    axs[0].set_yticks(yticks)
+    axs[0].set_title("Training and Validation Loss")
+    axs[0].set_xlabel("Epochs")
+    axs[0].set_ylabel("Loss")
+    axs[0].legend()
+    axs[0].grid(True)
+
+    if "lr" in history and history["lr"]:
+        axs[1].plot(history["lr"], "g-")
+        axs[1].set_xlim(xticks[0], xticks[-1])
+        axs[1].set_xticks(xticks)
+        axs[1].yaxis.set_major_formatter(FormatStrFormatter("%.1e"))
+        axs[1].set_title("Learning Rate")
+        axs[1].set_xlabel("Epochs")
+        axs[1].set_ylabel("Learning Rate")
+        axs[1].grid(True)
+
+    fig.set_tight_layout(True)
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Training history plot saved to {save_path}")
 
 
 @app.command()
@@ -668,10 +677,6 @@ def pred_beamforming(
     title = (f"Prediction Example {idx} (θ={theta_steer:.1f}°, φ={phi_steer:.1f}°)",)
     filepath = (f"prediction_example_{idx}_t{theta_steer}_p{phi_steer}.png",)
     compare_phase_shifts(output, label, theta, phi, title, filepath)
-
-
-DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
-DEFAULT_OUTPUT_DIR: Path = Path.cwd() / "experiments"
 
 
 @app.command()
@@ -748,8 +753,7 @@ def run_cnn(
     )
     print(f"Model saved to {model_save_path}")
 
-    # Visualize and save training history
-    visualize_training_history(history, save_path=output_path / "training_history.png")
+    plot_training(experiment, overwrite=overwrite, output_dir=output_dir)
 
     # Evaluate model and save prediction examples
     print("Evaluating model on test set...")
