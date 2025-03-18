@@ -513,30 +513,23 @@ def compare_phase_shifts(
 
 
 DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
-DEFAULT_OUTPUT_DIR: Path = Path.cwd() / "experiments"
-
-DEFAULT_MODELS_DIR = Path.cwd() / "experiments"
-DEFAULT_MODELS_DIR.mkdir(exist_ok=True, parents=True)
-DEFAULT_MODEL_PATH = DEFAULT_MODELS_DIR / "phase_shift_prediction_model.pth"
-
-DEFAULT_DATA_DIR = Path.cwd() / "dataset"
-DEFAULT_DATA_DIR.mkdir(exist_ok=True, parents=True)
-DEFAULT_DAET_PATH = DEFAULT_DATA_DIR / "rand_bf_2d.h5"
+DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
+DEFAULT_MODEL_NAME = "model.pth"
 
 
 @app.command()
 def plot_training(
     experiment: str,
+    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
     overwrite: bool = False,
-    output_dir: Path = DEFAULT_OUTPUT_DIR,
 ):
-    exp_path = output_dir / experiment
+    exp_path = exps_path / experiment
 
     save_path = exp_path / "training_history.png"
     if save_path.exists() and not overwrite:
         raise Exception(f"Training history plot already exists at {save_path}")
 
-    model_path = exp_path / "phase_shift_prediction_model.pth"
+    model_path = exp_path / DEFAULT_MODEL_NAME
     history = torch.load(model_path)["history"]
 
     fig, axs = plt.subplots(1, 2, figsize=(10, 5))
@@ -573,10 +566,11 @@ def plot_training(
 
 @app.command()
 def pred_beamforming(
+    experiment: str,
     theta_steer: int = 0,
     phi_steer: int = 0,
     dataset_path: Path = DEFAULT_DATASET_PATH,
-    model_path: Path = DEFAULT_MODEL_PATH,
+    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
 ):
     dataset = load_dataset(dataset_path)
     patterns, labels = dataset["patterns"], dataset["labels"]
@@ -591,7 +585,7 @@ def pred_beamforming(
     pattern = pattern / 20  # Normalize
     label = labels[idx]
 
-    checkpoint = torch.load(model_path)
+    checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
     model = PhaseShiftModel()
     model.load_state_dict(checkpoint["model_state_dict"])
 
@@ -609,13 +603,13 @@ def run_cnn(
     experiment: str,
     overwrite: bool = False,
     dataset_path: Path = DEFAULT_DATASET_PATH,
-    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
     batch_size: int = 128,
     n_epochs: int = 100,
     lr: float = 1e-4,
 ):
-    output_path = output_dir / experiment
-    output_path.mkdir(exist_ok=overwrite, parents=True)
+    exp_path = exps_path / experiment
+    exp_path.mkdir(exist_ok=overwrite, parents=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -667,7 +661,7 @@ def run_cnn(
     )
 
     # Save model
-    model_save_path = output_path / "phase_shift_prediction_model.pth"
+    model_save_path = exp_path / DEFAULT_MODEL_NAME
     torch.save(
         {
             "model_state_dict": model.state_dict(),
@@ -678,7 +672,7 @@ def run_cnn(
     )
     print(f"Model saved to {model_save_path}")
 
-    plot_training(experiment, overwrite=overwrite, output_dir=output_dir)
+    plot_training(experiment, overwrite=overwrite, exps_path=exps_path)
 
     # Evaluate model and save prediction examples
     print("Evaluating model on test set...")
@@ -689,12 +683,12 @@ def run_cnn(
         phi=dataset["phi"],
         device=device,
         num_examples=5,
-        save_dir=output_path,
+        save_dir=exp_path,
     )
 
     # Save metrics
     metrics_json = json.dumps(metrics, indent=4)
-    metrics_path = output_path / "metrics.json"
+    metrics_path = exp_path / "metrics.json"
     metrics_path.write_text(metrics_json)
     print(f"Metrics saved to {metrics_path}")
     print(metrics_json)
@@ -707,11 +701,11 @@ def run_knn(
     experiment: str,
     overwrite: bool = False,
     dataset_path: Path = DEFAULT_DATASET_PATH,
-    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
     n_neighbors: int = 5,
 ):
-    output_path = output_dir / experiment
-    output_path.mkdir(exist_ok=overwrite, parents=True)
+    exp_path = exps_path / experiment
+    exp_path.mkdir(exist_ok=overwrite, parents=True)
 
     # Load dataset
     print(f"Loading dataset from {dataset_path}")
@@ -758,7 +752,7 @@ def run_knn(
     print(f"Val loss: {loss:.4f}")
 
     # save y_pred to h5 file
-    with h5py.File(output_path / "knn_pred.h5", "w") as h5f:
+    with h5py.File(exp_path / "knn_pred.h5", "w") as h5f:
         h5f.create_dataset("y_pred", data=y_pred)
         h5f.create_dataset("y_test", data=y_test)
         h5f.create_dataset("loss", data=loss)
@@ -767,15 +761,15 @@ def run_knn(
         h5f.create_dataset("phi", data=phi)
 
     mode = "wb" if overwrite else "xb"
-    with (output_path / "knn_model.pkl").open(mode) as f:
+    with (exp_path / "knn_model.pkl").open(mode) as f:
         pickle.dump(knn, f)
 
 
 @app.command()
 def analyze_knn_pred(idx: int | None = None):
-    output_dir = Path.cwd() / "experiments"
+    exps_path = Path.cwd() / "experiments"
 
-    with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
+    with h5py.File(exps_path / "knn_pred.h5", "r") as h5f:
         y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
         y_test = h5f["y_test"][:].reshape(-1, 16, 16)
         steering_info = h5f["steering_info"][:]
@@ -793,7 +787,7 @@ def analyze_knn_pred(idx: int | None = None):
 
     loss = cosine_angular_loss_np(pred, test)
     title = f"Prediction Example {idx}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)"
-    filepath = output_dir / f"knn_pred_example_{idx}.png"
+    filepath = exps_path / f"knn_pred_example_{idx}.png"
     compare_phase_shifts(pred, test, theta, phi, title, filepath)
 
     print(f"Prediction example saved to {filepath}")
@@ -801,8 +795,8 @@ def analyze_knn_pred(idx: int | None = None):
 
 @app.command()
 def analyze_knn_beams():
-    output_dir = Path.cwd() / "experiments"
-    with h5py.File(output_dir / "knn_pred.h5", "r") as h5f:
+    exps_path = Path.cwd() / "experiments"
+    with h5py.File(exps_path / "knn_pred.h5", "r") as h5f:
         steer = h5f["steering_info"][:]
 
     theta_steer = steer[:, 0]
