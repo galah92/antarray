@@ -6,13 +6,13 @@ from pathlib import Path
 
 import h5py
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FormatStrFormatter
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import typer
+from matplotlib.ticker import FormatStrFormatter
 from sklearn import neighbors
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, random_split
