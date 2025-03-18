@@ -25,25 +25,12 @@ app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 
 class RadiationPatternDataset(Dataset):
-    """
-    PyTorch Dataset for radiation patterns and phase shifts.
-    """
-
     def __init__(self, patterns, phase_shifts, transform=None):
-        """
-        Initialize dataset.
-
-        Parameters:
-        -----------
-        patterns : numpy.ndarray
-            Radiation patterns with shape (n_samples, n_phi, n_theta)
-        phase_shifts : numpy.ndarray
-            Phase shift matrices with shape (n_samples, xn, yn)
-        transform : callable, optional
-            Optional transform to be applied to the patterns
-        """
+        # Radiation patterns with shape (n_samples, n_phi, n_theta)
         self.patterns = patterns
+        # Phase shift matrices with shape (n_samples, xn, yn)
         self.phase_shifts = phase_shifts
+        # Optional transform to be applied to the patterns
         self.transform = transform
 
     def __len__(self):
@@ -329,39 +316,6 @@ def train_model(
     log_interval=10,
     clip_grad=1.0,
 ):
-    """
-    Train the model.
-
-    Parameters:
-    -----------
-    model : nn.Module
-        The PyTorch model to train
-    train_loader : DataLoader
-        DataLoader for training data
-    val_loader : DataLoader
-        DataLoader for validation data
-    criterion : nn.Module
-        Loss function
-    optimizer : torch.optim
-        Optimizer
-    scheduler : torch.optim.lr_scheduler, optional
-        Learning rate scheduler
-    n_epochs : int
-        Number of epochs to train
-    device : str
-        Device to use for training ('cuda' or 'cpu')
-    log_interval : int
-        How often to log progress
-    clip_grad : float, optional
-        Maximum norm of the gradients for clipping
-
-    Returns:
-    --------
-    model : nn.Module
-        Trained model
-    history : dict
-        Training history
-    """
     since = time.time()
     history = {"train_loss": [], "val_loss": [], "lr": []}
 
@@ -468,27 +422,6 @@ def evaluate_model(
     num_examples=5,
     save_dir=None,
 ):
-    """
-    Evaluate the model and visualize results.
-
-    Parameters:
-    -----------
-    model : nn.Module
-        Trained PyTorch model
-    test_loader : DataLoader
-        DataLoader for test data
-    device : str
-        Device to use ('cuda' or 'cpu')
-    num_examples : int
-        Number of examples to visualize
-    save_dir : str or Path, optional
-        Directory to save visualization plots
-
-    Returns:
-    --------
-    metrics : dict
-        Evaluation metrics
-    """
     model.eval()
     all_preds = []
     all_targets = []
