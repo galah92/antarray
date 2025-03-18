@@ -1,3 +1,4 @@
+import json
 import pickle
 import subprocess as sp
 import time
@@ -531,11 +532,6 @@ def evaluate_model(
         "rmse": np.sqrt(mse),
     }
 
-    print("Evaluation Metrics:")
-    print(f"MSE: {mse:.4f}")
-    print(f"MAE: {mae:.4f}")
-    print(f"RMSE: {metrics['rmse']:.4f}")
-
     # Visualize a few examples
     if num_examples > 0:
         indices = np.random.choice(len(all_preds), num_examples, replace=False)
@@ -768,11 +764,11 @@ def run_cnn(
     )
 
     # Save metrics
-    metrics_path = output_path / "metrics.txt"
-    with open(metrics_path, "w") as f:
-        for key, value in metrics.items():
-            f.write(f"{key}: {value}\n")
+    metrics_json = json.dumps(metrics, indent=4)
+    metrics_path = output_path / "metrics.json"
+    metrics_path.write_text(metrics_json)
     print(f"Metrics saved to {metrics_path}")
+    print(metrics_json)
 
     return model, history, metrics
 
