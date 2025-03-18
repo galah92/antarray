@@ -320,91 +320,95 @@ def train_model(
     best_val_loss = float("inf")
     best_model_wts = None
 
-    for epoch in range(n_epochs):
-        print(f"Epoch {epoch + 1}/{n_epochs} lr={scheduler.get_last_lr()[0]}")
-        print("-" * 10)
+    try:
+        for epoch in range(n_epochs):
+            print(f"Epoch {epoch + 1}/{n_epochs} lr={scheduler.get_last_lr()[0]}")
+            print("-" * 10)
 
-        # Each epoch has a training and validation phase
-        for phase in ["train", "val"]:
-            if phase == "train":
-                model.train()  # Set model to training mode
-                dataloader = train_loader
-            else:
-                model.eval()  # Set model to evaluate mode
-                dataloader = val_loader
+            # Each epoch has a training and validation phase
+            for phase in ["train", "val"]:
+                if phase == "train":
+                    model.train()  # Set model to training mode
+                    dataloader = train_loader
+                else:
+                    model.eval()  # Set model to evaluate mode
+                    dataloader = val_loader
 
-            running_loss = 0.0
+                running_loss = 0.0
 
-            # Iterate over data
-            for i, (inputs, targets) in enumerate(dataloader):
-                inputs = inputs.to(device)
-                targets = targets.to(device)
+                # Iterate over data
+                for i, (inputs, targets) in enumerate(dataloader):
+                    inputs = inputs.to(device)
+                    targets = targets.to(device)
 
-                # Zero the parameter gradients
-                optimizer.zero_grad()
+                    # Zero the parameter gradients
+                    optimizer.zero_grad()
 
-                # Forward pass
-                # Track history only in train phase
-                with torch.set_grad_enabled(phase == "train"):
-                    outputs = model(inputs)
-                    loss = criterion(outputs, targets)
+                    # Forward pass
+                    # Track history only in train phase
+                    with torch.set_grad_enabled(phase == "train"):
+                        outputs = model(inputs)
+                        loss = criterion(outputs, targets)
 
-                    # Backward + optimize only in training phase
-                    if phase == "train":
-                        loss.backward()
-                        # Clip gradients
-                        if clip_grad is not None:
-                            torch.nn.utils.clip_grad_norm_(
-                                model.parameters(), clip_grad
-                            )
-                        optimizer.step()
+                        # Backward + optimize only in training phase
+                        if phase == "train":
+                            loss.backward()
+                            # Clip gradients
+                            if clip_grad is not None:
+                                torch.nn.utils.clip_grad_norm_(
+                                    model.parameters(), clip_grad
+                                )
+                            optimizer.step()
 
-                # Statistics
-                running_loss += loss.item() * inputs.size(0)
+                    # Statistics
+                    running_loss += loss.item() * inputs.size(0)
 
-                # Print progress
-                if phase == "train" and i % log_interval == 0:
-                    print(f"Batch {i}/{len(dataloader)}, Loss: {loss.item():.4f}")
+                    # Print progress
+                    if phase == "train" and i % log_interval == 0:
+                        print(f"Batch {i}/{len(dataloader)}, Loss: {loss.item():.4f}")
 
-            epoch_loss = running_loss / len(dataloader.dataset)
+                epoch_loss = running_loss / len(dataloader.dataset)
 
-            # Print epoch results
-            print(f"{phase} Loss: {epoch_loss:.4f}")
+                # Print epoch results
+                print(f"{phase} Loss: {epoch_loss:.4f}")
 
-            # Store history
-            if phase == "train":
-                history["train_loss"].append(epoch_loss)
-                if scheduler:
-                    history["lr"].append(scheduler.get_last_lr()[0])
-            else:
-                history["val_loss"].append(epoch_loss)
+                # Store history
+                if phase == "train":
+                    history["train_loss"].append(epoch_loss)
+                    if scheduler:
+                        history["lr"].append(scheduler.get_last_lr()[0])
+                else:
+                    history["val_loss"].append(epoch_loss)
 
-                # Save best model
-                if epoch_loss < best_val_loss:
-                    best_val_loss = epoch_loss
-                    best_model_wts = model.state_dict().copy()
+                    # Save best model
+                    if epoch_loss < best_val_loss:
+                        best_val_loss = epoch_loss
+                        best_model_wts = model.state_dict().copy()
 
-        if early_stopper is not None:
-            if early_stopper.early_stop(history["val_loss"][-1]):
-                print("Early stopping...")
-                break
+            if early_stopper is not None:
+                if early_stopper.early_stop(history["val_loss"][-1]):
+                    print("Early stopping...")
+                    break
 
-        # Step the scheduler
-        if scheduler:
-            if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler.step(history["val_loss"][-1])  # Pass the validation loss
-            else:
-                scheduler.step()
+            # Step the scheduler
+            if scheduler:
+                if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    scheduler.step(history["val_loss"][-1])  # Pass the validation loss
+                else:
+                    scheduler.step()
 
-        print()
+            print()
 
-    # Load best model weights
-    if best_model_wts:
-        model.load_state_dict(best_model_wts)
+    except KeyboardInterrupt:
+        print("Training interrupted by user...")
+    finally:
+        # Load best model weights
+        if best_model_wts:
+            model.load_state_dict(best_model_wts)
 
-    time_elapsed = time.time() - since
-    print(f"Training complete in {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s")
-    print(f"Best val loss: {best_val_loss:.4f}")
+        elapsed = time.time() - since
+        print(f"Training complete in {elapsed // 60:.0f}m {elapsed % 60:.0f}s")
+        print(f"Best val loss: {best_val_loss:.4f}")
 
     return model, history
 
@@ -449,9 +453,9 @@ def evaluate_model(
     mae = np.mean(np.abs(phase_diff))
 
     metrics = {
-        "mse": mse,
-        "mae": mae,
-        "rmse": np.sqrt(mse),
+        "mae": mae.item(),
+        "mse": mse.item(),
+        "rmse": np.sqrt(mse).item(),
     }
 
     # Visualize a few examples
