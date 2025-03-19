@@ -685,7 +685,7 @@ def create_dataloaders(dataset_path: Path, batch_size: int):
     patterns, labels = dataset["patterns"], dataset["labels"]
 
     patterns[patterns < 0] = 0  # Set negative values to 0
-    patterns = patterns / 20  # Normalize
+    patterns = patterns / 30  # Normalize
 
     # Split data into train, validation, and test sets
     ds = RadiationPatternDataset(patterns, labels)
@@ -724,7 +724,7 @@ def run_knn(
     labels = labels.reshape(labels.shape[0], -1)
 
     patterns[patterns < 0] = 0  # Set negative values to 0
-    patterns = patterns / 20  # Normalize
+    patterns = patterns / 30  # Normalize
 
     # Print dataset info
     print(f"Dataset loaded: {len(patterns)} samples")
