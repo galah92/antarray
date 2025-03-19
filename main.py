@@ -500,6 +500,7 @@ def pred_cnn(
     exp_path = exps_path / experiment
 
     _, _, test_loader = create_dataloaders(dataset_path, batch_size=128)
+    test_indices = test_loader.dataset.indices
 
     with h5py.File(dataset_path, "r") as h5f:
         theta = h5f["theta"][:]
@@ -533,8 +534,8 @@ def pred_cnn(
     indices = np.random.choice(len(all_preds), num_examples, replace=False)
 
     for idx in indices:
-        title = f"Prediction Example {idx}"
-        filepath = exp_path / f"prediction_example_{idx}.png"
+        title = f"Prediction Example {test_indices[idx]}"
+        filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
         pred, target = all_preds[idx], all_targets[idx]
         compare_phase_shifts(pred, target, theta, phi, title, filepath)
 
