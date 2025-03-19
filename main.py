@@ -21,6 +21,11 @@ import analyze
 import generate_dataset
 from generate_dataset import load_dataset
 
+DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
+DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
+DEFAULT_MODEL_NAME = "model.pth"
+
+
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 
@@ -484,6 +489,58 @@ def evaluate_model(
     return metrics
 
 
+@app.command()
+def pred_cnn(
+    experiment: str,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
+    num_examples: int = 5,
+):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    exp_path = exps_path / experiment
+
+    _, _, test_loader = create_dataloaders(dataset_path, batch_size=128)
+
+    with h5py.File(dataset_path, "r") as h5f:
+        theta = h5f["theta"][:]
+        phi = h5f["phi"][:]
+
+    checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
+    model = PhaseShiftModel()
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model = model.to(device)
+    model.eval()
+
+    all_preds = []
+    all_targets = []
+
+    with torch.no_grad():
+        for inputs, targets in test_loader:
+            inputs = inputs.to(device)
+            outputs = model(inputs)
+
+            # Move predictions to CPU for numpy conversion
+            preds = outputs.cpu().numpy()
+            targets = targets.numpy()
+
+            all_preds.append(preds)
+            all_targets.append(targets)
+
+    # Convert to numpy arrays
+    all_preds = np.vstack(all_preds)
+    all_targets = np.vstack(all_targets)
+
+    indices = np.random.choice(len(all_preds), num_examples, replace=False)
+
+    for idx in indices:
+        title = f"Prediction Example {idx}"
+        filepath = exp_path / f"prediction_example_{idx}.png"
+        pred, target = all_preds[idx], all_targets[idx]
+        compare_phase_shifts(pred, target, theta, phi, title, filepath)
+
+        print(f"Prediction example saved to {filepath}")
+
+
 def compare_phase_shifts(
     output,
     label,
@@ -521,11 +578,6 @@ def compare_phase_shifts(
 
     if filepath:
         fig.savefig(filepath, dpi=600, bbox_inches="tight")
-
-
-DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
-DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
-DEFAULT_MODEL_NAME = "model.pth"
 
 
 @app.command()
