@@ -401,19 +401,17 @@ def generate(
 
     # Check for grating lobes with the given parameters
     grating_info = check_grating_lobes(freq, dx, dy)
-    print("Array spacing check:")
-    print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
-    print(
-        f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
-    )
+    # print("Array spacing check:")
+    # print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
+    # print(
+    #     f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
+    # )
     if grating_info["has_grating_lobes"]:
         print("WARNING: Grating lobes will be visible when steering beyond:")
         if grating_info["dx_critical_angle"] is not None:
             print(f"  - {grating_info['dx_critical_angle']:.1f}° in the X direction")
         if grating_info["dy_critical_angle"] is not None:
             print(f"  - {grating_info['dy_critical_angle']:.1f}° in the Y direction")
-    else:
-        print("No grating lobes expected (element spacing <= λ/2)")
 
     # Load the single antenna pattern
     single_antenna_path = sim_dir_path / single_antenna_filename
@@ -648,19 +646,17 @@ def generate_beamforming(
 
     # Check for grating lobes with the given parameters
     grating_info = check_grating_lobes(freq, dx, dy)
-    print("Array spacing check:")
-    print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
-    print(
-        f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
-    )
+    # print("Array spacing check:")
+    # print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
+    # print(
+    #     f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
+    # )
     if grating_info["has_grating_lobes"]:
         print("WARNING: Grating lobes will be visible when steering beyond:")
         if grating_info["dx_critical_angle"] is not None:
             print(f"  - {grating_info['dx_critical_angle']:.1f}° in the X direction")
         if grating_info["dy_critical_angle"] is not None:
             print(f"  - {grating_info['dy_critical_angle']:.1f}° in the Y direction")
-    else:
-        print("No grating lobes expected (element spacing <= λ/2)")
 
     # Load the single antenna pattern
     single_antenna_path = sim_dir_path / single_antenna_filename
@@ -782,19 +778,17 @@ def ff_from_phase_shifts(
 
     # Check for grating lobes with the given parameters
     grating_info = check_grating_lobes(freq, dx, dy)
-    print("Array spacing check:")
-    print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
-    print(
-        f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
-    )
+    # print("Array spacing check:")
+    # print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
+    # print(
+    #     f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
+    # )
     if grating_info["has_grating_lobes"]:
         print("WARNING: Grating lobes will be visible when steering beyond:")
         if grating_info["dx_critical_angle"] is not None:
             print(f"  - {grating_info['dx_critical_angle']:.1f}° in the X direction")
         if grating_info["dy_critical_angle"] is not None:
             print(f"  - {grating_info['dy_critical_angle']:.1f}° in the Y direction")
-    else:
-        print("No grating lobes expected (element spacing <= λ/2)")
 
     # Load the single antenna pattern
     single_antenna_path = sim_dir_path / single_antenna_filename
