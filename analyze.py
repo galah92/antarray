@@ -430,13 +430,13 @@ def plot_ff_2d(
 
     theta_deg, phi_deg = np.rad2deg(theta), np.rad2deg(phi)
     extent = [np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg)]
-    im = ax.imshow(pattern, extent=extent, aspect="auto", origin="lower")
+    im = ax.imshow(pattern, extent=extent, origin="lower")
     ax.set_xlabel("Theta (degrees)")
     ax.set_ylabel("Phi (degrees)")
     ax.set_title(title)
 
     if colorbar:
-        ax.get_figure().colorbar(im, label="Normalized Dbi")
+        ax.get_figure().colorbar(im, fraction=0.046, pad=0.04, label="Normalized Dbi")
 
 
 def plot_phase_shifts(
@@ -453,7 +453,6 @@ def plot_phase_shifts(
         np.rad2deg(phase_shifts_clipped),
         cmap="twilight_shifted",  # Cyclic colormap for phase values
         origin="lower",
-        aspect="auto",
         vmin=-180,
         vmax=180,
     )
@@ -462,4 +461,4 @@ def plot_phase_shifts(
     ax.set_title(title)
 
     if colorbar:
-        ax.get_figure().colorbar(im, label="Degrees")
+        ax.get_figure().colorbar(im, fraction=0.046, pad=0.04, label="Degrees")
