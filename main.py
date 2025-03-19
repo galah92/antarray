@@ -505,6 +505,10 @@ def pred_cnn(
     with h5py.File(dataset_path, "r") as h5f:
         theta = h5f["theta"][:]
         phi = h5f["phi"][:]
+        steering_info = h5f["steering_info"][:]
+        labels = h5f["labels"][:]
+
+    labels = labels[test_indices]
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
     model = PhaseShiftModel()
@@ -513,30 +517,34 @@ def pred_cnn(
     model.eval()
 
     all_preds = []
-    all_targets = []
 
     with torch.no_grad():
-        for inputs, targets in test_loader:
+        for inputs, _ in test_loader:
             inputs = inputs.to(device)
             outputs = model(inputs)
 
             # Move predictions to CPU for numpy conversion
             preds = outputs.cpu().numpy()
-            targets = targets.numpy()
 
             all_preds.append(preds)
-            all_targets.append(targets)
 
     # Convert to numpy arrays
     all_preds = np.vstack(all_preds)
-    all_targets = np.vstack(all_targets)
+    all_targets = labels
 
-    indices = np.random.choice(len(all_preds), num_examples, replace=False)
+    rand_indices = np.random.choice(len(all_preds), num_examples, replace=False)
 
-    for idx in indices:
-        title = f"Prediction Example {test_indices[idx]}"
-        filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
+    for idx in rand_indices:
         pred, target = all_preds[idx], all_targets[idx]
+
+        thetas_s, phis_s = steering_info[test_indices[idx]]
+        thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
+        thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
+        phis_s = np.array2string(phis_s, precision=2, separator=", ")
+
+        loss = cosine_angular_loss_np(pred, target)
+        title = f"Prediction Example {idx}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)"
+        filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
         compare_phase_shifts(pred, target, theta, phi, title, filepath)
 
         print(f"Prediction example saved to {filepath}")
@@ -559,17 +567,17 @@ def compare_phase_shifts(
     # diff = np.arctan2(np.sin(output - label), np.cos(output - label))
     analyze.plot_phase_shifts(diff, title="Phase Shift Error", ax=axs[0, 2])
 
-    label_ff = generate_dataset.ff_from_phase_shifts(output)
+    label_ff = generate_dataset.ff_from_phase_shifts(label)
     axs[1, 0].remove()
     axs[1, 0] = fig.add_subplot(2, 3, 4, projection="3d")
-    title = "Ground Truth Far Field Pattern"
-    analyze.plot_ff_3d(theta, phi, label_ff, title=title, ax=axs[1, 0])
+    title_gt = "Ground Truth Far Field Pattern"
+    analyze.plot_ff_3d(theta, phi, label_ff, title=title_gt, ax=axs[1, 0])
 
-    output_ff = generate_dataset.ff_from_phase_shifts(label)
+    output_ff = generate_dataset.ff_from_phase_shifts(output)
     axs[1, 1].remove()
     axs[1, 1] = fig.add_subplot(2, 3, 5, projection="3d")
-    title = "Predicted Far Field Pattern"
-    analyze.plot_ff_3d(theta, phi, output_ff, title=title, ax=axs[1, 1])
+    title_pred = "Predicted Far Field Pattern"
+    analyze.plot_ff_3d(theta, phi, output_ff, title=title_pred, ax=axs[1, 1])
 
     axs[1, 2].remove()
 
