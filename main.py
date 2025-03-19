@@ -642,7 +642,7 @@ def run_cnn(
         criterion,
         optimizer,
         scheduler=scheduler,
-        early_stopper=EarlyStopper(patience=5, min_delta=1e-4),
+        early_stopper=EarlyStopper(patience=10, min_delta=1e-4),
         n_epochs=n_epochs,
     )
 
