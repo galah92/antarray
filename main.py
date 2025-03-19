@@ -43,6 +43,9 @@ class RadiationPatternDataset(Dataset):
         # Expand dims to create a channel dimension for the CNN
         pattern = pattern.unsqueeze(0)  # Shape becomes (1, n_phi, n_theta)
 
+        # Normalize to [-1, 1]
+        phase_shift = phase_shift / torch.pi
+
         if self.transform:
             pattern = self.transform(pattern)
 
@@ -92,6 +95,8 @@ class PhaseShiftModel(nn.Module):
     def forward(self, x):
         x = self.conv(x)
         x = self.fc(x)
+        x = torch.tanh(x)  # For output range [-1, 1]
+        x = x * torch.pi  # Scale to [-pi, pi]
         x = x.view(-1, *self.out_shape)
         return x
 
