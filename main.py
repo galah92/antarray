@@ -532,8 +532,8 @@ def run_model(
     print(f"Total model parameters: {total_params:,}")
 
     # Define loss function and optimizer
-    criterion = cosine_angular_loss_torch
-    # criterion = circular_mse_loss_torch
+    # criterion = cosine_angular_loss_torch
+    criterion = circular_mse_loss_torch
 
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     # optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
