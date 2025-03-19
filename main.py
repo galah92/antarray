@@ -48,9 +48,6 @@ class RadiationPatternDataset(Dataset):
         # Expand dims to create a channel dimension for the CNN
         pattern = pattern.unsqueeze(0)  # Shape becomes (1, n_phi, n_theta)
 
-        # Normalize to [-1, 1]
-        phase_shift = phase_shift / torch.pi
-
         if self.transform:
             pattern = self.transform(pattern)
 
@@ -139,11 +136,14 @@ class PhaseShiftPredictor(nn.Module):
         return x.view(-1, 16, 16)  # Output shape: (batch, 16, 16) for phase shifts
 
 
-def cosine_angular_loss_torch(
-    inputs: torch.Tensor,
-    targets: torch.Tensor,
-) -> torch.Tensor:
+def cosine_angular_loss_torch(inputs: torch.Tensor, targets: torch.Tensor):
     return torch.mean(1 - torch.cos(inputs - targets))
+
+
+def circular_mse_loss_torch(pred: torch.Tensor, target: torch.Tensor):
+    diff = torch.abs(pred - target)
+    circular_diff = torch.min(diff, 2 * torch.pi - diff)
+    return torch.mean(circular_diff**2)
 
 
 class EarlyStopper:
@@ -280,12 +280,10 @@ def train_model(
     return model, history
 
 
-def evaluate_model(
+def eval_model(
     model,
     test_loader,
-    dataset_path: Path,
-    num_examples=5,
-    save_dir=None,
+    exp_path: Path,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -325,27 +323,14 @@ def evaluate_model(
         "rmse": np.sqrt(mse).item(),
     }
 
-    with h5py.File(dataset_path, "r") as h5f:
-        theta = h5f["theta"][:]
-        phi = h5f["phi"][:]
-
-    # Visualize a few examples
-    if num_examples > 0:
-        indices = np.random.choice(len(all_preds), num_examples, replace=False)
-
-        for idx in indices:
-            title = f"Prediction Example {idx}"
-            filepath = save_dir / f"prediction_example_{idx}.png"
-            pred, target = all_preds[idx], all_targets[idx]
-            compare_phase_shifts(pred, target, theta, phi, title, filepath)
-
-            print(f"Prediction example saved to {filepath}")
-
-    return metrics
+    metrics_json = json.dumps(metrics, indent=4)
+    metrics_path = exp_path / "metrics.json"
+    metrics_path.write_text(metrics_json)
+    print(f"Metrics saved to {metrics_path}")
 
 
 @app.command()
-def pred_cnn(
+def pred_model(
     experiment: str,
     dataset_path: Path = DEFAULT_DATASET_PATH,
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
@@ -354,16 +339,13 @@ def pred_cnn(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     exp_path = exps_path / experiment
 
-    _, _, test_loader = create_dataloaders(dataset_path, batch_size=128)
+    _, test_loader, _ = create_dataloaders(dataset_path, batch_size=128)
     test_indices = test_loader.dataset.indices
 
     with h5py.File(dataset_path, "r") as h5f:
         theta = h5f["theta"][:]
         phi = h5f["phi"][:]
         steering_info = h5f["steering_info"][:]
-        labels = h5f["labels"][:]
-
-    labels = labels[test_indices]
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
     model = PhaseShiftModel()
@@ -372,20 +354,23 @@ def pred_cnn(
     model.eval()
 
     all_preds = []
+    all_targets = []
 
     with torch.no_grad():
-        for inputs, _ in test_loader:
+        for inputs, targets in test_loader:
             inputs = inputs.to(device)
             outputs = model(inputs)
 
             # Move predictions to CPU for numpy conversion
             preds = outputs.cpu().numpy()
+            targets = targets.numpy()
 
             all_preds.append(preds)
+            all_targets.append(targets)
 
     # Convert to numpy arrays
     all_preds = np.vstack(all_preds)
-    all_targets = labels
+    all_targets = np.vstack(all_targets)
 
     rand_indices = np.random.choice(len(all_preds), num_examples, replace=False)
 
@@ -527,7 +512,7 @@ def pred_beamforming(
 
 
 @app.command()
-def run_cnn(
+def run_model(
     experiment: str,
     overwrite: bool = False,
     dataset_path: Path = DEFAULT_DATASET_PATH,
@@ -548,9 +533,12 @@ def run_cnn(
 
     # Define loss function and optimizer
     criterion = cosine_angular_loss_torch
+    # criterion = circular_mse_loss_torch
+
     optimizer = optim.AdamW(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
     # optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     #     optimizer, mode="min", factor=0.5, patience=5
     # )
@@ -582,21 +570,14 @@ def run_cnn(
 
     plot_training(experiment, overwrite=overwrite, exps_path=exps_path)
 
-    # Evaluate model and save prediction examples
-    print("Evaluating model on test set...")
-    metrics = evaluate_model(
-        model,
-        test_loader,
-        dataset_path,
-        num_examples=5,
-        save_dir=exp_path,
-    )
+    eval_model(model, test_loader, exp_path)
 
-    # Save metrics
-    metrics_json = json.dumps(metrics, indent=4)
-    metrics_path = exp_path / "metrics.json"
-    metrics_path.write_text(metrics_json)
-    print(f"Metrics saved to {metrics_path}")
+    pred_model(
+        experiment=experiment,
+        dataset_path=dataset_path,
+        exps_path=exps_path,
+        num_examples=5,
+    )
 
 
 def create_dataloaders(dataset_path: Path, batch_size: int):
