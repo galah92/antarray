@@ -1,4 +1,3 @@
-import itertools
 from pathlib import Path
 
 import h5py
@@ -9,7 +8,14 @@ from matplotlib import animation
 from tqdm import tqdm
 
 import analyze
-from analyze import plot_ff_3d, read_nf2ff
+from analyze import read_nf2ff
+
+DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
+DEFAULT_DATASET_DIR = Path.cwd() / "dataset"
+DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_OUTFILE = "farfield_dataset.h5"
+DEFAULT_SINGLE_ANT_FILENAME = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
+
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
@@ -357,13 +363,6 @@ def check_grating_lobes(freq, dx, dy):
         "dy_critical_angle": dy_critical if dy_lambda > 0.5 else None,
         "has_grating_lobes": dx_lambda > 0.5 or dy_lambda > 0.5,
     }
-
-
-DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
-DEFAULT_DATASET_DIR = Path.cwd() / "dataset"
-DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
-DEFAULT_OUTFILE = "farfield_dataset.h5"
-DEFAULT_SINGLE_ANT_FILENAME = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
 
 
 @app.command()
@@ -903,48 +902,31 @@ def plot_sample(
     """
     dataset_path = dataset_dir / dataset_name
     dataset = load_dataset(dataset_path)
-    theta = dataset["theta"]
+    theta, phi = dataset["theta"], dataset["phi"]
+    freq = dataset["frequency"]
 
     # Create figure with three subplots: pattern, phase shifts, and polar pattern
-    fig = plt.figure(figsize=[18, 6])
-    ax0 = fig.add_subplot(1, 3, 1)
-    ax1 = fig.add_subplot(1, 3, 2, projection="3d")
-    ax2 = fig.add_subplot(1, 3, 3, projection="polar")
-    axs = [ax0, ax1, ax2]
+    fig, axs = plt.subplots(1, 3, figsize=[18, 6])
 
     pattern = dataset["patterns"][idx]
     phase_shifts = dataset["labels"][idx]
 
     # pattern[pattern < 0] = 0  # Clip negative values to 0
 
-    analyze.plot_phase_shifts(phase_shifts, title="Element Phase Shifts", ax=axs[0])
+    analyze.plot_phase_shifts(phase_shifts, title="Phase Shifts", ax=axs[0])
+    analyze.plot_ff_2d(pattern, theta, phi, ax=axs[1])
 
-    # Plot 3D radiation pattern
-    plot_ff_3d(
-        theta,
-        dataset["phi"],
-        pattern[None, ...],  # Add freq dimension (first one) for 3D plot
-        freq=dataset["frequency"],
-        ax=axs[1],
-    )
-
-    # Plot polar pattern
-    phi_idx = np.argmin(np.abs(dataset["phi"]))  # phi=0 cut
-    norm_pattern = pattern[phi_idx]
-    norm_pattern = norm_pattern - np.max(norm_pattern)  # Normalize to 0 dB max
-    axs[2].plot(theta, norm_pattern)
-    axs[2].set_theta_zero_location("N")  # 0 degrees at the top
-    axs[2].set_theta_direction(-1)  # clockwise
-    axs[2].set_rlim(-40, 5)  # dB limits
-    axs[2].set_title("2D Polar Pattern (φ=0°)")
-    axs[2].grid(True)
+    axs[2].remove()
+    axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
+    pattern_3d = pattern[None, ...]  # Add freq dimension (first one) for 3D plot
+    analyze.plot_ff_3d(theta, phi, pattern_3d, freq=freq, ax=axs[2])
 
     steering_info = dataset["steering_info"][idx]
     thetas_s, phis_s = steering_info
     thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
     thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
     phis_s = np.array2string(phis_s, precision=2, separator=", ")
-    phase_shift_title = f"Element Phase Shifts (θ={thetas_s}°, φ={phis_s}°)"
+    phase_shift_title = f"Phase Shifts (θ={thetas_s}°, φ={phis_s}°)"
     fig.suptitle(phase_shift_title)
 
     fig.set_tight_layout(True)

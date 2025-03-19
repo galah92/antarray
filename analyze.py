@@ -368,7 +368,7 @@ def plot_ff_3d(
     freq_index: int = 0,
     logscale: float | None = None,
     normalize: bool = False,
-    title: str | None = None,
+    title: str = "3D Radiation Pattern",
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
     # Ensure E-field data is 3D (freq, phi, theta)
@@ -411,12 +411,32 @@ def plot_ff_3d(
     ax.set_zlabel("z")
     ax.set_xlim(-25, 25)
     ax.set_ylim(-25, 25)
-
-    if title is None:
-        title = "3D Far Field Pattern"
     ax.set_title(title)
 
     return ax
+
+
+def plot_ff_2d(
+    pattern: np.ndarray,
+    theta: np.ndarray,
+    phi: np.ndarray,
+    *,
+    title: str = "2D Radiation Pattern",
+    colorbar: bool = True,
+    ax: plt.Axes | None = None,
+):
+    if ax is None:
+        _, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+    theta_deg, phi_deg = np.rad2deg(theta), np.rad2deg(phi)
+    extent = [np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg)]
+    im = ax.imshow(pattern, extent=extent, aspect="auto", origin="lower")
+    ax.set_xlabel("Theta (degrees)")
+    ax.set_ylabel("Phi (degrees)")
+    ax.set_title(title)
+
+    if colorbar:
+        ax.get_figure().colorbar(im, label="Normalized Dbi")
 
 
 def plot_phase_shifts(
@@ -433,12 +453,13 @@ def plot_phase_shifts(
         np.rad2deg(phase_shifts_clipped),
         cmap="twilight_shifted",  # Cyclic colormap for phase values
         origin="lower",
+        aspect="auto",
         vmin=-180,
         vmax=180,
     )
     ax.set_xlabel("Element X index")
     ax.set_ylabel("Element Y index")
     ax.set_title(title)
+
     if colorbar:
-        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label("Degrees")
+        ax.get_figure().colorbar(im, label="Degrees")
