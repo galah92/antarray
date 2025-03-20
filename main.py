@@ -536,12 +536,7 @@ def run_model(
     criterion = circular_mse_loss_torch
 
     optimizer = optim.AdamW(model.parameters(), lr=lr)
-    # optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
-    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-    #     optimizer, mode="min", factor=0.5, patience=5
-    # )
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
 
     # Train model
     print("Starting training...")
