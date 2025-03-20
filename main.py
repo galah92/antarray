@@ -397,6 +397,7 @@ def compare_phase_shifts(
     phi,
     title: str | None = None,
     filepath: Path | None = None,
+    clip_ff: bool = True,
 ):
     fig, axs = plt.subplots(2, 3, figsize=(18, 10))
 
@@ -405,6 +406,9 @@ def compare_phase_shifts(
 
     label_ff = generate_dataset.ff_from_phase_shifts(label)
     output_ff = generate_dataset.ff_from_phase_shifts(output)
+
+    if clip_ff:
+        label_ff, output_ff = label_ff.clip(min=0), output_ff.clip(min=0)
 
     title_gt_2d = "Ground Truth 2D Radiation Pattern"
     analyze.plot_ff_2d(label_ff, theta, phi, title=title_gt_2d, ax=axs[0, 1])
