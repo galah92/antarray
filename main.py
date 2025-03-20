@@ -382,8 +382,7 @@ def pred_model(
         thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
         phis_s = np.array2string(phis_s, precision=2, separator=", ")
 
-        print(pred.min(), pred.max(), target.min(), target.max())
-        loss = cosine_angular_loss_np(pred, target)
+        loss = circular_mse_loss_np(pred, target)
         title = f"Prediction Example {test_indices[idx]}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)"
         filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
         compare_phase_shifts(pred, target, theta, phi, title, filepath)
@@ -650,7 +649,7 @@ def run_knn(
     knn = neighbors.KNeighborsRegressor(n_neighbors=n_neighbors, weights="distance")
     y_pred = knn.fit(X_train, y_train).predict(X_test)
 
-    loss = cosine_angular_loss_np(y_pred, y_test)
+    loss = circular_mse_loss_np(y_pred, y_test)
     print(f"Val loss: {loss:.4f}")
 
     # save y_pred to h5 file
@@ -668,10 +667,14 @@ def run_knn(
 
 
 @app.command()
-def analyze_knn_pred(idx: int | None = None):
-    exps_path = Path.cwd() / "experiments"
+def pred_knn(
+    experiment: str,
+    idx: int | None = None,
+    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
+):
+    exp_path = exps_path / experiment
 
-    with h5py.File(exps_path / "knn_pred.h5", "r") as h5f:
+    with h5py.File(exp_path / "knn_pred.h5", "r") as h5f:
         y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
         y_test = h5f["y_test"][:].reshape(-1, 16, 16)
         steering_info = h5f["steering_info"][:]
@@ -687,9 +690,9 @@ def analyze_knn_pred(idx: int | None = None):
     thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
     phis_s = np.array2string(phis_s, precision=2, separator=", ")
 
-    loss = cosine_angular_loss_np(pred, test)
+    loss = circular_mse_loss_np(pred, test)
     title = f"Prediction Example {idx}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)"
-    filepath = exps_path / f"knn_pred_example_{idx}.png"
+    filepath = exp_path / f"knn_pred_example_{idx}.png"
     compare_phase_shifts(pred, test, theta, phi, title, filepath)
 
     print(f"Prediction example saved to {filepath}")
@@ -718,6 +721,12 @@ def analyze_knn_beams():
 
 def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray):
     return np.mean(1 - np.cos(inputs - targets))
+
+
+def circular_mse_loss_np(pred: np.ndarray, target: np.ndarray):
+    diff = np.abs(pred - target)
+    circular_diff = np.minimum(diff, 2 * np.pi - diff)
+    return np.mean(circular_diff**2)
 
 
 @app.command()
