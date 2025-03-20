@@ -401,25 +401,25 @@ def compare_phase_shifts(
     fig, axs = plt.subplots(2, 3, figsize=(18, 10))
 
     analyze.plot_phase_shifts(label, title="Ground Truth Phase Shifts", ax=axs[0, 0])
-    analyze.plot_phase_shifts(output, title="Predicted Phase Shifts", ax=axs[0, 1])
-
-    diff = output - label
-    # diff = np.arctan2(np.sin(output - label), np.cos(output - label))
-    analyze.plot_phase_shifts(diff, title="Phase Shift Error", ax=axs[0, 2])
+    analyze.plot_phase_shifts(output, title="Predicted Phase Shifts", ax=axs[1, 0])
 
     label_ff = generate_dataset.ff_from_phase_shifts(label)
-    axs[1, 0].remove()
-    axs[1, 0] = fig.add_subplot(2, 3, 4, projection="3d")
-    title_gt = "Ground Truth Far Field Pattern"
-    analyze.plot_ff_3d(theta, phi, label_ff, title=title_gt, ax=axs[1, 0])
-
     output_ff = generate_dataset.ff_from_phase_shifts(output)
-    axs[1, 1].remove()
-    axs[1, 1] = fig.add_subplot(2, 3, 5, projection="3d")
-    title_pred = "Predicted Far Field Pattern"
-    analyze.plot_ff_3d(theta, phi, output_ff, title=title_pred, ax=axs[1, 1])
+
+    title_gt_2d = "Ground Truth 2D Radiation Pattern"
+    analyze.plot_ff_2d(label_ff, theta, phi, title=title_gt_2d, ax=axs[0, 1])
+    title_pred_2d = "Predicted 2D Radiation Pattern"
+    analyze.plot_ff_2d(output_ff, theta, phi, title=title_pred_2d, ax=axs[1, 1])
+
+    axs[0, 2].remove()
+    axs[0, 2] = fig.add_subplot(2, 3, 3, projection="3d")
+    title_gt_3d = "Ground Truth 3D Radiation Pattern"
+    analyze.plot_ff_3d(theta, phi, label_ff, title=title_gt_3d, ax=axs[0, 2])
 
     axs[1, 2].remove()
+    axs[1, 2] = fig.add_subplot(2, 3, 6, projection="3d")
+    title_pred_3d = "Predicted 3F Radiation Pattern"
+    analyze.plot_ff_3d(theta, phi, output_ff, title=title_pred_3d, ax=axs[1, 2])
 
     if title is not None:
         fig.suptitle(title)
