@@ -97,8 +97,7 @@ class PhaseShiftModel(nn.Module):
     def forward(self, x):
         x = self.conv(x)
         x = self.fc(x)
-        x = torch.tanh(x)  # For output range [-1, 1]
-        x = x * torch.pi  # Scale to [-pi, pi]
+        x = torch.tanh(x) * torch.pi  # Scale to [-1, 1] and then to [-pi, pi]
         x = x.view(-1, *self.out_shape)
         return x
 
