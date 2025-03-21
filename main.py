@@ -421,7 +421,7 @@ def compare_phase_shifts(
 
     axs[1, 2].remove()
     axs[1, 2] = fig.add_subplot(2, 3, 6, projection="3d")
-    title_pred_3d = "Predicted 3F Radiation Pattern"
+    title_pred_3d = "Predicted 3D Radiation Pattern"
     analyze.plot_ff_3d(theta, phi, output_ff, title=title_pred_3d, ax=axs[1, 2])
 
     if title is not None:
