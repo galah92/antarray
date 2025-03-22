@@ -64,9 +64,12 @@ class PhaseShiftModel(nn.Module):
         conv_channels=[32, 64, 128, 256, 512],
         # Number of units in each fully connected layer
         fc_units=[2048, 1024],
+        # Use global pooling instead ofusing max pooling to reduce feature size
+        use_global_pool=False,
     ):
         super().__init__()
 
+        self.use_global_pool = use_global_pool
         self.out_shape = out_shape
 
         self.conv = nn.Sequential()
@@ -76,12 +79,18 @@ class PhaseShiftModel(nn.Module):
                 nn.Conv2d(ch[i - 1], ch[i], kernel_size=3, stride=1, padding=1),
                 nn.BatchNorm2d(ch[i]),
                 nn.ReLU(),
-                nn.MaxPool2d(2),
             )
+            if not self.use_global_pool:  # Use max pooling
+                self.conv += nn.Sequential(nn.MaxPool2d(2))
 
-        # Calculate the size of the feature maps after encoding
-        # After n channels MaxPool2d with stride=2
-        feature_size = np.prod(np.array(in_shape) // (2 ** len(conv_channels)))
+        if self.use_global_pool:
+            # Reduces feature size while preserving information
+            self.conv.append(nn.AdaptiveAvgPool2d(1))
+            feature_size = 1
+        else:
+            # Calculate the size of the feature maps after encoding
+            # After n channels MaxPool2d with stride=2
+            feature_size = np.prod(np.array(in_shape) // (2 ** len(conv_channels)))
 
         self.fc = nn.Sequential(nn.Flatten())
         fcs = [conv_channels[-1] * feature_size] + fc_units
@@ -100,39 +109,6 @@ class PhaseShiftModel(nn.Module):
         x = torch.tanh(x) * torch.pi  # Scale to [-1, 1] and then to [-pi, pi]
         x = x.view(-1, *self.out_shape)
         return x
-
-
-class PhaseShiftPredictor(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
-
-        self.global_pool = nn.AdaptiveAvgPool2d(
-            1
-        )  # Reduces feature size while preserving information
-        self.fc1 = nn.Linear(128, 64)
-        self.fc2 = nn.Linear(64, 16 * 16)  # Output phase shifts for 16x16 antenna array
-
-    def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-
-        x = self.global_pool(x)
-        x = x.view(x.size(0), -1)
-
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)  # No activation since phase angles are continuous
-
-        return x.view(-1, 16, 16)  # Output shape: (batch, 16, 16) for phase shifts
 
 
 def cosine_angular_loss_torch(inputs: torch.Tensor, targets: torch.Tensor):
