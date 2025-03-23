@@ -934,5 +934,69 @@ def plot_sample(
         fig.savefig(output_dir / f"sample_{idx}.png", dpi=600, bbox_inches="tight")
 
 
+@app.command()
+def count_beams(
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset_name: Path = "rand_bf_2d.h5",
+):
+    """
+    Count the number of samples with single beam and multiple beams in the dataset.
+
+    Parameters:
+    -----------
+    dataset_dir : Path
+        Directory containing the dataset
+    dataset_name : Path
+        Name of the dataset file
+    """
+    dataset_path = dataset_dir / dataset_name
+    print(f"Analyzing dataset: {dataset_path}")
+
+    try:
+        with h5py.File(dataset_path, "r") as h5f:
+            if "steering_info" not in h5f:
+                print("This dataset does not contain steering information.")
+                return
+
+            steering_info = h5f["steering_info"][:]
+            total_samples = steering_info.shape[0]
+
+            # Check if steering_info has the expected shape
+            if len(steering_info.shape) < 3:
+                print(
+                    "Steering info doesn't have the expected format for beam counting."
+                )
+                return
+
+            # Count samples with different number of beams
+            # NaN values in theta angles indicate unused beams
+            beam_counts = {}
+
+            for i in range(total_samples):
+                # Get theta values for this sample
+                thetas = steering_info[i, 0, :]
+                # Count non-NaN values to determine number of beams
+                num_beams = np.sum(~np.isnan(thetas))
+
+                # Update the counter
+                if num_beams in beam_counts:
+                    beam_counts[num_beams] += 1
+                else:
+                    beam_counts[num_beams] = 1
+
+            print(f"\nTotal samples in dataset: {total_samples}")
+            print("\nBeam distribution:")
+            for num_beams, count in sorted(beam_counts.items()):
+                percentage = (count / total_samples) * 100
+                print(
+                    f"  {num_beams} beam{'s' if num_beams != 1 else ''}: {count} samples ({percentage:.1f}%)"
+                )
+
+    except FileNotFoundError:
+        print(f"Dataset file not found: {dataset_path}")
+    except Exception as e:
+        print(f"Error analyzing dataset: {e}")
+
+
 if __name__ == "__main__":
     app()

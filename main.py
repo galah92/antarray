@@ -549,18 +549,18 @@ def pred_beamforming(
     dataset_path: Path = DEFAULT_DATASET_PATH,
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
 ):
-    dataset = load_dataset(dataset_path)
-    patterns, labels = dataset["patterns"], dataset["labels"]
-    theta, phi = dataset["theta"], dataset["phi"]
+    with h5py.File(dataset_path, "r") as h5f:
+        # Find the index of the given steering angles: https://stackoverflow.com/a/25823710/5151909
+        steer_angles = (theta_steer, phi_steer)
+        idx = (h5f["steering_info"] == steer_angles).all(axis=1).nonzero()[0].min()
 
-    # Find the index of the given steering angles: https://stackoverflow.com/a/25823710/5151909
-    steer_angles = (theta_steer, phi_steer)
-    idx = (dataset["steering_info"] == steer_angles).all(axis=1).nonzero()[0].min()
+        pattern, label = h5f["patterns"][idx], h5f["labels"][idx]
+        theta, phi = h5f["theta"][:], h5f["phi"][:]
 
-    pattern = patterns[idx][None, None, ...]  # Add batch and channel dimensions
+    # Preprocess the pattern
+    pattern = pattern[None, None, ...]  # Add batch and channel dimensions
     pattern[pattern < 0] = 0  # Set negative values to 0
     pattern = pattern / 20  # Normalize
-    label = labels[idx]
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
     model = PhaseShiftModel()
@@ -639,15 +639,19 @@ def run_model(
     )
 
 
-def create_dataloaders(dataset_path: Path, batch_size: int):
-    # Load dataset
-    print(f"Loading dataset from {dataset_path}")
+def load_data_np(dataset_path: Path):
     dataset = load_dataset(dataset_path)
 
     patterns, labels = dataset["patterns"], dataset["labels"]
 
     patterns[patterns < 0] = 0  # Set negative values to 0
     patterns = patterns / 30  # Normalize
+
+    return patterns, labels
+
+
+def create_dataloaders(dataset_path: Path, batch_size: int):
+    patterns, labels = load_data_np(dataset_path)
 
     # Split data into train, validation, and test sets
     ds = RadiationPatternDataset(patterns, labels)
@@ -808,6 +812,181 @@ def simulate(sim_path: str = "antenna_array.py"):
 		python3 /app/{sim_path}
 	"""
     sp.run(cmd, shell=True)
+
+
+@app.command()
+def eval_model_by_beam_count(
+    experiment: str,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
+):
+    """
+    Evaluate model performance separately on samples with different beam counts.
+
+    Parameters:
+    -----------
+    experiment : str
+        Name of the experiment
+    dataset_path : Path
+        Path to the dataset
+    exps_path : Path
+        Path to the experiments directory
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    exp_path = exps_path / experiment
+
+    print(f"Loading model from {exp_path}")
+    checkpoint = torch.load(exp_path / DEFAULT_MODEL_NAME)
+    model = PhaseShiftModel()
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model = model.to(device)
+    model.eval()
+
+    print(f"Loading dataset from {dataset_path}")
+    with h5py.File(dataset_path, "r") as h5f:
+        if "steering_info" not in h5f:
+            print("This dataset does not contain steering information.")
+            return
+
+        # Extract data
+        patterns = h5f["patterns"][:]
+        labels = h5f["labels"][:]
+        theta = h5f["theta"][:]
+        phi = h5f["phi"][:]
+        steering_info = h5f["steering_info"][:]
+
+        # Preprocess patterns
+        patterns[patterns < 0] = 0  # Set negative values to 0
+        patterns = patterns / 30  # Normalize
+
+        # Add channel dimension for CNN
+        patterns = patterns[
+            :, np.newaxis, :, :
+        ]  # Shape becomes (n_samples, 1, n_phi, n_theta)
+
+    # Group samples by beam count
+    beam_indices = {}
+    for i in range(len(steering_info)):
+        # Count non-NaN values in theta angles to determine number of beams
+        thetas = steering_info[i, 0, :]
+        num_beams = np.sum(~np.isnan(thetas))
+
+        if num_beams not in beam_indices:
+            beam_indices[num_beams] = []
+        beam_indices[num_beams].append(i)
+
+    # Print summary of dataset
+    print("\nBeam distribution in dataset:")
+    for num_beams, indices in sorted(beam_indices.items()):
+        percentage = (len(indices) / len(steering_info)) * 100
+        print(
+            f"  {num_beams} beam{'s' if num_beams != 1 else ''}: {len(indices)} samples ({percentage:.1f}%)"
+        )
+
+    # Evaluate model performance by beam count
+    results = []
+
+    for num_beams, indices in sorted(beam_indices.items()):
+        print(f"\nEvaluating performance on {num_beams} beam samples...")
+
+        # Convert to PyTorch tensors
+        beam_patterns = torch.from_numpy(patterns[indices]).float().to(device)
+        beam_labels = torch.from_numpy(labels[indices]).float()
+
+        # Process in batches to avoid memory issues
+        batch_size = 128
+        all_preds = []
+
+        with torch.no_grad():
+            for i in range(0, len(beam_patterns), batch_size):
+                batch_patterns = beam_patterns[i : i + batch_size]
+                outputs = model(batch_patterns)
+                all_preds.append(outputs.cpu().numpy())
+
+        # Convert predictions to numpy arrays
+        all_preds = np.vstack(all_preds)
+        all_targets = labels[indices]
+
+        # Calculate metrics for this beam count
+        phase_diff = all_preds - all_targets
+        # Wrap to [-pi, pi]
+        phase_diff = np.arctan2(np.sin(phase_diff), np.cos(phase_diff))
+
+        # Calculate MSE and MAE
+        mse = np.mean(phase_diff**2)
+        mae = np.mean(np.abs(phase_diff))
+        rmse = np.sqrt(mse)
+
+        # Store results
+        results.append(
+            {
+                "mae": mae.item(),
+                "mse": mse.item(),
+                "rmse": rmse.item(),
+                "sample_count": len(indices),
+            }
+        )
+
+        print(f"  MSE: {mse:.6f}")
+        print(f"  RMSE: {rmse:.6f}")
+        print(f"  MAE: {mae:.6f}")
+
+        # Generate a few example visualizations
+        num_examples = min(3, len(indices))
+        for idx in np.random.choice(len(indices), num_examples, replace=False):
+            original_idx = indices[idx]
+            pred = all_preds[idx]
+            target = all_targets[idx]
+
+            # Extract steering information
+            thetas_s, phis_s = steering_info[original_idx]
+            thetas_s = thetas_s[~np.isnan(thetas_s)]
+            phis_s = phis_s[~np.isnan(phis_s)]
+            thetas_s_str = np.array2string(thetas_s, precision=2, separator=", ")
+            phis_s_str = np.array2string(phis_s, precision=2, separator=", ")
+
+            loss = circular_mse_loss_np(pred, target)
+            title = f"{num_beams} Beam Sample {original_idx}: MSE={loss:.4f} (θ={thetas_s_str}°, φ={phis_s_str}°)"
+            filepath = exp_path / f"beam_{num_beams}_example_{original_idx}.png"
+            compare_phase_shifts(pred, target, theta, phi, title, filepath)
+
+            print(f"  Example visualization saved to {filepath}")
+
+    # Save combined results
+    results_json = json.dumps(results, indent=4)
+    results_path = exp_path / "beam_metrics.json"
+    with open(results_path, "w") as f:
+        f.write(results_json)
+    print(f"\nAll metrics saved to {results_path}")
+
+    # Create comparative visualization
+    beam_counts = list(range(len(results)))
+    beam_counts = np.arange(len(results))
+    metrics = ["mse", "rmse", "mae"]
+
+    fig, axes = plt.subplots(1, len(metrics), figsize=(15, 5))
+
+    for i, metric in enumerate(metrics):
+        values = [results[beam][metric] for beam in beam_counts]
+        axes[i].bar(
+            range(len(beam_counts)),
+            values,
+            tick_label=[
+                f"{b + 1} beam{'s' if b + 1 != 1 else ''}" for b in beam_counts
+            ],
+        )
+        axes[i].set_title(f"{metric.upper()} by Beam Count")
+        axes[i].set_ylabel(metric.upper())
+
+        # Add values on top of bars
+        for j, v in enumerate(values):
+            axes[i].text(j, v, f"{v:.6f}", ha="center", va="bottom")
+
+    fig.tight_layout()
+    fig.savefig(exp_path / "beam_metrics_comparison.png", dpi=300)
+    print(
+        f"Comparative visualization saved to {exp_path / 'beam_metrics_comparison.png'}"
+    )
 
 
 if __name__ == "__main__":
