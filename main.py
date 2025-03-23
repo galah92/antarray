@@ -821,7 +821,8 @@ def eval_model_by_beam_count(
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
 ):
     """
-    Evaluate model performance separately on samples with different beam counts.
+    Evaluate model performance separately on samples with different beam counts
+    using only the test set.
 
     Parameters:
     -----------
@@ -841,153 +842,146 @@ def eval_model_by_beam_count(
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
-
+    
+    # Get the test loader which contains the test indices
+    _, _, test_loader = create_dataloaders(dataset_path, batch_size=128)
+    test_indices = test_loader.dataset.indices
+    
     print(f"Loading dataset from {dataset_path}")
     with h5py.File(dataset_path, "r") as h5f:
         if "steering_info" not in h5f:
             print("This dataset does not contain steering information.")
             return
-
-        # Extract data
+            
+        # Extract data only for test indices
         patterns = h5f["patterns"][:]
         labels = h5f["labels"][:]
         theta = h5f["theta"][:]
         phi = h5f["phi"][:]
         steering_info = h5f["steering_info"][:]
-
+        
+        # Select only test data
+        test_patterns = patterns[test_indices]
+        test_labels = labels[test_indices]
+        test_steering_info = steering_info[test_indices]
+        
         # Preprocess patterns
-        patterns[patterns < 0] = 0  # Set negative values to 0
-        patterns = patterns / 30  # Normalize
-
+        test_patterns[test_patterns < 0] = 0  # Set negative values to 0
+        test_patterns = test_patterns / 30  # Normalize
+        
         # Add channel dimension for CNN
-        patterns = patterns[
-            :, np.newaxis, :, :
-        ]  # Shape becomes (n_samples, 1, n_phi, n_theta)
+        test_patterns = test_patterns[:, np.newaxis, :, :]  # Shape becomes (n_samples, 1, n_phi, n_theta)
 
-    # Group samples by beam count
+    # Group test samples by beam count
     beam_indices = {}
-    for i in range(len(steering_info)):
+    for i in range(len(test_steering_info)):
         # Count non-NaN values in theta angles to determine number of beams
-        thetas = steering_info[i, 0, :]
+        thetas = test_steering_info[i, 0, :]
         num_beams = np.sum(~np.isnan(thetas))
-
+        
         if num_beams not in beam_indices:
             beam_indices[num_beams] = []
         beam_indices[num_beams].append(i)
-
-    # Print summary of dataset
-    print("\nBeam distribution in dataset:")
+    
+    # Print summary of test dataset
+    print("\nBeam distribution in test dataset:")
     for num_beams, indices in sorted(beam_indices.items()):
-        percentage = (len(indices) / len(steering_info)) * 100
-        print(
-            f"  {num_beams} beam{'s' if num_beams != 1 else ''}: {len(indices)} samples ({percentage:.1f}%)"
-        )
-
+        percentage = (len(indices) / len(test_indices)) * 100
+        print(f"  {num_beams} beam{'s' if num_beams != 1 else ''}: {len(indices)} samples ({percentage:.1f}%)")
+    
     # Evaluate model performance by beam count
-    results = []
-
+    results = {}
+    
     for num_beams, indices in sorted(beam_indices.items()):
         print(f"\nEvaluating performance on {num_beams} beam samples...")
-
+        
         # Convert to PyTorch tensors
-        beam_patterns = torch.from_numpy(patterns[indices]).float().to(device)
-        beam_labels = torch.from_numpy(labels[indices]).float()
-
+        beam_patterns = torch.from_numpy(test_patterns[indices]).float().to(device)
+        beam_labels = torch.from_numpy(test_labels[indices]).float()
+        
         # Process in batches to avoid memory issues
         batch_size = 128
         all_preds = []
-
+        
         with torch.no_grad():
             for i in range(0, len(beam_patterns), batch_size):
-                batch_patterns = beam_patterns[i : i + batch_size]
+                batch_patterns = beam_patterns[i:i+batch_size]
                 outputs = model(batch_patterns)
                 all_preds.append(outputs.cpu().numpy())
-
+        
         # Convert predictions to numpy arrays
         all_preds = np.vstack(all_preds)
-        all_targets = labels[indices]
-
+        all_targets = test_labels[indices]
+        
         # Calculate metrics for this beam count
         phase_diff = all_preds - all_targets
         # Wrap to [-pi, pi]
         phase_diff = np.arctan2(np.sin(phase_diff), np.cos(phase_diff))
-
+        
         # Calculate MSE and MAE
         mse = np.mean(phase_diff**2)
         mae = np.mean(np.abs(phase_diff))
         rmse = np.sqrt(mse)
-
+        
         # Store results
-        results.append(
-            {
-                "mae": mae.item(),
-                "mse": mse.item(),
-                "rmse": rmse.item(),
-                "sample_count": len(indices),
-            }
-        )
-
+        results[num_beams.item()] = {
+            "mae": mae.item(),
+            "mse": mse.item(),
+            "rmse": rmse.item(),
+            "sample_count": len(indices)
+        }
+        
         print(f"  MSE: {mse:.6f}")
         print(f"  RMSE: {rmse:.6f}")
         print(f"  MAE: {mae:.6f}")
-
+        
         # Generate a few example visualizations
         num_examples = min(3, len(indices))
         for idx in np.random.choice(len(indices), num_examples, replace=False):
-            original_idx = indices[idx]
+            original_idx = test_indices[indices[idx]]
             pred = all_preds[idx]
             target = all_targets[idx]
-
+            
             # Extract steering information
             thetas_s, phis_s = steering_info[original_idx]
             thetas_s = thetas_s[~np.isnan(thetas_s)]
             phis_s = phis_s[~np.isnan(phis_s)]
             thetas_s_str = np.array2string(thetas_s, precision=2, separator=", ")
             phis_s_str = np.array2string(phis_s, precision=2, separator=", ")
-
+            
             loss = circular_mse_loss_np(pred, target)
             title = f"{num_beams} Beam Sample {original_idx}: MSE={loss:.4f} (θ={thetas_s_str}°, φ={phis_s_str}°)"
             filepath = exp_path / f"beam_{num_beams}_example_{original_idx}.png"
             compare_phase_shifts(pred, target, theta, phi, title, filepath)
-
+            
             print(f"  Example visualization saved to {filepath}")
-
+    
     # Save combined results
     results_json = json.dumps(results, indent=4)
     results_path = exp_path / "beam_metrics.json"
-    with open(results_path, "w") as f:
+    with open(results_path, 'w') as f:
         f.write(results_json)
     print(f"\nAll metrics saved to {results_path}")
-
+    
     # Create comparative visualization
-    beam_counts = list(range(len(results)))
-    beam_counts = np.arange(len(results))
+    beam_counts = sorted(results.keys())
     metrics = ["mse", "rmse", "mae"]
-
+    
     fig, axes = plt.subplots(1, len(metrics), figsize=(15, 5))
-
+    
     for i, metric in enumerate(metrics):
         values = [results[beam][metric] for beam in beam_counts]
-        axes[i].bar(
-            range(len(beam_counts)),
-            values,
-            tick_label=[
-                f"{b + 1} beam{'s' if b + 1 != 1 else ''}" for b in beam_counts
-            ],
-        )
+        axes[i].bar(range(len(beam_counts)), values, tick_label=[f"{b} beam{'s' if b != 1 else ''}" for b in beam_counts])
         axes[i].set_title(f"{metric.upper()} by Beam Count")
         axes[i].set_ylabel(metric.upper())
-
+        
         # Add values on top of bars
         for j, v in enumerate(values):
-            axes[i].text(j, v, f"{v:.6f}", ha="center", va="bottom")
-
+            axes[i].text(j, v, f"{v:.6f}", ha='center', va='bottom')
+    
     fig.tight_layout()
     fig.savefig(exp_path / "beam_metrics_comparison.png", dpi=300)
-    print(
-        f"Comparative visualization saved to {exp_path / 'beam_metrics_comparison.png'}"
-    )
-
+    print(f"Comparative visualization saved to {exp_path / 'beam_metrics_comparison.png'}")
 
 if __name__ == "__main__":
     app()
