@@ -23,5 +23,7 @@ dependencies = [
 select = [
     # isort
     "I",
+    # pyflakes
+    "F",
 ]
 exclude = ["src/*"] # these scripts run inside OpenEMS container

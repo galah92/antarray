@@ -416,7 +416,7 @@ def plot_ff_3d(
     return ax
 
 
-def plot_ff_2d(
+def _plot_ff_2d(
     pattern: np.ndarray,
     theta: np.ndarray,
     phi: np.ndarray,

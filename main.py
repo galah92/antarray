@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import typer
 from matplotlib.ticker import FormatStrFormatter
@@ -901,7 +900,7 @@ def eval_model_by_beam_count(
 
         # Convert to PyTorch tensors
         beam_patterns = torch.from_numpy(test_patterns[indices]).float().to(device)
-        beam_labels = torch.from_numpy(test_labels[indices]).float()
+        _beam_labels = torch.from_numpy(test_labels[indices]).float()
 
         # Process in batches to avoid memory issues
         batch_size = 128
