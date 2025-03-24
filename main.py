@@ -514,8 +514,21 @@ def pred_model(
         steering_info = h5f["steering_info"][:]
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
-    model = PhaseShiftModel()
+    # model = PhaseShiftModel()
+
+    # load model based on model type
+    model_type = checkpoint["model_type"]
+    if model_type == "cnn":
+        model = PhaseShiftModel()
+    elif model_type == "resnet":
+        model = resnet18()
+    elif model_type == "spectral_spatial":
+        model = SpectralSpatialModel()
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
     model.load_state_dict(checkpoint["model_state_dict"])
+    model = checkpoint["model_state_dict"]
     model = model.to(device)
     model.eval()
 

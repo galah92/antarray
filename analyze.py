@@ -39,23 +39,6 @@ def read_nf2ff(nf2ff_path: Path):
     }
 
 
-def plot_ff_2d(nf2ff, ax: plt.Axes | None = None):
-    theta = np.rad2deg(nf2ff["theta"])
-    E_norm = nf2ff["E_norm"][0]
-    Dmax = nf2ff["Dmax"]
-    E_norm = 20.0 * np.log10(E_norm / np.max(E_norm)) + 10.0 * np.log10(Dmax[:, None])
-
-    if ax is None:
-        ax = plt.figure().add_subplot()
-    ax.plot(theta, np.squeeze(E_norm[0]), "k-", linewidth=2, label="xz-plane")
-    ax.plot(theta, np.squeeze(E_norm[1]), "r--", linewidth=2, label="yz-plane")
-    ax.set_xlabel("Theta (deg)")
-    ax.set_ylabel("Directivity (dBi)")
-    ax.set_title("Directivity Plot")
-    ax.legend()
-    ax.grid()
-
-
 def plot_ff_polar(
     E_norm,
     Dmax,
@@ -416,7 +399,7 @@ def plot_ff_3d(
     return ax
 
 
-def _plot_ff_2d(
+def plot_ff_2d(
     pattern: np.ndarray,
     theta: np.ndarray,
     phi: np.ndarray,
