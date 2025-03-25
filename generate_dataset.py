@@ -999,13 +999,14 @@ def count_beams(
 
 
 @app.command()
-def extract_two_beam_samples(
+def extract_n_beam_samples(
+    n_beams: int,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     input_dataset: str = "rand_bf_2d_4k.h5",
     output_dataset: str = "rand_bf_2d_only_2k.h5",
 ):
     """
-    Extracts samples with exactly 2 beams from a dataset and saves them to a new dataset file.
+    Extracts samples with exactly n beams from a dataset and saves them to a new dataset file.
 
     Parameters:
     -----------
@@ -1014,12 +1015,12 @@ def extract_two_beam_samples(
     input_dataset : str
         Filename of the input dataset
     output_dataset : str
-        Filename for the output dataset containing only 2-beam samples
+        Filename for the output dataset containing only n_beams-beam samples
     """
     input_path = dataset_dir / input_dataset
     output_path = dataset_dir / output_dataset
 
-    print(f"Extracting 2-beam samples from {input_path} to {output_path}")
+    print(f"Extracting {n_beams}-beam samples from {input_path} to {output_path}")
 
     # Open the input dataset
     with h5py.File(input_path, "r") as src_h5f:
@@ -1028,23 +1029,25 @@ def extract_two_beam_samples(
             print("Error: Input dataset doesn't contain steering information.")
             return
 
-        # Get the steering information to identify 2-beam samples
+        # Get the steering information to identify n_beams-beam samples
         steering_info = src_h5f["steering_info"][:]
 
-        # Find samples with exactly 2 beams (2 non-NaN values in theta angles)
+        # Find samples with exactly n_beams beams (n_beams non-NaN values in theta angles)
         samples_with_two_beams = []
         for i in range(steering_info.shape[0]):
             thetas = steering_info[i, 0, :]  # First row contains theta values
             num_beams = np.sum(~np.isnan(thetas))
-            if num_beams == 2:
+            if num_beams == n_beams:
                 samples_with_two_beams.append(i)
 
-        # If no samples with 2 beams found
+        # If no samples with n_beams beams found
         if not samples_with_two_beams:
-            print("No samples with exactly 2 beams found in the dataset.")
+            print(f"No samples with exactly {n_beams} beams found in the dataset.")
             return
 
-        print(f"Found {len(samples_with_two_beams)} samples with exactly 2 beams.")
+        print(
+            f"Found {len(samples_with_two_beams)} samples with exactly {n_beams} beams."
+        )
 
         # Create output dataset
         with h5py.File(output_path, "w") as dst_h5f:
@@ -1075,12 +1078,12 @@ def extract_two_beam_samples(
 
             # Add additional metadata
             dst_h5f.attrs["description"] = (
-                "Dataset containing only samples with exactly 2 beams"
+                f"Dataset containing only samples with exactly {n_beams} beams"
             )
             dst_h5f.attrs["source_dataset"] = input_dataset
 
     print(
-        f"Successfully created 2-beam dataset with {n_samples} samples at {output_path}"
+        f"Successfully created {n_beams}-beam dataset with {n_samples} samples at {output_path}"
     )
 
 
