@@ -718,18 +718,18 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "h5py", specifier = "==3.13.0" },
-    { name = "ipykernel", specifier = "==6.29.5" },
-    { name = "matplotlib", specifier = "==3.10.1" },
-    { name = "numpy", specifier = "==2.2.4" },
+    { name = "h5py", specifier = ">=3.13.0" },
+    { name = "ipykernel", specifier = ">=6.29.5" },
+    { name = "matplotlib", specifier = ">=3.10.0" },
+    { name = "numpy", specifier = ">=2.2.2" },
     { name = "ruff", specifier = ">=0.9.5" },
-    { name = "scikit-learn", specifier = "==1.6.1" },
-    { name = "scipy", specifier = "==1.15.2" },
-    { name = "torch", specifier = "==2.6.0" },
-    { name = "torchaudio", specifier = "==2.6.0" },
-    { name = "torchvision", specifier = "==0.21.0" },
-    { name = "tqdm", specifier = "==4.67.1" },
-    { name = "typer", specifier = "==0.15.2" },
+    { name = "scikit-learn", specifier = ">=1.6.1" },
+    { name = "scipy", specifier = ">=1.15.1" },
+    { name = "torch", specifier = ">=2.6.0" },
+    { name = "torchaudio", specifier = ">=2.6.0" },
+    { name = "torchvision", specifier = ">=0.21.0" },
+    { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "typer", specifier = ">=0.15.2" },
 ]
 
 [[package]]
