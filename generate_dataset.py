@@ -998,5 +998,91 @@ def count_beams(
         print(f"Error analyzing dataset: {e}")
 
 
+@app.command()
+def extract_two_beam_samples(
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    input_dataset: str = "rand_bf_2d_4k.h5",
+    output_dataset: str = "rand_bf_2d_only_2k.h5",
+):
+    """
+    Extracts samples with exactly 2 beams from a dataset and saves them to a new dataset file.
+
+    Parameters:
+    -----------
+    dataset_dir : Path
+        Directory containing the input dataset and where the output will be saved
+    input_dataset : str
+        Filename of the input dataset
+    output_dataset : str
+        Filename for the output dataset containing only 2-beam samples
+    """
+    input_path = dataset_dir / input_dataset
+    output_path = dataset_dir / output_dataset
+
+    print(f"Extracting 2-beam samples from {input_path} to {output_path}")
+
+    # Open the input dataset
+    with h5py.File(input_path, "r") as src_h5f:
+        # Check if steering_info exists
+        if "steering_info" not in src_h5f:
+            print("Error: Input dataset doesn't contain steering information.")
+            return
+
+        # Get the steering information to identify 2-beam samples
+        steering_info = src_h5f["steering_info"][:]
+
+        # Find samples with exactly 2 beams (2 non-NaN values in theta angles)
+        samples_with_two_beams = []
+        for i in range(steering_info.shape[0]):
+            thetas = steering_info[i, 0, :]  # First row contains theta values
+            num_beams = np.sum(~np.isnan(thetas))
+            if num_beams == 2:
+                samples_with_two_beams.append(i)
+
+        # If no samples with 2 beams found
+        if not samples_with_two_beams:
+            print("No samples with exactly 2 beams found in the dataset.")
+            return
+
+        print(f"Found {len(samples_with_two_beams)} samples with exactly 2 beams.")
+
+        # Create output dataset
+        with h5py.File(output_path, "w") as dst_h5f:
+            # Copy theta and phi arrays directly
+            dst_h5f.create_dataset("theta", data=src_h5f["theta"][:])
+            dst_h5f.create_dataset("phi", data=src_h5f["phi"][:])
+
+            # Get shapes for the new datasets
+            n_samples = len(samples_with_two_beams)
+            patterns_shape = (n_samples,) + src_h5f["patterns"].shape[1:]
+            labels_shape = (n_samples,) + src_h5f["labels"].shape[1:]
+            steering_shape = (n_samples,) + src_h5f["steering_info"].shape[1:]
+
+            # Create datasets in the output file
+            dst_patterns = dst_h5f.create_dataset("patterns", shape=patterns_shape)
+            dst_labels = dst_h5f.create_dataset("labels", shape=labels_shape)
+            dst_steering = dst_h5f.create_dataset("steering_info", shape=steering_shape)
+
+            # Copy selected samples
+            for new_idx, old_idx in enumerate(samples_with_two_beams):
+                dst_patterns[new_idx] = src_h5f["patterns"][old_idx]
+                dst_labels[new_idx] = src_h5f["labels"][old_idx]
+                dst_steering[new_idx] = src_h5f["steering_info"][old_idx]
+
+            # Copy attributes (metadata)
+            for key in src_h5f.attrs:
+                dst_h5f.attrs[key] = src_h5f.attrs[key]
+
+            # Add additional metadata
+            dst_h5f.attrs["description"] = (
+                "Dataset containing only samples with exactly 2 beams"
+            )
+            dst_h5f.attrs["source_dataset"] = input_dataset
+
+    print(
+        f"Successfully created 2-beam dataset with {n_samples} samples at {output_path}"
+    )
+
+
 if __name__ == "__main__":
     app()
