@@ -20,7 +20,7 @@ import analyze
 import generate_dataset
 from generate_dataset import load_dataset
 
-DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d.h5"
+DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d_4k.h5"
 DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
 DEFAULT_MODEL_NAME = "model.pth"
 
@@ -702,7 +702,7 @@ def run_model(
     batch_size: int = 128,
     n_epochs: int = 100,
     lr: float = 1e-4,
-    model_type: str = "spectral_spatial",  # Default to the new model
+    model_type: str = "cnn",
 ):
     exp_path = exps_path / experiment
     exp_path.mkdir(exist_ok=overwrite, parents=True)
