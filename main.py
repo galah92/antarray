@@ -53,6 +53,32 @@ class RadiationPatternDataset(Dataset):
         return pattern, phase_shift
 
 
+class Hdf5Dataset(Dataset):
+    def __init__(self, dataset_file: Path):
+        self.dataset_file = dataset_file
+        self.h5f = None  # Lazy loading of the HDF5 file
+
+    def get_dataset(self):
+        if self.h5f is None:
+            self.h5f = h5py.File(self.dataset_file, "r")
+        return self.h5f
+
+    def __len__(self):
+        h5f = self.get_dataset()
+        return len(h5f["patterns"])
+
+    def __getitem__(self, idx):
+        h5f = self.get_dataset()
+        pattern = torch.from_numpy(h5f["patterns"][idx])
+        phase_shift = torch.from_numpy(h5f["labels"][idx])
+
+        pattern = pattern.unsqueeze(0)  # Add channel dimension for CNN
+        pattern = pattern.clamp(min=0)  # Set negative values to 0
+        pattern = pattern / 30  # Normalize
+
+        return pattern, phase_shift
+
+
 class PhaseShiftModel(nn.Module):
     def __init__(
         self,
@@ -528,7 +554,6 @@ def pred_model(
         raise ValueError(f"Unknown model type: {model_type}")
 
     model.load_state_dict(checkpoint["model_state_dict"])
-    model = checkpoint["model_state_dict"]
     model = model.to(device)
     model.eval()
 
@@ -768,22 +793,10 @@ def run_model(
     )
 
 
-def load_data_np(dataset_path: Path):
-    dataset = load_dataset(dataset_path)
-
-    patterns, labels = dataset["patterns"], dataset["labels"]
-
-    patterns[patterns < 0] = 0  # Set negative values to 0
-    patterns = patterns / 30  # Normalize
-
-    return patterns, labels
-
-
 def create_dataloaders(dataset_path: Path, batch_size: int):
-    patterns, labels = load_data_np(dataset_path)
+    ds = Hdf5Dataset(dataset_path)
 
     # Split data into train, validation, and test sets
-    ds = RadiationPatternDataset(patterns, labels)
     gen = torch.Generator().manual_seed(42)
     train_ds, val_ds, test_ds = random_split(ds, [0.8, 0.1, 0.1], generator=gen)
 
