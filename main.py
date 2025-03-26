@@ -602,23 +602,9 @@ def pred_model(
         steering_info = h5f["steering_info"][:]
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
-    # model = PhaseShiftModel()
-
-    # load model based on model type
     model_type = checkpoint["model_type"]
-    if model_type == "cnn":
-        model = ConvModel()
-    elif model_type == "resnet":
-        model = resnet18()
-    elif model_type == "spectral_spatial":
-        model = SpectralSpatialModel()
-    elif model_type == "inv_cnn":
-        model = InverseConvModel()
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
-
+    model = model_type_to_class(model_type).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
     model.eval()
 
     all_preds = []
@@ -656,6 +642,19 @@ def pred_model(
         compare_phase_shifts(pred, target, theta, phi, title, filepath)
 
         print(f"Prediction example saved to {filepath}")
+
+
+def model_type_to_class(model_type: str):
+    if model_type == "cnn":
+        return ConvModel()
+    elif model_type == "resnet":
+        return resnet18()
+    elif model_type == "spectral_spatial":
+        return SpectralSpatialModel()
+    elif model_type == "inv_cnn":
+        return InverseConvModel()
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
 
 
 def compare_phase_shifts(
@@ -798,26 +797,11 @@ def run_model(
 
     train_loader, val_loader, test_loader = create_dataloaders(dataset_path, batch_size)
 
-    # Select model based on model_type parameter
-    if model_type == "cnn":
-        model = ConvModel()
-    elif model_type == "resnet":
-        model = resnet18()
-    elif model_type == "spectral_spatial":
-        model = SpectralSpatialModel()
-    elif model_type == "inv_cnn":
-        model = InverseConvModel()
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
-
+    model = model_type_to_class(model_type)
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Total model parameters: {total_params:,}")
-    print(f"Using model architecture: {model_type}")
+    print(f"Using {model_type} with {total_params:,} parameters")
 
-    # Define loss function and optimizer
-    # criterion = cosine_angular_loss_torch
     criterion = circular_mse_loss_torch
-
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
 
