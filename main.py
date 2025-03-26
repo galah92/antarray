@@ -59,9 +59,10 @@ class Hdf5Dataset(Dataset):
     Dataset class for loading radiation patterns and phase shift matrices from an HDF5 file.
     """
 
-    def __init__(self, dataset_file: Path):
+    def __init__(self, dataset_file: Path, use_steering_info=False):
         self.dataset_file = dataset_file
         self.h5f = None  # Lazy loading of the HDF5 file
+        self.use_steering_info = use_steering_info
 
     def get_dataset(self):
         if self.h5f is None:
@@ -80,6 +81,10 @@ class Hdf5Dataset(Dataset):
         pattern = pattern.unsqueeze(0)  # Add channel dimension for CNN
         pattern = pattern.clamp(min=0)  # Set negative values to 0
         pattern = pattern / 30  # Normalize
+
+        if self.use_steering_info:
+            steering_info = torch.from_numpy(h5f["steering_info"][idx])
+            return pattern, phase_shift, steering_info
 
         return pattern, phase_shift
 
@@ -589,41 +594,21 @@ def eval_model(
     test_loader,
     exp_path: Path,
 ):
+    n_samples = len(test_loader.dataset)
+    all_preds = np.empty((n_samples, 16, 16))
+    all_targets = np.empty((n_samples, 16, 16))
+
     model.eval()
-    all_preds = []
-    all_targets = []
-
     with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs = inputs.to(device)
-            outputs = model(inputs)
-
-            # Move predictions to CPU for numpy conversion
-            preds = outputs.cpu().numpy()
-            targets = targets.numpy()
-
-            all_preds.append(preds)
-            all_targets.append(targets)
-
-    # Convert to numpy arrays
-    all_preds = np.vstack(all_preds)
-    all_targets = np.vstack(all_targets)
+        for i, (inputs, targets) in enumerate(test_loader):
+            all_preds[i] = model(inputs.to(device)).cpu().numpy()
+            all_targets[i] = targets.numpy()
 
     # Calculate metrics
-    # For phase values, we need to handle the circular nature
-    phase_diff = all_preds - all_targets
-    # Wrap to [-pi, pi]
-    phase_diff = np.arctan2(np.sin(phase_diff), np.cos(phase_diff))
-
-    # Calculate MSE and MAE
-    mse = np.mean(phase_diff**2)
-    mae = np.mean(np.abs(phase_diff))
-
-    metrics = {
-        "mae": mae.item(),
-        "mse": mse.item(),
-        "rmse": np.sqrt(mse).item(),
-    }
+    mse = circular_mse_loss_np(all_preds, all_targets)
+    mae = circular_mae_loss_np(all_preds, all_targets)
+    rmse = np.sqrt(mse)
+    metrics = {"mae": mae, "mse": mse, "rmse": rmse}
 
     metrics_json = json.dumps(metrics, indent=4)
     metrics_path = exp_path / "metrics.json"
@@ -638,9 +623,9 @@ def pred_model(
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
     num_examples: int = 5,
 ):
-    exp_path = exps_path / experiment
+    exp_path = get_experiment_path(experiment, exps_path, overwrite=True)
 
-    _, test_loader, _ = create_dataloaders(dataset_path, batch_size=128)
+    _, _, test_loader = create_dataloaders(dataset_path, batch_size=128)
     test_indices = test_loader.dataset.indices
 
     with h5py.File(dataset_path, "r") as h5f:
@@ -652,26 +637,16 @@ def pred_model(
     model_type = checkpoint["model_type"]
     model = model_type_to_class(model_type).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
+
+    n_samples = len(test_loader.dataset)
+    all_preds = np.empty((n_samples, 16, 16))
+    all_targets = np.empty((n_samples, 16, 16))
+
     model.eval()
-
-    all_preds = []
-    all_targets = []
-
     with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs = inputs.to(device)
-            outputs = model(inputs)
-
-            # Move predictions to CPU for numpy conversion
-            preds = outputs.cpu().numpy()
-            targets = targets.numpy()
-
-            all_preds.append(preds)
-            all_targets.append(targets)
-
-    # Convert to numpy arrays
-    all_preds = np.vstack(all_preds)
-    all_targets = np.vstack(all_targets)
+        for i, (inputs, targets) in enumerate(test_loader):
+            all_preds[i] = model(inputs.to(device)).cpu().numpy()
+            all_targets[i] = targets.numpy()
 
     rand_indices = np.random.choice(len(all_preds), num_examples, replace=False)
 
@@ -747,7 +722,7 @@ def plot_training(
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
     overwrite: bool = False,
 ):
-    exp_path = exps_path / experiment
+    exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
     save_path = exp_path / "training_history.png"
     if save_path.exists() and not overwrite:
@@ -912,6 +887,12 @@ def circular_mse_loss_np(pred: np.ndarray, target: np.ndarray):
     diff = np.abs(pred - target)
     circular_diff = np.minimum(diff, 2 * np.pi - diff)
     return np.mean(circular_diff**2)
+
+
+def circular_mae_loss_np(pred: np.ndarray, target: np.ndarray):
+    diff = np.abs(pred - target)
+    circular_diff = np.minimum(diff, 2 * np.pi - diff)
+    return np.mean(circular_diff)
 
 
 @app.command()
