@@ -594,6 +594,7 @@ def eval_model(
     test_loader,
     exp_path: Path,
 ):
+    batch_size = test_loader.batch_size
     n_samples = len(test_loader.dataset)
     all_preds = np.empty((n_samples, 16, 16))
     all_targets = np.empty((n_samples, 16, 16))
@@ -601,8 +602,9 @@ def eval_model(
     model.eval()
     with torch.no_grad():
         for i, (inputs, targets) in enumerate(test_loader):
-            all_preds[i] = model(inputs.to(device)).cpu().numpy()
-            all_targets[i] = targets.numpy()
+            j, k = i * batch_size, inputs.size(0)
+            all_preds[j : j + k] = model(inputs.to(device)).cpu().numpy()
+            all_targets[j : j + k] = targets.numpy()
 
     calc_metrics(exp_path, all_preds, all_targets)
 
@@ -628,13 +630,15 @@ def pred_model(
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite=True)
 
-    _, _, test_loader = create_dataloaders(dataset_path, batch_size=128)
+    batch_size = 128
+    _, _, test_loader = create_dataloaders(dataset_path, batch_size)
     test_indices = test_loader.dataset.indices
 
     with h5py.File(dataset_path, "r") as h5f:
         theta = h5f["theta"][:]
         phi = h5f["phi"][:]
         steering_info = h5f["steering_info"][:]
+        steering_info = steering_info[test_indices]
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
     model_type = checkpoint["model_type"]
@@ -648,16 +652,39 @@ def pred_model(
     model.eval()
     with torch.no_grad():
         for i, (inputs, targets) in enumerate(test_loader):
-            all_preds[i] = model(inputs.to(device)).cpu().numpy()
-            all_targets[i] = targets.numpy()
+            j, k = i * batch_size, inputs.size(0)
+            all_preds[j : j + k] = model(inputs.to(device)).cpu().numpy()
+            all_targets[j : j + k] = targets.numpy()
 
     rand_indices = np.random.choice(len(all_preds), num_examples, replace=False)
 
     for idx in rand_indices:
         pred, target = all_preds[idx], all_targets[idx]
-        steering = steering_info[test_indices[idx]]
+        steering = steering_info[idx]
         filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
         compare_phase_shifts(pred, target, theta, phi, steering, filepath)
+
+    plot_steer_loss(exp_path, all_preds, all_targets, steering_info)
+
+
+def plot_steer_loss(exp_path: Path, preds, targets, steering_info):
+    """
+    Plot the loss by steering angle in the test set.
+    """
+    losses = circular_mse_loss_np(preds, targets, axis=(1, 2))
+    steering_info = steering_info[:, :, 0]  # Take only the first beamforming angle
+
+    fig, ax = plt.subplots()
+    ax.scatter(*steering_info.T, c=losses, s=16)
+    ax.set_xlabel("Theta (degrees)")
+    ax.set_ylabel("Phi (degrees)")
+    ax.set_axisbelow(True)
+    ax.grid(True)
+    ax.set_title(f"Loss by steering angle ({losses.size} samples)")
+    cbar = plt.colorbar(ax.collections[0], ax=ax)
+    cbar.set_label("Circular MSE Loss")
+    fig.savefig(exp_path / "steer_loss.png", dpi=600, bbox_inches="tight")
+    print(f"Steering loss plot saved to {exp_path / 'steer_loss.png'}")
 
 
 def model_type_to_class(model_type: str):
@@ -886,10 +913,10 @@ def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray):
     return np.mean(1 - np.cos(inputs - targets))
 
 
-def circular_mse_loss_np(pred: np.ndarray, target: np.ndarray):
+def circular_mse_loss_np(pred: np.ndarray, target: np.ndarray, axis=None):
     diff = np.abs(pred - target)
     circular_diff = np.minimum(diff, 2 * np.pi - diff)
-    return np.mean(circular_diff**2)
+    return np.mean(circular_diff**2, axis=axis)
 
 
 def circular_mae_loss_np(pred: np.ndarray, target: np.ndarray):
