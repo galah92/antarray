@@ -747,38 +747,12 @@ def plot_training(
     print(f"Training history plot saved to {save_path}")
 
 
-@app.command()
-def pred_beamforming(
-    experiment: str,
-    theta_steer: int = 0,
-    phi_steer: int = 0,
-    dataset_path: Path = DEFAULT_DATASET_PATH,
-    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
-):
-    with h5py.File(dataset_path, "r") as h5f:
-        # Find the index of the given steering angles: https://stackoverflow.com/a/25823710/5151909
-        steer_angles = (theta_steer, phi_steer)
-        idx = (h5f["steering_info"] == steer_angles).all(axis=1).nonzero()[0].min()
-
-        pattern, label = h5f["patterns"][idx], h5f["labels"][idx]
-        theta, phi = h5f["theta"][:], h5f["phi"][:]
-
-    # Preprocess the pattern
-    pattern = pattern[None, None, ...]  # Add batch and channel dimensions
-    pattern[pattern < 0] = 0  # Set negative values to 0
-    pattern = pattern / 20  # Normalize
-
-    checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
-    model = ConvModel()
-    model.load_state_dict(checkpoint["model_state_dict"])
-
-    model.eval()
-    with torch.no_grad():
-        output = model(torch.from_numpy(pattern)).numpy().squeeze()
-
-    title = (f"Prediction Example {idx} (θ={theta_steer:.1f}°, φ={phi_steer:.1f}°)",)
-    filepath = (f"prediction_example_{idx}_t{theta_steer}_p{phi_steer}.png",)
-    compare_phase_shifts(output, label, theta, phi, title, filepath)
+def index_from_beamforming_angles(steering_info, theta: int, phi: int) -> int:
+    """
+    Find the index of the given steering angles: https://stackoverflow.com/a/25823710/5151909
+    """
+    idx = (steering_info == (theta, phi)).all(axis=1).nonzero()[0].min()
+    return idx
 
 
 @app.command()
