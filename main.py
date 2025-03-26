@@ -447,7 +447,7 @@ def run_model(
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
 
     # Train model
-    model, history = train_model(
+    model, history, interrupted = train_model(
         model,
         train_loader,
         val_loader,
@@ -473,7 +473,9 @@ def run_model(
 
     plot_training(experiment, overwrite=overwrite, exps_path=exps_path)
     eval_model(model, test_loader, exp_path)
-    pred_model(experiment, dataset_path, exps_path, num_examples=5)
+
+    if not interrupted:
+        pred_model(experiment, dataset_path, exps_path, num_examples=5)
 
 
 def get_experiment_path(
@@ -496,10 +498,10 @@ def train_model(
     n_epochs,
     log_interval=10,
 ):
+    interrupted = False
     since = time.time()
     history = {"train_loss": [], "val_loss": [], "lr": []}
 
-    # Move model to device
     model = model.to(device)
     best_val_loss, best_model_wts = float("inf"), None
 
@@ -569,6 +571,7 @@ def train_model(
 
     except KeyboardInterrupt:
         print("Training interrupted by user...")
+        interrupted = True
     finally:
         # Load best model weights
         if best_model_wts:
@@ -578,7 +581,7 @@ def train_model(
         print(f"Training complete in {elapsed // 60:.0f}m {elapsed % 60:.0f}s")
         print(f"Best val loss: {best_val_loss:.4f}")
 
-    return model, history
+    return model, history, interrupted
 
 
 def eval_model(
