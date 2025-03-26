@@ -24,6 +24,7 @@ DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d_4k.h5"
 DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
 DEFAULT_MODEL_NAME = "model.pth"
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
@@ -430,9 +431,6 @@ def train_model(
     log_interval=10,
     clip_grad=1.0,
 ):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-
     since = time.time()
     history = {"train_loss": [], "val_loss": [], "lr": []}
 
@@ -539,8 +537,6 @@ def eval_model(
     test_loader,
     exp_path: Path,
 ):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
     model.eval()
     all_preds = []
     all_targets = []
@@ -590,7 +586,6 @@ def pred_model(
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
     num_examples: int = 5,
 ):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     exp_path = exps_path / experiment
 
     _, test_loader, _ = create_dataloaders(dataset_path, batch_size=128)
@@ -933,27 +928,6 @@ def pred_knn(
     print(f"Prediction example saved to {filepath}")
 
 
-@app.command()
-def analyze_knn_beams():
-    exps_path = Path.cwd() / "experiments"
-    with h5py.File(exps_path / "knn_pred.h5", "r") as h5f:
-        steer = h5f["steering_info"][:]
-
-    theta_steer = steer[:, 0]
-    theta_diff = theta_steer[:, 0] - theta_steer[:, 1]
-    theta_diff = (theta_diff + 180) % 360 - 180
-
-    phi_steer = steer[:, 1]
-    phi_diff = phi_steer[:, 0] - phi_steer[:, 1]
-    phi_diff = (phi_diff + 180) % 360 - 180
-
-    diff = phi_diff
-    diff = diff[~np.isnan(diff)]
-    y = np.argmin(diff)
-    print(y)
-    print(steer[y])
-
-
 def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray):
     return np.mean(1 - np.cos(inputs - targets))
 
@@ -999,7 +973,6 @@ def eval_model_by_beam_count(
     exps_path : Path
         Path to the experiments directory
     """
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     exp_path = exps_path / experiment
 
     print(f"Loading model from {exp_path}")
