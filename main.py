@@ -55,6 +55,10 @@ class RadiationPatternDataset(Dataset):
 
 
 class Hdf5Dataset(Dataset):
+    """
+    Dataset class for loading radiation patterns and phase shift matrices from an HDF5 file.
+    """
+
     def __init__(self, dataset_file: Path):
         self.dataset_file = dataset_file
         self.h5f = None  # Lazy loading of the HDF5 file
@@ -78,6 +82,63 @@ class Hdf5Dataset(Dataset):
         pattern = pattern / 30  # Normalize
 
         return pattern, phase_shift
+
+
+class ConvModel(nn.Module):
+    def __init__(
+        self,
+        input_channels=1,  # Number of input channels (1 for single radiation pattern)
+        in_shape=(180, 180),  # Shape of the input radiation pattern (n_phi, n_theta)
+        out_shape=(16, 16),  # Size of the output phase shift matrix (xn, yn)
+        # Number of channels in each convolutional layer
+        conv_channels=[32, 64, 128, 256, 512],
+        # Number of units in each fully connected layer
+        fc_units=[2048, 1024],
+        # Use global pooling instead ofusing max pooling to reduce feature size
+        use_global_pool=False,
+    ):
+        super().__init__()
+
+        self.use_global_pool = use_global_pool
+        self.out_shape = out_shape
+
+        self.conv = nn.Sequential()
+        ch = [input_channels] + conv_channels
+        for i in range(1, len(ch)):
+            self.conv += nn.Sequential(
+                nn.Conv2d(ch[i - 1], ch[i], kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(ch[i]),
+                nn.ReLU(),
+            )
+            if not self.use_global_pool:  # Use max pooling
+                self.conv += nn.Sequential(nn.MaxPool2d(2))
+
+        if self.use_global_pool:
+            # Reduces feature size while preserving information
+            self.conv.append(nn.AdaptiveAvgPool2d(1))
+            feature_size = 1
+        else:
+            # Calculate the size of the feature maps after encoding
+            # After n channels MaxPool2d with stride=2
+            feature_size = np.prod(np.array(in_shape) // (2 ** len(conv_channels)))
+
+        self.fc = nn.Sequential(nn.Flatten())
+        fcs = [conv_channels[-1] * feature_size] + fc_units
+        for i in range(1, len(fcs)):
+            self.fc += nn.Sequential(
+                nn.Linear(fcs[i - 1], fcs[i]),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+            )
+
+        self.fc.append(nn.Linear(fcs[-1], np.prod(out_shape)))
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.fc(x)
+        x = torch.tanh(x) * torch.pi  # Scale to [-1, 1] and then to [-pi, pi]
+        x = x.view(-1, *self.out_shape)
+        return x
 
 
 class InverseConvModel(nn.Module):
@@ -136,63 +197,6 @@ class InverseConvModel(nn.Module):
         x_fft_features = torch.cat([x, x_fft_amplitude, x_fft_phase], dim=1)
 
         x = self.conv(x_fft_features)
-        x = self.fc(x)
-        x = torch.tanh(x) * torch.pi  # Scale to [-1, 1] and then to [-pi, pi]
-        x = x.view(-1, *self.out_shape)
-        return x
-
-
-class ConvModel(nn.Module):
-    def __init__(
-        self,
-        input_channels=1,  # Number of input channels (1 for single radiation pattern)
-        in_shape=(180, 180),  # Shape of the input radiation pattern (n_phi, n_theta)
-        out_shape=(16, 16),  # Size of the output phase shift matrix (xn, yn)
-        # Number of channels in each convolutional layer
-        conv_channels=[32, 64, 128, 256, 512],
-        # Number of units in each fully connected layer
-        fc_units=[2048, 1024],
-        # Use global pooling instead ofusing max pooling to reduce feature size
-        use_global_pool=False,
-    ):
-        super().__init__()
-
-        self.use_global_pool = use_global_pool
-        self.out_shape = out_shape
-
-        self.conv = nn.Sequential()
-        ch = [input_channels] + conv_channels
-        for i in range(1, len(ch)):
-            self.conv += nn.Sequential(
-                nn.Conv2d(ch[i - 1], ch[i], kernel_size=3, stride=1, padding=1),
-                nn.BatchNorm2d(ch[i]),
-                nn.ReLU(),
-            )
-            if not self.use_global_pool:  # Use max pooling
-                self.conv += nn.Sequential(nn.MaxPool2d(2))
-
-        if self.use_global_pool:
-            # Reduces feature size while preserving information
-            self.conv.append(nn.AdaptiveAvgPool2d(1))
-            feature_size = 1
-        else:
-            # Calculate the size of the feature maps after encoding
-            # After n channels MaxPool2d with stride=2
-            feature_size = np.prod(np.array(in_shape) // (2 ** len(conv_channels)))
-
-        self.fc = nn.Sequential(nn.Flatten())
-        fcs = [conv_channels[-1] * feature_size] + fc_units
-        for i in range(1, len(fcs)):
-            self.fc += nn.Sequential(
-                nn.Linear(fcs[i - 1], fcs[i]),
-                nn.ReLU(),
-                nn.Dropout(0.5),
-            )
-
-        self.fc.append(nn.Linear(fcs[-1], np.prod(out_shape)))
-
-    def forward(self, x):
-        x = self.conv(x)
         x = self.fc(x)
         x = torch.tanh(x) * torch.pi  # Scale to [-1, 1] and then to [-pi, pi]
         x = x.view(-1, *self.out_shape)
