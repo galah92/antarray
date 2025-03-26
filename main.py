@@ -483,7 +483,7 @@ def get_experiment_path(
 ):
     exp_path = exps_path / experiment
     exp_path.mkdir(exist_ok=overwrite, parents=True)
-    print(f"exp_path={exp_path}")
+    print(f"experiment={exp_path}")
     return exp_path
 
 
@@ -797,12 +797,14 @@ def index_from_beamforming_angles(steering_info, theta: int, phi: int) -> int:
 
 
 def create_dataloaders(dataset_path: Path, batch_size: int):
-    print(f"dataset_path={dataset_path}")
     ds = Hdf5Dataset(dataset_path)
 
     # Split data into train, validation, and test sets
     gen = torch.Generator().manual_seed(42)
-    train_ds, val_ds, test_ds = random_split(ds, [0.8, 0.1, 0.1], generator=gen)
+    train_ds, val_ds, test_ds = random_split(ds, [0.9, 0.05, 0.05], generator=gen)
+
+    train, val, test = len(train_ds), len(val_ds), len(test_ds)
+    print(f"dataset={dataset_path}, {train=:,}, {val=:,}, {test=:,}")
 
     # Create dataloaders
     train_loader = DataLoader(train_ds, batch_size, shuffle=True, num_workers=2)
