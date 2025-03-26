@@ -674,9 +674,9 @@ def pred_model(
 
     for idx in rand_indices:
         pred, target = all_preds[idx], all_targets[idx]
-        steering_info = steering_info[test_indices[idx]]
+        steering = steering_info[test_indices[idx]]
         filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
-        compare_phase_shifts(pred, target, theta, phi, steering_info, filepath)
+        compare_phase_shifts(pred, target, theta, phi, steering, filepath)
 
 
 def model_type_to_class(model_type: str):
