@@ -79,7 +79,69 @@ class Hdf5Dataset(Dataset):
         return pattern, phase_shift
 
 
-class PhaseShiftModel(nn.Module):
+class InverseConvModel(nn.Module):
+    def __init__(
+        self,
+        input_channels=3,  # Number of input channels (2 for radiation pattern fft)
+        in_shape=(180, 180),  # Shape of the input radiation pattern (n_phi, n_theta)
+        out_shape=(16, 16),  # Size of the output phase shift matrix (xn, yn)
+        # Number of channels in each convolutional layer
+        conv_channels=[32, 64, 128, 256, 512],
+        # Number of units in each fully connected layer
+        fc_units=[2048, 1024],
+        # Use global pooling instead ofusing max pooling to reduce feature size
+        use_global_pool=False,
+    ):
+        super().__init__()
+
+        self.use_global_pool = use_global_pool
+        self.out_shape = out_shape
+
+        self.conv = nn.Sequential()
+        ch = [input_channels] + conv_channels
+        for i in range(1, len(ch)):
+            self.conv += nn.Sequential(
+                nn.Conv2d(ch[i - 1], ch[i], kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(ch[i]),
+                nn.ReLU(),
+            )
+            if not self.use_global_pool:  # Use max pooling
+                self.conv += nn.Sequential(nn.MaxPool2d(2))
+
+        if self.use_global_pool:
+            # Reduces feature size while preserving information
+            self.conv.append(nn.AdaptiveAvgPool2d(1))
+            feature_size = 1
+        else:
+            # Calculate the size of the feature maps after encoding
+            # After n channels MaxPool2d with stride=2
+            feature_size = np.prod(np.array(in_shape) // (2 ** len(conv_channels)))
+
+        self.fc = nn.Sequential(nn.Flatten())
+        fcs = [conv_channels[-1] * feature_size] + fc_units
+        for i in range(1, len(fcs)):
+            self.fc += nn.Sequential(
+                nn.Linear(fcs[i - 1], fcs[i]),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+            )
+
+        self.fc.append(nn.Linear(fcs[-1], np.prod(out_shape)))
+
+    def forward(self, x):
+        x_fft = torch.fft.fft2(x.squeeze(1))
+        x_fft_amplitude = torch.abs(x_fft).unsqueeze(1)
+        x_fft_phase = torch.angle(x_fft).unsqueeze(1)
+        x_fft_features = torch.cat([x, x_fft_amplitude, x_fft_phase], dim=1)
+
+        x = self.conv(x_fft_features)
+        x = self.fc(x)
+        x = torch.tanh(x) * torch.pi  # Scale to [-1, 1] and then to [-pi, pi]
+        x = x.view(-1, *self.out_shape)
+        return x
+
+
+class ConvModel(nn.Module):
     def __init__(
         self,
         input_channels=1,  # Number of input channels (1 for single radiation pattern)
@@ -545,11 +607,13 @@ def pred_model(
     # load model based on model type
     model_type = checkpoint["model_type"]
     if model_type == "cnn":
-        model = PhaseShiftModel()
+        model = ConvModel()
     elif model_type == "resnet":
         model = resnet18()
     elif model_type == "spectral_spatial":
         model = SpectralSpatialModel()
+    elif model_type == "inv_cnn":
+        model = InverseConvModel()
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -706,7 +770,7 @@ def pred_beamforming(
     pattern = pattern / 20  # Normalize
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
-    model = PhaseShiftModel()
+    model = ConvModel()
     model.load_state_dict(checkpoint["model_state_dict"])
 
     model.eval()
@@ -736,11 +800,13 @@ def run_model(
 
     # Select model based on model_type parameter
     if model_type == "cnn":
-        model = PhaseShiftModel()
+        model = ConvModel()
     elif model_type == "resnet":
         model = resnet18()
     elif model_type == "spectral_spatial":
         model = SpectralSpatialModel()
+    elif model_type == "inv_cnn":
+        model = InverseConvModel()
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -980,7 +1046,7 @@ def eval_model_by_beam_count(
 
     print(f"Loading model from {exp_path}")
     checkpoint = torch.load(exp_path / DEFAULT_MODEL_NAME)
-    model = PhaseShiftModel()
+    model = ConvModel()
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
