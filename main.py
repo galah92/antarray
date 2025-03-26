@@ -627,12 +627,9 @@ def pred_model(
 
     for idx in rand_indices:
         pred, target = all_preds[idx], all_targets[idx]
-        steering_str = steering_repr(steering_info[test_indices[idx]])
-        loss = circular_mse_loss_np(pred, target)
-        title = f"Prediction Example {test_indices[idx]}: {loss:.4f} ({steering_str})"
+        steering_info = steering_info[test_indices[idx]]
         filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
-        compare_phase_shifts(pred, target, theta, phi, title, filepath)
-        print(f"Prediction example saved to {filepath}")
+        compare_phase_shifts(pred, target, theta, phi, steering_info, filepath)
 
 
 def model_type_to_class(model_type: str):
@@ -653,7 +650,7 @@ def compare_phase_shifts(
     label,
     theta,
     phi,
-    title: str | None = None,
+    steering_info,
     filepath: Path | None = None,
     clip_ff: bool = True,
 ):
@@ -668,27 +665,30 @@ def compare_phase_shifts(
     if clip_ff:
         label_ff, pred_ff = label_ff.clip(min=0), pred_ff.clip(min=0)
 
-    title_gt_2d = "Ground Truth 2D Radiation Pattern"
-    analyze.plot_ff_2d(label_ff, theta, phi, title=title_gt_2d, ax=axs[0, 1])
-    title_pred_2d = "Predicted 2D Radiation Pattern"
-    analyze.plot_ff_2d(pred_ff, theta, phi, title=title_pred_2d, ax=axs[1, 1])
+    title = "Ground Truth 2D Radiation Pattern"
+    analyze.plot_ff_2d(label_ff, theta, phi, title=title, ax=axs[0, 1])
+    title = "Predicted 2D Radiation Pattern"
+    analyze.plot_ff_2d(pred_ff, theta, phi, title=title, ax=axs[1, 1])
 
     axs[0, 2].remove()
     axs[0, 2] = fig.add_subplot(2, 3, 3, projection="3d")
-    title_gt_3d = "Ground Truth 3D Radiation Pattern"
-    analyze.plot_ff_3d(theta, phi, label_ff, title=title_gt_3d, ax=axs[0, 2])
+    title = "Ground Truth 3D Radiation Pattern"
+    analyze.plot_ff_3d(theta, phi, label_ff, title=title, ax=axs[0, 2])
 
     axs[1, 2].remove()
     axs[1, 2] = fig.add_subplot(2, 3, 6, projection="3d")
-    title_pred_3d = "Predicted 3D Radiation Pattern"
-    analyze.plot_ff_3d(theta, phi, pred_ff, title=title_pred_3d, ax=axs[1, 2])
+    title = "Predicted 3D Radiation Pattern"
+    analyze.plot_ff_3d(theta, phi, pred_ff, title=title, ax=axs[1, 2])
 
-    if title is not None:
-        fig.suptitle(title)
+    loss = circular_mse_loss_np(pred, label)
+    steering_str = steering_repr(steering_info)
+    fig.suptitle(f"Prediction Example | loss {loss:.4f} | steering {steering_str}")
+
     fig.set_tight_layout(True)
 
     if filepath:
         fig.savefig(filepath, dpi=600, bbox_inches="tight")
+        print(f"Prediction example saved to {filepath}")
 
 
 @app.command()
@@ -909,14 +909,9 @@ def pred_knn(
     if idx is None:
         idx = np.random.choice(len(y_pred), 1)[0]
 
-    pred, test = y_pred[idx], y_test[idx]
-    steering_str = steering_repr(steering_info[idx])
-    loss = circular_mse_loss_np(pred, test)
-    title = f"Prediction Example {idx}: {loss:.4f} ({steering_str})"
+    pred, test, steering_info = y_pred[idx], y_test[idx], steering_info[idx]
     filepath = exp_path / f"knn_pred_example_{idx}.png"
-    compare_phase_shifts(pred, test, theta, phi, title, filepath)
-
-    print(f"Prediction example saved to {filepath}")
+    compare_phase_shifts(pred, test, theta, phi, steering_info, filepath)
 
 
 def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray):
@@ -1072,12 +1067,9 @@ def eval_model_by_beam_count(
         for idx in np.random.choice(len(indices), num_examples, replace=False):
             original_idx = test_indices[indices[idx]]
             pred, target = all_preds[idx], all_targets[idx]
-            steering_str = steering_repr(steering_info[original_idx])
-            loss = circular_mse_loss_np(pred, target)
-            title = f"{num_beams} Beam Sample {original_idx}: MSE={loss:.4f} ({steering_str})"
+            steering_info = steering_info[original_idx]
             filepath = exp_path / f"beam_{num_beams}_example_{original_idx}.png"
-            compare_phase_shifts(pred, target, theta, phi, title, filepath)
-            print(f"Example visualization saved to {filepath}")
+            compare_phase_shifts(pred, target, theta, phi, steering_info, filepath)
 
     # Save combined results
     results_json = json.dumps(results, indent=4)
