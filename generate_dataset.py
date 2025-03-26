@@ -921,17 +921,21 @@ def plot_sample(
     pattern_3d = pattern[None, ...]  # Add freq dimension (first one) for 3D plot
     analyze.plot_ff_3d(theta, phi, pattern_3d, freq=freq, ax=axs[2])
 
-    steering_info = dataset["steering_info"][idx]
-    thetas_s, phis_s = steering_info
-    thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
-    thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
-    phis_s = np.array2string(phis_s, precision=2, separator=", ")
-    phase_shift_title = f"Phase Shifts (θ={thetas_s}°, φ={phis_s}°)"
+    steering_str = steering_repr(dataset["steering_info"][idx])
+    phase_shift_title = f"Phase Shifts ({steering_str})"
     fig.suptitle(phase_shift_title)
 
     fig.set_tight_layout(True)
     if output_dir:
         fig.savefig(output_dir / f"sample_{idx}.png", dpi=600, bbox_inches="tight")
+
+
+def steering_repr(steering_angles: np.ndarray):
+    thetas_s, phis_s = steering_angles
+    thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
+    thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
+    phis_s = np.array2string(phis_s, precision=2, separator=", ")
+    return f"θ={thetas_s}°, φ={phis_s}°"
 
 
 @app.command()

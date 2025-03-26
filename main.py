@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 
 import analyze
 import generate_dataset
-from generate_dataset import load_dataset
+from generate_dataset import load_dataset, steering_repr
 
 DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d_4k.h5"
 DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
@@ -440,13 +440,11 @@ def train_model(
 
     # Move model to device
     model = model.to(device)
-    best_val_loss = float("inf")
-    best_model_wts = None
+    best_val_loss, best_model_wts = float("inf"), None
 
     try:
         for epoch in range(n_epochs):
             print(f"Epoch {epoch + 1}/{n_epochs} lr={scheduler.get_last_lr()[0]}")
-            print("-" * 10)
 
             # Each epoch has a training and validation phase
             for phase in ["train", "val"]:
@@ -629,17 +627,11 @@ def pred_model(
 
     for idx in rand_indices:
         pred, target = all_preds[idx], all_targets[idx]
-
-        thetas_s, phis_s = steering_info[test_indices[idx]]
-        thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
-        thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
-        phis_s = np.array2string(phis_s, precision=2, separator=", ")
-
+        steering_str = steering_repr(steering_info[test_indices[idx]])
         loss = circular_mse_loss_np(pred, target)
-        title = f"Prediction Example {test_indices[idx]}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)"
+        title = f"Prediction Example {test_indices[idx]}: {loss:.4f} ({steering_str})"
         filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
         compare_phase_shifts(pred, target, theta, phi, title, filepath)
-
         print(f"Prediction example saved to {filepath}")
 
 
@@ -918,14 +910,9 @@ def pred_knn(
         idx = np.random.choice(len(y_pred), 1)[0]
 
     pred, test = y_pred[idx], y_test[idx]
-    thetas_s, phis_s = steering_info[idx]
-
-    thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
-    thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
-    phis_s = np.array2string(phis_s, precision=2, separator=", ")
-
+    steering_str = steering_repr(steering_info[idx])
     loss = circular_mse_loss_np(pred, test)
-    title = f"Prediction Example {idx}: {loss:.4f} (θ={thetas_s}°, φ={phis_s}°)"
+    title = f"Prediction Example {idx}: {loss:.4f} ({steering_str})"
     filepath = exp_path / f"knn_pred_example_{idx}.png"
     compare_phase_shifts(pred, test, theta, phi, title, filepath)
 
@@ -1078,30 +1065,19 @@ def eval_model_by_beam_count(
             "sample_count": len(indices),
         }
 
-        print(f"  MSE: {mse:.6f}")
-        print(f"  RMSE: {rmse:.6f}")
-        print(f"  MAE: {mae:.6f}")
+        print(f"MSE: {mse:.6f}, RMSE: {rmse:.6f}, MAE: {mae:.6f}")
 
         # Generate a few example visualizations
         num_examples = min(3, len(indices))
         for idx in np.random.choice(len(indices), num_examples, replace=False):
             original_idx = test_indices[indices[idx]]
-            pred = all_preds[idx]
-            target = all_targets[idx]
-
-            # Extract steering information
-            thetas_s, phis_s = steering_info[original_idx]
-            thetas_s = thetas_s[~np.isnan(thetas_s)]
-            phis_s = phis_s[~np.isnan(phis_s)]
-            thetas_s_str = np.array2string(thetas_s, precision=2, separator=", ")
-            phis_s_str = np.array2string(phis_s, precision=2, separator=", ")
-
+            pred, target = all_preds[idx], all_targets[idx]
+            steering_str = steering_repr(steering_info[original_idx])
             loss = circular_mse_loss_np(pred, target)
-            title = f"{num_beams} Beam Sample {original_idx}: MSE={loss:.4f} (θ={thetas_s_str}°, φ={phis_s_str}°)"
+            title = f"{num_beams} Beam Sample {original_idx}: MSE={loss:.4f} ({steering_str})"
             filepath = exp_path / f"beam_{num_beams}_example_{original_idx}.png"
             compare_phase_shifts(pred, target, theta, phi, title, filepath)
-
-            print(f"  Example visualization saved to {filepath}")
+            print(f"Example visualization saved to {filepath}")
 
     # Save combined results
     results_json = json.dumps(results, indent=4)
