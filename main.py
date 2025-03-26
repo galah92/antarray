@@ -604,9 +604,12 @@ def eval_model(
             all_preds[i] = model(inputs.to(device)).cpu().numpy()
             all_targets[i] = targets.numpy()
 
-    # Calculate metrics
-    mse = circular_mse_loss_np(all_preds, all_targets)
-    mae = circular_mae_loss_np(all_preds, all_targets)
+    calc_metrics(exp_path, all_preds, all_targets)
+
+
+def calc_metrics(exp_path: Path, preds, targets):
+    mse = circular_mse_loss_np(preds, targets)
+    mae = circular_mae_loss_np(preds, targets)
     rmse = np.sqrt(mse)
     metrics = {"mae": mae, "mse": mse, "rmse": rmse}
 
