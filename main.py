@@ -731,24 +731,20 @@ def plot_training(
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
-    save_path = exp_path / "training_history.png"
-    if save_path.exists() and not overwrite:
-        raise Exception(f"Training history plot already exists at {save_path}")
-
     model_path = exp_path / DEFAULT_MODEL_NAME
     history = torch.load(model_path)["history"]
 
     fig, axs = plt.subplots(1, 2, figsize=(10, 5))
 
     xticks = range(0, 100 + 1, 10)
-    yticks = np.arange(0, 1 + 0.1, 0.1)
+    yticks = np.arange(0, 4 + 0.1, 0.1)
 
     axs[0].plot(history["train_loss"], "b-", label="Training Loss")
     axs[0].plot(history["val_loss"], "r-", label="Validation Loss")
     axs[0].set_xlim(xticks[0], xticks[-1])
     axs[0].set_xticks(xticks)
     axs[0].set_ylim(yticks[0], yticks[-1])
-    axs[0].set_yticks(yticks)
+    # axs[0].set_yticks(yticks)
     axs[0].set_title("Training and Validation Loss")
     axs[0].set_xlabel("Epochs")
     axs[0].set_ylabel("Loss")
@@ -759,13 +755,15 @@ def plot_training(
         axs[1].plot(history["lr"], "g-")
         axs[1].set_xlim(xticks[0], xticks[-1])
         axs[1].set_xticks(xticks)
-        axs[1].yaxis.set_major_formatter(FormatStrFormatter("%.1e"))
+        axs[1].set_yscale("log")
+        axs[1].yaxis.set_major_formatter(FormatStrFormatter("%0.1e"))
         axs[1].set_title("Learning Rate")
         axs[1].set_xlabel("Epochs")
         axs[1].set_ylabel("Learning Rate")
         axs[1].grid(True)
 
     fig.set_tight_layout(True)
+    save_path = exp_path / "training_history.png"
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
     print(f"Training history plot saved to {save_path}")
 
