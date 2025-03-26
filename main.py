@@ -649,7 +649,7 @@ def model_type_to_class(model_type: str):
 
 
 def compare_phase_shifts(
-    output,
+    pred,
     label,
     theta,
     phi,
@@ -660,18 +660,18 @@ def compare_phase_shifts(
     fig, axs = plt.subplots(2, 3, figsize=(18, 10))
 
     analyze.plot_phase_shifts(label, title="Ground Truth Phase Shifts", ax=axs[0, 0])
-    analyze.plot_phase_shifts(output, title="Predicted Phase Shifts", ax=axs[1, 0])
+    analyze.plot_phase_shifts(pred, title="Predicted Phase Shifts", ax=axs[1, 0])
 
     label_ff = generate_dataset.ff_from_phase_shifts(label)
-    output_ff = generate_dataset.ff_from_phase_shifts(output)
+    pred_ff = generate_dataset.ff_from_phase_shifts(pred)
 
     if clip_ff:
-        label_ff, output_ff = label_ff.clip(min=0), output_ff.clip(min=0)
+        label_ff, pred_ff = label_ff.clip(min=0), pred_ff.clip(min=0)
 
     title_gt_2d = "Ground Truth 2D Radiation Pattern"
     analyze.plot_ff_2d(label_ff, theta, phi, title=title_gt_2d, ax=axs[0, 1])
     title_pred_2d = "Predicted 2D Radiation Pattern"
-    analyze.plot_ff_2d(output_ff, theta, phi, title=title_pred_2d, ax=axs[1, 1])
+    analyze.plot_ff_2d(pred_ff, theta, phi, title=title_pred_2d, ax=axs[1, 1])
 
     axs[0, 2].remove()
     axs[0, 2] = fig.add_subplot(2, 3, 3, projection="3d")
@@ -681,7 +681,7 @@ def compare_phase_shifts(
     axs[1, 2].remove()
     axs[1, 2] = fig.add_subplot(2, 3, 6, projection="3d")
     title_pred_3d = "Predicted 3D Radiation Pattern"
-    analyze.plot_ff_3d(theta, phi, output_ff, title=title_pred_3d, ax=axs[1, 2])
+    analyze.plot_ff_3d(theta, phi, pred_ff, title=title_pred_3d, ax=axs[1, 2])
 
     if title is not None:
         fig.suptitle(title)
