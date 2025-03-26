@@ -17,8 +17,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, random_split
 
 import analyze
-import generate_dataset
-from generate_dataset import load_dataset, steering_repr
+from generate_dataset import ff_from_phase_shifts, steering_repr
 
 DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d_4k.h5"
 DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
@@ -693,8 +692,7 @@ def compare_phase_shifts(
     analyze.plot_phase_shifts(label, title="Ground Truth Phase Shifts", ax=axs[0, 0])
     analyze.plot_phase_shifts(pred, title="Predicted Phase Shifts", ax=axs[1, 0])
 
-    label_ff = generate_dataset.ff_from_phase_shifts(label)
-    pred_ff = generate_dataset.ff_from_phase_shifts(pred)
+    label_ff, pred_ff = ff_from_phase_shifts(label), ff_from_phase_shifts(pred)
 
     if clip_ff:
         label_ff, pred_ff = label_ff.clip(min=0), pred_ff.clip(min=0)
@@ -808,13 +806,10 @@ def run_knn(
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
-    # Load dataset
-    print(f"Loading dataset from {dataset_path}")
-    dataset = load_dataset(dataset_path)
-
-    patterns, labels = dataset["patterns"], dataset["labels"]
-    theta, phi = dataset["theta"], dataset["phi"]
-    steering_info = dataset["steering_info"]
+    with h5py.File(dataset_path, "r") as h5f:
+        patterns, labels = h5f["patterns"], h5f["labels"]
+        theta, phi = h5f["theta"], h5f["phi"]
+        steering_info = h5f["steering_info"]
 
     # Flatten the features
     patterns = patterns.reshape(patterns.shape[0], -1)
