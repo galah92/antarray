@@ -423,6 +423,68 @@ class EarlyStopper:
         return False
 
 
+@app.command()
+def run_model(
+    experiment: str,
+    overwrite: bool = False,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
+    batch_size: int = 256,
+    n_epochs: int = 100,
+    lr: float = 1e-4,
+    model_type: str = "cnn",
+):
+    exp_path = get_experiment_path(experiment, exps_path, overwrite)
+
+    train_loader, val_loader, test_loader = create_dataloaders(dataset_path, batch_size)
+
+    model = model_type_to_class(model_type)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"{model_type=} ({n_params:,}), {batch_size=}, {n_epochs=}")
+
+    criterion = circular_mse_loss_torch
+    optimizer = optim.AdamW(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
+
+    # Train model
+    model, history = train_model(
+        model,
+        train_loader,
+        val_loader,
+        criterion,
+        optimizer,
+        scheduler,
+        EarlyStopper(patience=10, min_delta=1e-4),
+        n_epochs,
+    )
+
+    # Save model (including model type)
+    model_path = exp_path / DEFAULT_MODEL_NAME
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "history": history,
+            "model_type": model_type,
+        },
+        model_path,
+    )
+    print(f"Model saved to {model_path}")
+
+    plot_training(experiment, overwrite=overwrite, exps_path=exps_path)
+    eval_model(model, test_loader, exp_path)
+    pred_model(experiment, dataset_path, exps_path, num_examples=5)
+
+
+def get_experiment_path(
+    experiment: str, exps_path: Path = DEFAULT_EXPERIMENTS_PATH, overwrite: bool = False
+):
+    exp_path = exps_path / experiment
+    exp_path.mkdir(exist_ok=overwrite, parents=True)
+    print(f"exp_path={exp_path}")
+    return exp_path
+
+
 def train_model(
     model,
     train_loader,
@@ -443,7 +505,9 @@ def train_model(
 
     try:
         for epoch in range(n_epochs):
-            print(f"Epoch {epoch + 1}/{n_epochs} lr={scheduler.get_last_lr()[0]}")
+            lr = scheduler.get_last_lr()[0]
+            print()
+            print(f"Epoch {epoch:03}/{n_epochs:03} | {lr=:1.1e}")
 
             # Each epoch has a training and validation phase
             for phase in ["train", "val"]:
@@ -455,17 +519,14 @@ def train_model(
                     dataloader = val_loader
 
                 running_loss = 0.0
+                n_batches = len(dataloader)
 
-                # Iterate over data
                 for i, (inputs, targets) in enumerate(dataloader):
                     inputs = inputs.to(device)
                     targets = targets.to(device)
 
-                    # Zero the parameter gradients
                     optimizer.zero_grad()
 
-                    # Forward pass
-                    # Track history only in train phase
                     with torch.set_grad_enabled(phase == "train"):
                         outputs = model(inputs)
                         loss = criterion(outputs, targets)
@@ -475,27 +536,22 @@ def train_model(
                             loss.backward()
                             optimizer.step()
 
-                    # Statistics
                     running_loss += loss.item() * inputs.size(0)
 
-                    # Print progress
                     if phase == "train" and i % log_interval == 0:
-                        print(f"Batch {i}/{len(dataloader)}, Loss: {loss.item():.4f}")
+                        print(f"Batch {i:03}/{n_batches:03} | loss={loss.item():.03f}")
 
                 epoch_loss = running_loss / len(dataloader.dataset)
+                loss_str = f"{phase}_loss={epoch_loss:.03f}"
+                print(f"Epoch {epoch:03}/{n_epochs:03} | {loss_str}")
 
-                # Print epoch results
-                print(f"{phase} Loss: {epoch_loss:.4f}")
-
-                # Store history
                 if phase == "train":
                     history["train_loss"].append(epoch_loss)
                     if scheduler:
-                        history["lr"].append(scheduler.get_last_lr()[0])
+                        history["lr"].append(lr)
                 else:
                     history["val_loss"].append(epoch_loss)
 
-                    # Save best model
                     if epoch_loss < best_val_loss:
                         best_val_loss = epoch_loss
                         best_model_wts = model.state_dict().copy()
@@ -505,14 +561,11 @@ def train_model(
                     print("Early stopping...")
                     break
 
-            # Step the scheduler
             if scheduler:
                 if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                     scheduler.step(history["val_loss"][-1])  # Pass the validation loss
                 else:
                     scheduler.step()
-
-            print()
 
     except KeyboardInterrupt:
         print("Training interrupted by user...")
@@ -740,76 +793,8 @@ def index_from_beamforming_angles(steering_info, theta: int, phi: int) -> int:
     return idx
 
 
-@app.command()
-def run_model(
-    experiment: str,
-    overwrite: bool = False,
-    dataset_path: Path = DEFAULT_DATASET_PATH,
-    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
-    batch_size: int = 256,
-    n_epochs: int = 100,
-    lr: float = 1e-4,
-    model_type: str = "cnn",
-):
-    exp_path = get_experiment_path(experiment, exps_path, overwrite)
-
-    train_loader, val_loader, test_loader = create_dataloaders(dataset_path, batch_size)
-
-    model = model_type_to_class(model_type)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"{model_type=}, {n_params:,=}, {batch_size=}, {n_epochs=}")
-
-    criterion = circular_mse_loss_torch
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
-
-    # Train model
-    model, history = train_model(
-        model,
-        train_loader,
-        val_loader,
-        criterion,
-        optimizer,
-        scheduler=scheduler,
-        early_stopper=EarlyStopper(patience=10, min_delta=1e-4),
-        n_epochs=n_epochs,
-    )
-
-    # Save model (including model type)
-    model_path = exp_path / DEFAULT_MODEL_NAME
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "history": history,
-            "model_type": model_type,  # Save model type for later loading
-        },
-        model_path,
-    )
-    print(f"Model saved to {model_path}")
-
-    plot_training(experiment, overwrite=overwrite, exps_path=exps_path)
-
-    eval_model(model, test_loader, exp_path)
-
-    pred_model(
-        experiment=experiment,
-        dataset_path=dataset_path,
-        exps_path=exps_path,
-        num_examples=5,
-    )
-
-
-def get_experiment_path(
-    experiment: str, exps_path: Path = DEFAULT_EXPERIMENTS_PATH, overwrite: bool = False
-):
-    exp_path = exps_path / experiment
-    exp_path.mkdir(exist_ok=overwrite, parents=True)
-    print(f"exp_path={exp_path}")
-    return exp_path
-
-
 def create_dataloaders(dataset_path: Path, batch_size: int):
+    print(f"dataset_path={dataset_path}")
     ds = Hdf5Dataset(dataset_path)
 
     # Split data into train, validation, and test sets
