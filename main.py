@@ -477,7 +477,6 @@ def run_model(
     print(f"Model saved to {model_path}")
 
     plot_training(experiment, overwrite=overwrite, exps_path=exps_path)
-    eval_model(model, test_loader, exp_path)
 
     if not interrupted:
         pred_model(experiment, dataset_path, exps_path, num_examples=5)
@@ -589,48 +588,16 @@ def train_model(
     return model, history, interrupted
 
 
-def eval_model(
-    model,
-    test_loader,
-    exp_path: Path,
-):
-    batch_size = test_loader.batch_size
-    n_samples = len(test_loader.dataset)
-    all_preds = np.empty((n_samples, 16, 16))
-    all_targets = np.empty((n_samples, 16, 16))
-
-    model.eval()
-    with torch.no_grad():
-        for i, (inputs, targets) in enumerate(test_loader):
-            j, k = i * batch_size, inputs.size(0)
-            all_preds[j : j + k] = model(inputs.to(device)).cpu().numpy()
-            all_targets[j : j + k] = targets.numpy()
-
-    calc_metrics(exp_path, all_preds, all_targets)
-
-
-def calc_metrics(exp_path: Path, preds, targets):
-    mse = circular_mse_loss_np(preds, targets)
-    mae = circular_mae_loss_np(preds, targets)
-    rmse = np.sqrt(mse)
-    metrics = {"mae": mae, "mse": mse, "rmse": rmse}
-
-    metrics_json = json.dumps(metrics, indent=4)
-    metrics_path = exp_path / "metrics.json"
-    metrics_path.write_text(metrics_json)
-    print(f"Metrics saved to {metrics_path}")
-
-
 @app.command()
 def pred_model(
     experiment: str,
     dataset_path: Path = DEFAULT_DATASET_PATH,
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
-    num_examples: int = 5,
+    batch_size: int = 128,
+    n_examples: int = 5,
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite=True)
 
-    batch_size = 128
     _, _, test_loader = create_dataloaders(dataset_path, batch_size)
     test_indices = test_loader.dataset.indices
 
@@ -645,9 +612,9 @@ def pred_model(
     model = model_type_to_class(model_type).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    n_samples = len(test_loader.dataset)
-    all_preds = np.empty((n_samples, 16, 16))
-    all_targets = np.empty((n_samples, 16, 16))
+    n_test = len(test_loader.dataset)
+    all_preds = np.empty((n_test, 16, 16))
+    all_targets = np.empty((n_test, 16, 16))
 
     model.eval()
     with torch.no_grad():
@@ -656,15 +623,27 @@ def pred_model(
             all_preds[j : j + k] = model(inputs.to(device)).cpu().numpy()
             all_targets[j : j + k] = targets.numpy()
 
-    rand_indices = np.random.choice(len(all_preds), num_examples, replace=False)
+    calc_metrics(exp_path, all_preds, all_targets)
+    plot_steer_loss(exp_path, all_preds, all_targets, steering_info)
 
+    rand_indices = np.random.choice(n_test, n_examples, replace=False)
     for idx in rand_indices:
         pred, target = all_preds[idx], all_targets[idx]
         steering = steering_info[idx]
         filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
         compare_phase_shifts(pred, target, theta, phi, steering, filepath)
 
-    plot_steer_loss(exp_path, all_preds, all_targets, steering_info)
+
+def calc_metrics(exp_path: Path, preds, targets):
+    mse = circular_mse_loss_np(preds, targets)
+    mae = circular_mae_loss_np(preds, targets)
+    rmse = np.sqrt(mse)
+    metrics = {"mae": mae, "mse": mse, "rmse": rmse}
+
+    metrics_json = json.dumps(metrics, indent=4)
+    metrics_path = exp_path / "metrics.json"
+    metrics_path.write_text(metrics_json)
+    print(f"Metrics saved to {metrics_path}")
 
 
 def plot_steer_loss(exp_path: Path, preds, targets, steering_info):
