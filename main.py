@@ -429,11 +429,10 @@ def train_model(
     val_loader,
     criterion,
     optimizer,
-    scheduler=None,
-    early_stopper: EarlyStopper | None = None,
-    n_epochs=25,
+    scheduler,
+    early_stopper,
+    n_epochs,
     log_interval=10,
-    clip_grad=1.0,
 ):
     since = time.time()
     history = {"train_loss": [], "val_loss": [], "lr": []}
@@ -474,11 +473,6 @@ def train_model(
                         # Backward + optimize only in training phase
                         if phase == "train":
                             loss.backward()
-                            # Clip gradients
-                            if clip_grad is not None:
-                                torch.nn.utils.clip_grad_norm_(
-                                    model.parameters(), clip_grad
-                                )
                             optimizer.step()
 
                     # Statistics
@@ -757,21 +751,19 @@ def run_model(
     lr: float = 1e-4,
     model_type: str = "cnn",
 ):
-    exp_path = exps_path / experiment
-    exp_path.mkdir(exist_ok=overwrite, parents=True)
+    exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
     train_loader, val_loader, test_loader = create_dataloaders(dataset_path, batch_size)
 
     model = model_type_to_class(model_type)
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Using {model_type} with {total_params:,} parameters")
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"{model_type=}, {n_params:,=}, {batch_size=}, {n_epochs=}")
 
     criterion = circular_mse_loss_torch
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
 
     # Train model
-    print("Starting training...")
     model, history = train_model(
         model,
         train_loader,
@@ -808,6 +800,15 @@ def run_model(
     )
 
 
+def get_experiment_path(
+    experiment: str, exps_path: Path = DEFAULT_EXPERIMENTS_PATH, overwrite: bool = False
+):
+    exp_path = exps_path / experiment
+    exp_path.mkdir(exist_ok=overwrite, parents=True)
+    print(f"exp_path={exp_path}")
+    return exp_path
+
+
 def create_dataloaders(dataset_path: Path, batch_size: int):
     ds = Hdf5Dataset(dataset_path)
 
@@ -831,8 +832,7 @@ def run_knn(
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
     n_neighbors: int = 5,
 ):
-    exp_path = exps_path / experiment
-    exp_path.mkdir(exist_ok=overwrite, parents=True)
+    exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
     # Load dataset
     print(f"Loading dataset from {dataset_path}")
