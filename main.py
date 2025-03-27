@@ -474,7 +474,7 @@ def run_model(
     plot_training(experiment, overwrite=overwrite, exps_path=exps_path)
 
     if not interrupted:
-        pred_model(experiment, dataset_path, exps_path, num_examples=5)
+        pred_model(experiment, dataset_path, exps_path, n_examples=5)
 
 
 def get_experiment_path(
