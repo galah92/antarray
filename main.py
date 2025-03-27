@@ -805,9 +805,9 @@ def run_knn(
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
     with h5py.File(dataset_path, "r") as h5f:
-        patterns, labels = h5f["patterns"], h5f["labels"]
-        theta, phi = h5f["theta"], h5f["phi"]
-        steering_info = h5f["steering_info"]
+        patterns, labels = h5f["patterns"][:], h5f["labels"][:]
+        theta, phi = h5f["theta"][:], h5f["phi"][:]
+        steering_info = h5f["steering_info"][:]
 
     # Flatten the features
     patterns = patterns.reshape(patterns.shape[0], -1)
@@ -872,6 +872,8 @@ def pred_knn(
         y_test = h5f["y_test"][:].reshape(-1, 16, 16)
         steering_info = h5f["steering_info"][:]
         theta, phi = h5f["theta"][:], h5f["phi"][:]
+
+    plot_steer_loss(exp_path, y_pred, y_test, steering_info)
 
     if idx is None:
         idx = np.random.choice(len(y_pred), 1)[0]
