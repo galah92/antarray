@@ -140,7 +140,6 @@ class ConvModel(nn.Module):
     def forward(self, x):
         x = self.conv(x)
         x = self.fc(x)
-        x = torch.tanh(x) * torch.pi  # Scale to [-1, 1] and then to [-pi, pi]
         x = x.view(-1, *self.out_shape)
         return x
 
@@ -202,7 +201,6 @@ class InverseConvModel(nn.Module):
 
         x = self.conv(x_fft_features)
         x = self.fc(x)
-        x = torch.tanh(x) * torch.pi  # Scale to [-1, 1] and then to [-pi, pi]
         x = x.view(-1, *self.out_shape)
         return x
 
@@ -280,7 +278,6 @@ class ResNet(nn.Module):
         out = self.avg_pool(out)
         out = out.view(out.size(0), -1)
         out = self.fc(out)
-        out = torch.tanh(out) * torch.pi  # Scale to [-1, 1] and then to [-pi, pi]
         out = out.view(-1, *self.out_shape)
         return out
 
@@ -391,7 +388,6 @@ class SpectralSpatialModel(nn.Module):
 
         # Final fully connected layers
         outputs = self.fc_layers(combined_features)
-        outputs = torch.tanh(outputs) * torch.pi  # Scale outputs to [-pi, pi]
 
         # Reshape to desired output shape
         outputs = outputs.view(batch_size, *self.out_shape)
