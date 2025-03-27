@@ -429,9 +429,9 @@ def run_model(
     overwrite: bool = False,
     dataset_path: Path = DEFAULT_DATASET_PATH,
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
-    batch_size: int = 256,
+    batch_size: int = 32,
     n_epochs: int = 100,
-    lr: float = 1e-4,
+    lr: float = 1e-3,
     model_type: str = "cnn",
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
