@@ -144,6 +144,158 @@ class ConvModel(nn.Module):
         return x
 
 
+# Helper function for cropping (if needed for skip connections)
+def center_crop(layer, target_size):
+    _, _, layer_height, layer_width = layer.size()
+    diff_y = layer_height - target_size[0]
+    diff_x = layer_width - target_size[1]
+    return layer[
+        :,
+        :,
+        diff_y // 2 : layer_height - (diff_y - diff_y // 2),
+        diff_x // 2 : layer_width - (diff_x - diff_x // 2),
+    ]
+
+
+# --- Building Blocks (DoubleConv, Down, Up) ---
+class DoubleConv(nn.Module):
+    """(convolution => [BN] => ReLU) * 2"""
+
+    def __init__(self, in_channels, out_channels, mid_channels=None):
+        super().__init__()
+        if not mid_channels:
+            mid_channels = out_channels
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.double_conv(x)
+
+
+class Down(nn.Module):
+    """Downscaling with maxpool then double conv"""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(2), DoubleConv(in_channels, out_channels)
+        )
+
+    def forward(self, x):
+        return self.maxpool_conv(x)
+
+
+class Up(nn.Module):
+    """Upscaling then double conv"""
+
+    def __init__(self, in_channels, out_channels, bilinear=True):
+        super().__init__()
+        if bilinear:
+            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
+        else:
+            self.up = nn.ConvTranspose2d(
+                in_channels, in_channels // 2, kernel_size=2, stride=2
+            )
+            self.conv = DoubleConv(in_channels, out_channels)
+
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        target_size = x1.size()[2:]
+        x2_cropped = center_crop(x2, target_size)
+        x = torch.cat([x2_cropped, x1], dim=1)
+        return self.conv(x)
+
+
+# --- The Main Model for Direct Phase Prediction ---
+class UNetModel(nn.Module):
+    def __init__(
+        self,
+        n_channels_in=1,
+        n_channels_out=1,
+        bilinear=True,
+        final_stage="adaptive_pool",
+    ):
+        """
+        U-Net architecture for predicting phase directly (linear output).
+        Suitable for use with circular MSE/MAE loss functions.
+
+        Args:
+            n_channels_in (int): Number of input channels (usually 1 for DBi map).
+            n_channels_out (int): Number of output channels (should be 1 for direct phase).
+            bilinear (bool): If True, use bilinear upsampling. Otherwise, use ConvTranspose2d.
+            final_stage (str): 'adaptive_pool' or 'large_kernel'. How to get to 16x16.
+        """
+        super().__init__()
+        if n_channels_out != 1:
+            print(
+                f"Warning: This model is designed for direct phase prediction (n_channels_out=1), but got {n_channels_out}."
+            )
+
+        self.n_channels_in = n_channels_in
+        self.n_channels_out = n_channels_out
+        self.bilinear = bilinear
+        self.final_stage_type = final_stage
+
+        # --- Encoder ---
+        self.inc = DoubleConv(n_channels_in, 32)  # Out: 180x180x32
+        self.down1 = Down(32, 64)  # Out: 90x90x64
+        self.down2 = Down(64, 128)  # Out: 45x45x128
+        self.down3 = Down(128, 256)  # Out: 22x22x256
+        factor = 2 if bilinear else 1
+        self.down4 = Down(256, 512 // factor)  # Out: 11x11x256 (or 512)
+
+        # --- Decoder ---
+        self.up1 = Up(512, 256 // factor, bilinear)  # Output: 22x22x128
+        self.up2 = Up(256, 128 // factor, bilinear)  # Output: 44x44x64
+        # Consider adding more Up steps if needed, adjusting skip connections
+
+        # --- Final Stage ---
+        final_conv_in_channels = 128 // factor  # Output channels of self.up2 (64)
+
+        if self.final_stage_type == "adaptive_pool":
+            self.final_pool = nn.AdaptiveAvgPool2d((16, 16))
+            self.final_conv = nn.Conv2d(
+                final_conv_in_channels, self.n_channels_out, kernel_size=1
+            )
+        elif self.final_stage_type == "large_kernel":
+            # K = 44 - 16 + 1 = 29
+            self.final_conv = nn.Conv2d(
+                final_conv_in_channels, self.n_channels_out, kernel_size=29, padding=0
+            )
+        else:
+            raise ValueError(f"Unknown final_stage: {self.final_stage_type}")
+
+    def forward(self, x):
+        # --- Encoder ---
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+
+        # --- Decoder ---
+        dx = self.up1(x5, x4)  # -> 22x22x128
+        dx = self.up2(dx, x3)  # -> 44x44x64
+
+        # --- Final Stage ---
+        if self.final_stage_type == "adaptive_pool":
+            pooled = self.final_pool(dx)  # -> 16x16x64
+            logits = self.final_conv(pooled)  # -> 16x16x1
+        else:  # large_kernel
+            logits = self.final_conv(dx)  # -> 16x16x1
+
+        # --- Output ---
+        # Squeeze the channel dimension (dim=1)
+        return logits.squeeze(1)  # Shape: (batch, 16, 16)
+
+
 class InverseConvModel(nn.Module):
     def __init__(
         self,
@@ -670,6 +822,8 @@ def model_type_to_class(model_type: str):
         return SpectralSpatialModel()
     elif model_type == "inv_cnn":
         return InverseConvModel()
+    elif model_type == "unet":
+        return UNetModel()
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
