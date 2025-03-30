@@ -14,6 +14,7 @@ import typer
 from matplotlib.ticker import FormatStrFormatter
 from sklearn import neighbors
 from sklearn.model_selection import train_test_split
+from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader, Dataset, random_split
 
 import analyze
@@ -595,8 +596,12 @@ def run_model(
     print(f"{model_type=} ({n_params:,}), {batch_size=}, {n_epochs=}")
 
     criterion = circular_mse_loss_torch
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
+
+    # optimizer = optim.AdamW(model.parameters(), lr=lr)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+
+    # scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
+    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs, eta_min=1e-6)
 
     # Train model
     model, history, interrupted = train_model(
