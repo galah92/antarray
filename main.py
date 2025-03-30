@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 import analyze
 from generate_dataset import ff_from_phase_shifts, steering_repr
 
-DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_1d_only_20k.h5"
+DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d_only_40k.h5"
 DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
 DEFAULT_MODEL_NAME = "model.pth"
 
