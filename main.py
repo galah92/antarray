@@ -14,6 +14,7 @@ import typer
 from matplotlib.ticker import FormatStrFormatter
 from sklearn import neighbors
 from sklearn.model_selection import train_test_split
+from torch.amp import GradScaler, autocast
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader, Dataset, random_split
 
@@ -586,7 +587,14 @@ def run_model(
     n_epochs: int = 200,
     lr: float = 1e-3,
     model_type: str = "unet",
+    use_amp: bool = True,  # Enable Automatic Mixed Precision by default
+    benchmark: bool = True,  # Enable CUDA benchmarking by default
 ):
+    # Set benchmark mode for CUDA - improves performance when input sizes don't change
+    if benchmark and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        print("CUDA benchmark mode enabled")
+
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
     train_loader, val_loader, test_loader = create_dataloaders(dataset_path, batch_size)
@@ -597,10 +605,8 @@ def run_model(
 
     criterion = circular_mse_loss_torch
 
-    # optimizer = optim.AdamW(model.parameters(), lr=lr)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
 
-    # scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs, eta_min=1e-6)
 
     # Train model
@@ -613,6 +619,7 @@ def run_model(
         scheduler,
         EarlyStopper(patience=10, min_delta=1e-4),
         n_epochs,
+        use_amp=use_amp,
     )
 
     # Save model (including model type)
@@ -653,6 +660,7 @@ def train_model(
     early_stopper,
     n_epochs,
     log_interval=10,
+    use_amp=True,
 ):
     interrupted = False
     since = time.time()
@@ -661,47 +669,192 @@ def train_model(
     model = model.to(device)
     best_val_loss, best_model_wts = float("inf"), None
 
+    # Initialize gradient scaler for AMP
+    scaler = GradScaler() if use_amp and torch.cuda.is_available() else None
+
+    # Pre-fetch some data to warm up the GPU
+    if torch.cuda.is_available():
+        print("Warming up GPU...")
+        dummy_input = torch.randn(1, 1, 180, 180, device=device)
+        with torch.no_grad():
+            for _ in range(10):  # Run a few iterations to warm up
+                model(dummy_input)
+        torch.cuda.synchronize()
+        print("GPU warm-up complete")
+
     try:
         for epoch in range(n_epochs):
             lr = scheduler.get_last_lr()[0]
             print()
             print(f"Epoch {epoch:03}/{n_epochs:03} | {lr=:1.1e}")
 
+            # Track timing statistics
+            epoch_start_time = time.time()
+            timing_stats = {
+                "data_time": 0.0,
+                "to_device_time": 0.0,
+                "forward_time": 0.0,
+                "loss_time": 0.0,
+                "backward_time": 0.0,
+                "optimizer_time": 0.0,
+                "synchronization": 0.0,
+                "batch_overhead": 0.0,
+            }
+
             # Each epoch has a training and validation phase
             for phase in ["train", "val"]:
+                phase_start_time = time.time()
                 if phase == "train":
-                    model.train()  # Set model to training mode
+                    model.train()
                     dataloader = train_loader
                 else:
-                    model.eval()  # Set model to evaluate mode
+                    model.eval()
                     dataloader = val_loader
 
                 running_loss = 0.0
                 n_batches = len(dataloader)
 
-                for i, (inputs, targets) in enumerate(dataloader):
-                    inputs = inputs.to(device)
-                    targets = targets.to(device)
+                # Use prefetching iterator for better overlap of data loading and compute
+                dataloader_iter = iter(dataloader)
+                for i in range(n_batches):
+                    batch_start_time = time.time()
 
-                    optimizer.zero_grad()
+                    # Data loading
+                    iter_start_time = time.time()
+                    inputs, targets = next(dataloader_iter)
+                    iter_end_time = time.time()
+                    data_time = iter_end_time - iter_start_time
+                    timing_stats["data_time"] += data_time
+
+                    # Time data transfer to device
+                    to_device_start = time.time()
+                    inputs = inputs.to(device, non_blocking=True)  # Added non_blocking
+                    targets = targets.to(
+                        device, non_blocking=True
+                    )  # Added non_blocking
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                    to_device_end = time.time()
+                    to_device_time = to_device_end - to_device_start
+                    timing_stats["to_device_time"] += to_device_time
+
+                    # Optimizer zero grad
+                    optimizer_start = time.time()
+                    optimizer.zero_grad(
+                        set_to_none=True
+                    )  # More efficient than zero_grad()
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                    optimizer_zero_time = time.time() - optimizer_start
+                    timing_stats["optimizer_time"] += optimizer_zero_time
 
                     with torch.set_grad_enabled(phase == "train"):
-                        outputs = model(inputs)
-                        loss = criterion(outputs, targets)
+                        # Forward pass - with autocast for mixed precision
+                        forward_start_time = time.time()
+
+                        # Use autocast for mixed precision training
+                        with autocast(enabled=use_amp and torch.cuda.is_available()):
+                            outputs = model(inputs)
+                            # Loss calculation within the same autocast context
+                            loss = criterion(outputs, targets)
+
+                        if torch.cuda.is_available():
+                            torch.cuda.synchronize()
+                        forward_end_time = time.time()
+                        forward_time = forward_end_time - forward_start_time
+                        timing_stats["forward_time"] += forward_time
+
+                        # Loss calculation time is now included in forward time due to autocast
+                        loss_time = 0
+                        timing_stats["loss_time"] += loss_time
 
                         # Backward + optimize only in training phase
                         if phase == "train":
-                            loss.backward()
-                            optimizer.step()
+                            backward_start_time = time.time()
+
+                            if use_amp and torch.cuda.is_available():
+                                # Use scaler for backward pass with mixed precision
+                                scaler.scale(loss).backward()
+                                if torch.cuda.is_available():
+                                    torch.cuda.synchronize()
+                                backward_end_time = time.time()
+                                backward_time = backward_end_time - backward_start_time
+                                timing_stats["backward_time"] += backward_time
+
+                                # Optimizer step with scaler
+                                optim_step_start = time.time()
+                                scaler.step(optimizer)
+                                scaler.update()
+                            else:
+                                # Regular backward pass without mixed precision
+                                loss.backward()
+                                if torch.cuda.is_available():
+                                    torch.cuda.synchronize()
+                                backward_end_time = time.time()
+                                backward_time = backward_end_time - backward_start_time
+                                timing_stats["backward_time"] += backward_time
+
+                                # Regular optimizer step
+                                optim_step_start = time.time()
+                                optimizer.step()
+
+                            if torch.cuda.is_available():
+                                torch.cuda.synchronize()
+                            optim_step_end = time.time()
+                            optim_step_time = optim_step_end - optim_step_start
+                            timing_stats["optimizer_time"] += optim_step_time
+
+                    # Track any other synchronizations
+                    sync_start = time.time()
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                    sync_end = time.time()
+                    sync_time = sync_end - sync_start
+                    timing_stats["synchronization"] += sync_time
 
                     running_loss += loss.item() * inputs.size(0)
 
+                    # Calculate batch overhead (everything not explicitly timed)
+                    batch_end_time = time.time()
+                    batch_total_time = batch_end_time - batch_start_time
+                    explicitly_timed = (
+                        data_time
+                        + to_device_time
+                        + forward_time
+                        + loss_time
+                        + sync_time
+                        + optimizer_zero_time
+                    )
+                    if phase == "train":
+                        explicitly_timed += backward_time + optim_step_time
+
+                    batch_overhead = batch_total_time - explicitly_timed
+                    timing_stats["batch_overhead"] += batch_overhead
+
                     if phase == "train" and i % log_interval == 0:
-                        print(f"Batch {i:03}/{n_batches:03} | loss={loss.item():.03f}")
+                        gpu_memory = ""
+                        if torch.cuda.is_available():
+                            gpu_memory = f" | gpu_mem={torch.cuda.memory_allocated() / 1024**3:.2f}GB"
+
+                        print(
+                            f"Batch {i:03}/{n_batches:03} | "
+                            f"loss={loss.item():.03f} | "
+                            f"data={data_time * 1000:.1f}ms | "
+                            f"to_dev={to_device_time * 1000:.1f}ms | "
+                            f"fwd={forward_time * 1000:.1f}ms | "
+                            f"loss={loss_time * 1000:.1f}ms | "
+                            f"bwd={backward_time * 1000:.1f}ms | "
+                            f"optim={optimizer_zero_time * 1000 + optim_step_time * 1000:.1f}ms | "
+                            f"sync={sync_time * 1000:.1f}ms | "
+                            f"overhead={batch_overhead * 1000:.1f}ms{gpu_memory}"
+                        )
 
                 epoch_loss = running_loss / len(dataloader.dataset)
+                phase_time = time.time() - phase_start_time
+
                 loss_str = f"{phase}_loss={epoch_loss:.03f}"
-                print(f"Epoch {epoch:03}/{n_epochs:03} | {loss_str}")
+                time_str = f"{phase}_time={phase_time:.2f}s"
+                print(f"Epoch {epoch:03}/{n_epochs:03} | {loss_str} | {time_str}")
 
                 if phase == "train":
                     history["train_loss"].append(epoch_loss)
@@ -713,6 +866,66 @@ def train_model(
                     if epoch_loss < best_val_loss:
                         best_val_loss = epoch_loss
                         best_model_wts = model.state_dict().copy()
+
+            # Calculate and display epoch timing summary
+            epoch_time = time.time() - epoch_start_time
+
+            # Calculate average timings
+            avg_data_time = (
+                timing_stats["data_time"] * 1000 / (n_batches * 2)
+            )  # ms, *2 for train+val
+            avg_to_device = timing_stats["to_device_time"] * 1000 / (n_batches * 2)
+            avg_forward_time = timing_stats["forward_time"] * 1000 / (n_batches * 2)
+            avg_loss_time = timing_stats["loss_time"] * 1000 / (n_batches * 2)
+            avg_backward_time = (
+                timing_stats["backward_time"] * 1000 / n_batches
+            )  # Only train phase
+            avg_optimizer_time = (
+                timing_stats["optimizer_time"]
+                * 1000
+                / (n_batches * (1 if phase == "val" else 2))
+            )
+            avg_sync_time = timing_stats["synchronization"] * 1000 / (n_batches * 2)
+            avg_overhead_time = timing_stats["batch_overhead"] * 1000 / (n_batches * 2)
+
+            print("Epoch timing summary:")
+            print(f"  Total epoch time: {epoch_time:.2f}s")
+
+            gpu_memory = ""
+            if torch.cuda.is_available():
+                gpu_memory = (
+                    f"  GPU memory: {torch.cuda.memory_allocated() / 1024**3:.2f}GB / "
+                    f"{torch.cuda.max_memory_allocated() / 1024**3:.2f}GB (current/max)"
+                )
+                print(gpu_memory)
+
+            print(
+                f"  Avg times per batch: data={avg_data_time:.1f}ms, to_device={avg_to_device:.1f}ms, "
+                f"forward={avg_forward_time:.1f}ms, loss={avg_loss_time:.1f}ms, backward={avg_backward_time:.1f}ms, "
+                f"optimizer={avg_optimizer_time:.1f}ms, sync={avg_sync_time:.1f}ms, overhead={avg_overhead_time:.1f}ms"
+            )
+
+            # Identify bottleneck
+            times = {
+                "Data loading": avg_data_time,
+                "To device": avg_to_device,
+                "Forward pass": avg_forward_time,
+                "Loss calculation": avg_loss_time,
+                "Backward pass": avg_backward_time,
+                "Optimizer operations": avg_optimizer_time,
+                "CUDA synchronization": avg_sync_time,
+                "Remaining overhead": avg_overhead_time,
+            }
+            bottleneck = max(times.items(), key=lambda x: x[1])
+            print(f"  Bottleneck: {bottleneck[0]} ({bottleneck[1]:.1f}ms)")
+
+            # Add diagnostics for CUDA events and stream synchronization
+            if avg_overhead_time > 100:  # Only if overhead is significant
+                print("  Potential CUDA synchronization issue detected. Try:")
+                print("  1. Using non_blocking=True in tensor.to() calls")
+                print("  2. Increasing batch size to amortize kernel launch overhead")
+                print("  3. Check for CPU bottlenecks in data preprocessing")
+                print("  4. Consider using CUDA streams for overlapping operations")
 
             if early_stopper is not None:
                 if early_stopper.early_stop(history["val_loss"][-1]):
@@ -738,6 +951,40 @@ def train_model(
         print(f"Best val loss: {best_val_loss:.4f}")
 
     return model, history, interrupted
+
+
+def create_dataloaders(dataset_path: Path, batch_size: int):
+    ds = Hdf5Dataset(dataset_path)
+
+    # Split data into train, validation, and test sets
+    gen = torch.Generator().manual_seed(42)
+    train_ds, val_ds, test_ds = random_split(ds, [0.9, 0.05, 0.05], generator=gen)
+
+    train, val, test = len(train_ds), len(val_ds), len(test_ds)
+    print(f"dataset={dataset_path}, {train=:,}, {val=:,}, {test=:,}")
+
+    # Create dataloaders with pin_memory for faster transfers to GPU
+    train_loader = DataLoader(
+        train_ds,
+        batch_size,
+        shuffle=True,
+        num_workers=2,
+        pin_memory=True,
+        persistent_workers=True,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True,
+        persistent_workers=True,
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size, shuffle=False, num_workers=2, pin_memory=True
+    )
+
+    return train_loader, val_loader, test_loader
 
 
 @app.command()
@@ -933,24 +1180,6 @@ def index_from_beamforming_angles(steering_info, theta: int, phi: int) -> int:
     """
     idx = (steering_info == (theta, phi)).all(axis=1).nonzero()[0].min()
     return idx
-
-
-def create_dataloaders(dataset_path: Path, batch_size: int):
-    ds = Hdf5Dataset(dataset_path)
-
-    # Split data into train, validation, and test sets
-    gen = torch.Generator().manual_seed(42)
-    train_ds, val_ds, test_ds = random_split(ds, [0.9, 0.05, 0.05], generator=gen)
-
-    train, val, test = len(train_ds), len(val_ds), len(test_ds)
-    print(f"dataset={dataset_path}, {train=:,}, {val=:,}, {test=:,}")
-
-    # Create dataloaders
-    train_loader = DataLoader(train_ds, batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size, shuffle=False, num_workers=2)
-    test_loader = DataLoader(test_ds, batch_size, shuffle=False, num_workers=2)
-
-    return train_loader, val_loader, test_loader
 
 
 @app.command()
