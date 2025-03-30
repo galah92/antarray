@@ -596,7 +596,7 @@ def run_model(
 
     criterion = circular_mse_loss_torch
     optimizer = optim.AdamW(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
     # Train model
     model, history, interrupted = train_model(
@@ -886,20 +886,22 @@ def plot_training(
 
     fig, axs = plt.subplots(1, 2, figsize=(10, 5))
 
-    xticks = range(0, 100 + 1, 10)
+    xticks = list(range(0, 200 + 1, 20))
     yticks = np.arange(0, 4 + 0.1, 0.1)
 
     axs[0].plot(history["train_loss"], "b-", label="Training Loss")
     axs[0].plot(history["val_loss"], "r-", label="Validation Loss")
     axs[0].set_xlim(xticks[0], xticks[-1])
-    axs[0].set_xticks(xticks)
+    # axs[0].set_xticks(xticks)
     axs[0].set_ylim(yticks[0], yticks[-1])
     # axs[0].set_yticks(yticks)
     axs[0].set_title("Training and Validation Loss")
     axs[0].set_xlabel("Epochs")
     axs[0].set_ylabel("Loss")
     axs[0].legend()
-    axs[0].grid(True)
+    axs[0].grid(True, which="major")
+    axs[0].grid(True, which="minor", alpha=0.25)
+    axs[0].minorticks_on()
 
     if "lr" in history and history["lr"]:
         axs[1].plot(history["lr"], "g-")
@@ -910,7 +912,9 @@ def plot_training(
         axs[1].set_title("Learning Rate")
         axs[1].set_xlabel("Epochs")
         axs[1].set_ylabel("Learning Rate")
-        axs[1].grid(True)
+        axs[1].grid(True, which="major")
+        axs[1].grid(True, which="minor", alpha=0.25)
+        axs[1].minorticks_on()
 
     fig.set_tight_layout(True)
     save_path = exp_path / "training_history.png"
