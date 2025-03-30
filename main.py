@@ -585,7 +585,7 @@ def run_model(
     batch_size: int = 256,
     n_epochs: int = 200,
     lr: float = 1e-3,
-    model_type: str = "cnn",
+    model_type: str = "unet",
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
