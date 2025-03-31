@@ -388,10 +388,6 @@ def resnet34(out_shape=(16, 16)):
     return ResNet(ResidualBlock, [3, 4, 6, 3], out_shape)
 
 
-def cosine_angular_loss_torch(inputs: torch.Tensor, targets: torch.Tensor):
-    return torch.mean(1 - torch.cos(inputs - targets))
-
-
 def circular_mse_loss_torch(pred: torch.Tensor, target: torch.Tensor):
     diff = torch.abs(pred - target)
     circular_diff = torch.min(diff, 2 * torch.pi - diff)
