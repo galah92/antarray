@@ -403,6 +403,7 @@ def run_model(
     n_epochs: int = 200,
     lr: float = 2e-3,
     model_type: str = "unet",
+    use_fft: bool = False,
     use_amp: bool = True,  # Enable Automatic Mixed Precision by default
     benchmark: bool = True,  # Enable CUDA benchmarking by default
 ):
@@ -411,11 +412,11 @@ def run_model(
 
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
-    train_loader, val_loader, test_loader = create_dataloaders(dataset_path, batch_size)
+    train_loader, val_loader, _ = create_dataloaders(dataset_path, batch_size, use_fft)
 
-    model = model_type_to_class(model_type)
+    model = model_type_to_class(model_type, in_channels=3 if use_fft else 1)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"{model_type=} ({n_params:,}), {batch_size=}, {n_epochs=}")
+    print(f"{model_type=} ({n_params:,}), {use_fft=}, {batch_size=}, {n_epochs=}")
 
     criterion = circular_mse_loss_torch
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -685,8 +686,8 @@ def gpu_warmup(model, in_shape, num_iterations=10):
         print("GPU warm-up complete")
 
 
-def create_dataloaders(dataset_path: Path, batch_size: int):
-    ds = Hdf5Dataset(dataset_path)
+def create_dataloaders(dataset_path: Path, batch_size: int, use_fft: bool = False):
+    ds = Hdf5Dataset(dataset_path, add_fft=use_fft)
 
     # Split data into train, validation, and test sets
     gen = torch.Generator().manual_seed(42)
@@ -797,13 +798,13 @@ def plot_steer_loss(exp_path: Path, preds, targets, steering_info):
     print(f"Steering loss plot saved to {exp_path / 'steer_loss.png'}")
 
 
-def model_type_to_class(model_type: str):
+def model_type_to_class(model_type: str, in_channels: int = 1):
     if model_type == "cnn":
-        return ConvModel()
+        return ConvModel(in_channels=in_channels)
     elif model_type == "resnet":
         return resnet18()
     elif model_type == "unet":
-        return UNetModel()
+        return UNetModel(in_channels=in_channels)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
