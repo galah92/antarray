@@ -15,7 +15,7 @@ from matplotlib.ticker import FormatStrFormatter
 from sklearn import neighbors
 from sklearn.model_selection import train_test_split
 from torch.optim import lr_scheduler
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset
 
 import analyze
 from generate_dataset import ff_from_phase_shifts, steering_repr
@@ -59,9 +59,12 @@ class Hdf5Dataset(Dataset):
     Dataset class for loading radiation patterns and phase shift matrices from an HDF5 file.
     """
 
-    def __init__(self, dataset_file: Path, use_steering_info=False, add_fft=False):
+    def __init__(
+        self, dataset_file: Path, indices, use_steering_info=False, add_fft=False
+    ):
         self.dataset_file = dataset_file
         self.h5f = None  # Lazy loading of the HDF5 file
+        self.indices = indices
         self.use_steering_info = use_steering_info
         self.add_fft = add_fft
 
@@ -71,13 +74,13 @@ class Hdf5Dataset(Dataset):
         return self.h5f
 
     def __len__(self):
-        h5f = self.get_dataset()
-        return len(h5f["patterns"])
+        return len(self.indices)
 
     def __getitem__(self, idx):
+        actual_idx = self.indices[idx]
         h5f = self.get_dataset()
-        pattern = torch.from_numpy(h5f["patterns"][idx])
-        phase_shift = torch.from_numpy(h5f["labels"][idx])
+        pattern = torch.from_numpy(h5f["patterns"][actual_idx])
+        phase_shift = torch.from_numpy(h5f["labels"][actual_idx])
 
         pattern = pattern.unsqueeze(0)  # Add channel dimension for CNN
         pattern = pattern.clamp(min=0)  # Set negative values to 0
@@ -88,7 +91,7 @@ class Hdf5Dataset(Dataset):
             pattern = torch.cat([pattern, torch.abs(fft), torch.angle(fft)], dim=0)
 
         if self.use_steering_info:
-            steering_info = torch.from_numpy(h5f["steering_info"][idx])
+            steering_info = torch.from_numpy(h5f["steering_info"][actual_idx])
             return pattern, phase_shift, steering_info
 
         return pattern, phase_shift
@@ -687,16 +690,17 @@ def gpu_warmup(model, in_shape, num_iterations=10):
 
 
 def create_dataloaders(dataset_path: Path, batch_size: int, use_fft: bool = False):
-    ds = Hdf5Dataset(dataset_path, add_fft=use_fft)
+    with h5py.File(dataset_path, "r") as h5f:
+        ds_size = h5f["patterns"].shape[0]
 
-    # Split data into train, validation, and test sets
-    gen = torch.Generator().manual_seed(42)
-    train_ds, val_ds, test_ds = random_split(ds, [0.9, 0.05, 0.05], generator=gen)
+    train_idx, val_idx, test_idx = get_indices(ds_size, [0.9, 0.05, 0.05])
+    train_ds = Hdf5Dataset(dataset_path, train_idx, add_fft=use_fft)
+    val_ds = Hdf5Dataset(dataset_path, val_idx, add_fft=use_fft)
+    test_ds = Hdf5Dataset(dataset_path, test_idx, add_fft=use_fft)
 
     train, val, test = len(train_ds), len(val_ds), len(test_ds)
     print(f"dataset={dataset_path}, {train=:,}, {val=:,}, {test=:,}")
 
-    # Create dataloaders with pin_memory for faster transfers to GPU
     train_loader = DataLoader(
         train_ds,
         batch_size,
@@ -718,6 +722,19 @@ def create_dataloaders(dataset_path: Path, batch_size: int, use_fft: bool = Fals
     )
 
     return train_loader, val_loader, test_loader
+
+
+def get_indices(n, split_ratios):
+    rng = np.random.default_rng(seed=42)
+    indices_range = rng.integers(n, size=n, endpoint=False)
+
+    split_ratios = np.array(split_ratios)
+    if not np.isclose(split_ratios.sum(), 1.0):
+        raise ValueError("Split ratios must sum to 1.0")
+
+    split_indices = np.cumsum(split_ratios[:-1]) * n
+    indices = np.split(indices_range, split_indices.astype(np.int32))
+    return indices
 
 
 @app.command()
