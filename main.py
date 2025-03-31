@@ -388,111 +388,6 @@ def resnet34(out_shape=(16, 16)):
     return ResNet(ResidualBlock, [3, 4, 6, 3], out_shape)
 
 
-class SpectralSpatialModel(nn.Module):
-    def __init__(
-        self,
-        input_channels=1,
-        in_shape=(180, 180),
-        out_shape=(16, 16),
-        spatial_channels=[32, 64, 128, 256, 512],
-        spectral_channels=[32, 64, 128, 256, 512],
-        fc_units=[2048, 1024],
-    ):
-        super().__init__()
-
-        self.in_shape = in_shape
-        self.out_shape = out_shape
-
-        # Spatial processing branch - standard convolutional layers
-        self.spatial_branch = nn.Sequential()
-        ch_spatial = [input_channels] + spatial_channels
-        for i in range(1, len(ch_spatial)):
-            self.spatial_branch.append(
-                nn.Conv2d(
-                    ch_spatial[i - 1], ch_spatial[i], kernel_size=3, stride=1, padding=1
-                )
-            )
-            self.spatial_branch.append(nn.BatchNorm2d(ch_spatial[i]))
-            self.spatial_branch.append(nn.ReLU())
-            self.spatial_branch.append(nn.MaxPool2d(2))
-
-        # Spectral processing branch (for FFT features)
-        self.spectral_branch = nn.Sequential()
-        # FFT produces complex output with real and imaginary parts, so double the channels
-        ch_spectral = [input_channels * 2] + spectral_channels
-        for i in range(1, len(ch_spectral)):
-            self.spectral_branch.append(
-                nn.Conv2d(
-                    ch_spectral[i - 1],
-                    ch_spectral[i],
-                    kernel_size=3,
-                    stride=1,
-                    padding=1,
-                )
-            )
-            self.spectral_branch.append(nn.BatchNorm2d(ch_spectral[i]))
-            self.spectral_branch.append(nn.ReLU())
-            self.spectral_branch.append(nn.MaxPool2d(2))
-
-        # Calculate feature sizes after convolutional layers
-        spatial_feature_size = (
-            spatial_channels[-1]
-            * (in_shape[0] // (2 ** len(spatial_channels)))
-            * (in_shape[1] // (2 ** len(spatial_channels)))
-        )
-        spectral_feature_size = (
-            spectral_channels[-1]
-            * (in_shape[0] // (2 ** len(spectral_channels)))
-            * (in_shape[1] // (2 ** len(spectral_channels)))
-        )
-
-        # Combine features from both branches
-        combined_size = spatial_feature_size + spectral_feature_size
-
-        # Fully connected layers for final prediction
-        self.fc_layers = nn.Sequential()
-        fc_sizes = [combined_size] + fc_units + [np.prod(out_shape)]
-        for i in range(1, len(fc_sizes)):
-            self.fc_layers.append(nn.Linear(fc_sizes[i - 1], fc_sizes[i]))
-            if i < len(fc_sizes) - 1:
-                self.fc_layers.append(nn.ReLU())
-                self.fc_layers.append(nn.Dropout(0.5))
-
-    def forward(self, x):
-        batch_size = x.size(0)
-
-        # Process spatial features
-        spatial_features = self.spatial_branch(x)
-        spatial_features = spatial_features.view(batch_size, -1)
-
-        # Compute FFT and process spectral features
-        # Convert to complex tensor, compute 2D FFT
-        x_complex = torch.complex(x.squeeze(1), torch.zeros_like(x.squeeze(1)))
-        x_fft = torch.fft.fft2(x_complex)
-
-        # Extract amplitude and phase information
-        x_fft_amplitude = torch.abs(x_fft).unsqueeze(1)
-        x_fft_phase = torch.angle(x_fft).unsqueeze(1)
-
-        # Concatenate amplitude and phase as channels
-        x_fft_features = torch.cat([x_fft_amplitude, x_fft_phase], dim=1)
-
-        # Process spectral features
-        spectral_features = self.spectral_branch(x_fft_features)
-        spectral_features = spectral_features.view(batch_size, -1)
-
-        # Combine features from both branches
-        combined_features = torch.cat([spatial_features, spectral_features], dim=1)
-
-        # Final fully connected layers
-        outputs = self.fc_layers(combined_features)
-
-        # Reshape to desired output shape
-        outputs = outputs.view(batch_size, *self.out_shape)
-
-        return outputs
-
-
 def cosine_angular_loss_torch(inputs: torch.Tensor, targets: torch.Tensor):
     return torch.mean(1 - torch.cos(inputs - targets))
 
@@ -1016,8 +911,6 @@ def model_type_to_class(model_type: str):
         return ConvModel()
     elif model_type == "resnet":
         return resnet18()
-    elif model_type == "spectral_spatial":
-        return SpectralSpatialModel()
     elif model_type == "unet":
         return UNetModel()
     else:
