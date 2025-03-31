@@ -585,7 +585,7 @@ def run_model(
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
     batch_size: int = 256,
     n_epochs: int = 200,
-    lr: float = 1e-3,
+    lr: float = 2e-3,
     model_type: str = "unet",
     use_amp: bool = True,  # Enable Automatic Mixed Precision by default
     benchmark: bool = True,  # Enable CUDA benchmarking by default
@@ -605,7 +605,7 @@ def run_model(
 
     criterion = circular_mse_loss_torch
 
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs, eta_min=1e-6)
 
@@ -753,7 +753,8 @@ def train_model(
                         forward_start_time = time.time()
 
                         # Use autocast for mixed precision training
-                        with autocast(enabled=use_amp and torch.cuda.is_available()):
+                        enabled = use_amp and torch.cuda.is_available()
+                        with autocast(device, enabled=enabled):
                             outputs = model(inputs)
                             # Loss calculation within the same autocast context
                             loss = criterion(outputs, targets)
