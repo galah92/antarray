@@ -98,7 +98,7 @@ class Hdf5Dataset(Dataset):
 class ConvModel(nn.Module):
     def __init__(
         self,
-        input_channels=1,  # Number of input channels (1 for single radiation pattern)
+        in_channels=1,  # Number of input channels (1 for single radiation pattern)
         in_shape=(180, 180),  # Shape of the input radiation pattern (n_phi, n_theta)
         out_shape=(16, 16),  # Size of the output phase shift matrix (xn, yn)
         # Number of channels in each convolutional layer
@@ -114,7 +114,7 @@ class ConvModel(nn.Module):
         self.out_shape = out_shape
 
         self.conv = nn.Sequential()
-        ch = [input_channels] + conv_channels
+        ch = [in_channels] + conv_channels
         for i in range(1, len(ch)):
             self.conv += nn.Sequential(
                 nn.Conv2d(ch[i - 1], ch[i], kernel_size=3, stride=1, padding=1),
@@ -151,19 +151,6 @@ class ConvModel(nn.Module):
         return x
 
 
-# Helper function for cropping (if needed for skip connections)
-def center_crop(layer, target_size):
-    _, _, layer_height, layer_width = layer.size()
-    diff_y = layer_height - target_size[0]
-    diff_x = layer_width - target_size[1]
-    return layer[
-        :,
-        :,
-        diff_y // 2 : layer_height - (diff_y - diff_y // 2),
-        diff_x // 2 : layer_width - (diff_x - diff_x // 2),
-    ]
-
-
 # --- Building Blocks (DoubleConv, Down, Up) ---
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
@@ -191,11 +178,25 @@ class Down(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(2), DoubleConv(in_channels, out_channels)
+            nn.MaxPool2d(2),
+            DoubleConv(in_channels, out_channels),
         )
 
     def forward(self, x):
         return self.maxpool_conv(x)
+
+
+# Helper function for cropping (if needed for skip connections)
+def center_crop(layer, target_size):
+    _, _, layer_height, layer_width = layer.size()
+    diff_y = layer_height - target_size[0]
+    diff_x = layer_width - target_size[1]
+    return layer[
+        :,
+        :,
+        diff_y // 2 : layer_height - (diff_y - diff_y // 2),
+        diff_x // 2 : layer_width - (diff_x - diff_x // 2),
+    ]
 
 
 class Up(nn.Module):
@@ -220,12 +221,11 @@ class Up(nn.Module):
         return self.conv(x)
 
 
-# --- The Main Model for Direct Phase Prediction ---
 class UNetModel(nn.Module):
     def __init__(
         self,
-        n_channels_in=1,
-        n_channels_out=1,
+        in_channels=1,
+        out_channels=1,
         bilinear=True,
         final_stage="adaptive_pool",
     ):
@@ -234,50 +234,40 @@ class UNetModel(nn.Module):
         Suitable for use with circular MSE/MAE loss functions.
 
         Args:
-            n_channels_in (int): Number of input channels (usually 1 for DBi map).
-            n_channels_out (int): Number of output channels (should be 1 for direct phase).
+            in_channels (int): Number of input channels (usually 1 for DBi map).
+            out_channels (int): Number of output channels (should be 1 for direct phase).
             bilinear (bool): If True, use bilinear upsampling. Otherwise, use ConvTranspose2d.
             final_stage (str): 'adaptive_pool' or 'large_kernel'. How to get to 16x16.
         """
         super().__init__()
-        if n_channels_out != 1:
-            print(
-                f"Warning: This model is designed for direct phase prediction (n_channels_out=1), but got {n_channels_out}."
-            )
+        if out_channels != 1:
+            print(f"{out_channels=}!=1 was not tested")
 
-        self.n_channels_in = n_channels_in
-        self.n_channels_out = n_channels_out
-        self.bilinear = bilinear
-        self.final_stage_type = final_stage
+        self.in_channels = in_channels
 
         # --- Encoder ---
-        self.inc = DoubleConv(n_channels_in, 32)  # Out: 180x180x32
-        self.down1 = Down(32, 64)  # Out: 90x90x64
-        self.down2 = Down(64, 128)  # Out: 45x45x128
-        self.down3 = Down(128, 256)  # Out: 22x22x256
+        self.inc = DoubleConv(in_channels, 32)  # -> (32, 180, 180)
+        self.down1 = Down(32, 64)  # -> (64, 90, 90)
+        self.down2 = Down(64, 128)  # -> (128, 45, 45)
+        self.down3 = Down(128, 256)  # -> (256, 22, 22)
         factor = 2 if bilinear else 1
-        self.down4 = Down(256, 512 // factor)  # Out: 11x11x256 (or 512)
+        self.down4 = Down(256, 512 // factor)  # -> (256, 11, 11) (or 512)
 
         # --- Decoder ---
-        self.up1 = Up(512, 256 // factor, bilinear)  # Output: 22x22x128
-        self.up2 = Up(256, 128 // factor, bilinear)  # Output: 44x44x64
-        # Consider adding more Up steps if needed, adjusting skip connections
+        self.up1 = Up(512, 256 // factor, bilinear)  # -> (128, 22, 22)
+        self.up2 = Up(256, 128 // factor, bilinear)  # -> (64, 44, 44)
 
         # --- Final Stage ---
-        final_conv_in_channels = 128 // factor  # Output channels of self.up2 (64)
-
-        if self.final_stage_type == "adaptive_pool":
-            self.final_pool = nn.AdaptiveAvgPool2d((16, 16))
-            self.final_conv = nn.Conv2d(
-                final_conv_in_channels, self.n_channels_out, kernel_size=1
+        final_in_ch = 128 // factor  # Output channels of self.up2 (64)
+        if final_stage == "adaptive_pool":
+            self.final_conv = nn.Sequential(
+                nn.AdaptiveAvgPool2d((16, 16)),  # -> (64, 16, 16)
+                nn.Conv2d(final_in_ch, out_channels, kernel_size=1),  # -> (1, 16, 16)
             )
-        elif self.final_stage_type == "large_kernel":
-            # K = 44 - 16 + 1 = 29
-            self.final_conv = nn.Conv2d(
-                final_conv_in_channels, self.n_channels_out, kernel_size=29, padding=0
-            )
+        elif final_stage == "large_kernel":
+            self.final_conv = nn.Conv2d(final_in_ch, out_channels, kernel_size=29)
         else:
-            raise ValueError(f"Unknown final_stage: {self.final_stage_type}")
+            raise ValueError(f"Unknown {final_stage=}")
 
     def forward(self, x):
         # --- Encoder ---
@@ -288,19 +278,11 @@ class UNetModel(nn.Module):
         x5 = self.down4(x4)
 
         # --- Decoder ---
-        dx = self.up1(x5, x4)  # -> 22x22x128
-        dx = self.up2(dx, x3)  # -> 44x44x64
+        dx = self.up1(x5, x4)  # -> (128, 22, 22)
+        dx = self.up2(dx, x3)  # -> (64, 44, 44)
 
-        # --- Final Stage ---
-        if self.final_stage_type == "adaptive_pool":
-            pooled = self.final_pool(dx)  # -> 16x16x64
-            logits = self.final_conv(pooled)  # -> 16x16x1
-        else:  # large_kernel
-            logits = self.final_conv(dx)  # -> 16x16x1
-
-        # --- Output ---
-        # Squeeze the channel dimension (dim=1)
-        return logits.squeeze(1)  # Shape: (batch, 16, 16)
+        logits = self.final_conv(dx)  # -> (1, 16, 16)
+        return logits.squeeze(1)  # -> (16, 16)
 
 
 class ResidualBlock(nn.Module):
@@ -504,19 +486,8 @@ def train_model(
     model = model.to(device)
     best_val_loss, best_model_wts = float("inf"), None
 
-    # Initialize gradient scaler for AMP
     scaler = GradScaler() if use_amp and torch.cuda.is_available() else None
-
-    # Pre-fetch some data to warm up the GPU
-    if torch.cuda.is_available():
-        print("Warming up GPU...")
-        n_channels_in = model.n_channels_in
-        dummy_input = torch.randn(1, n_channels_in, 180, 180, device=device)
-        with torch.no_grad():
-            for _ in range(10):  # Run a few iterations to warm up
-                model(dummy_input)
-        torch.cuda.synchronize()
-        print("GPU warm-up complete")
+    gpu_warmup(model, (model.in_channels, 180, 180))
 
     try:
         for epoch in range(n_epochs):
@@ -548,105 +519,79 @@ def train_model(
                     dataloader = val_loader
 
                 running_loss = 0.0
-                n_batches = len(dataloader)
+                n_batches, dataloader_iter = len(dataloader), iter(dataloader)
 
-                # Use prefetching iterator for better overlap of data loading and compute
-                dataloader_iter = iter(dataloader)
                 for i in range(n_batches):
                     batch_start_time = time.time()
+                    curr_time = time.time()
 
-                    # Data loading
-                    iter_start_time = time.time()
                     inputs, targets = next(dataloader_iter)
-                    iter_end_time = time.time()
-                    data_time = iter_end_time - iter_start_time
+                    data_time, curr_time = time.time() - curr_time, time.time()
                     timing_stats["data_time"] += data_time
 
-                    # Time data transfer to device
-                    to_device_start = time.time()
-                    inputs = inputs.to(device, non_blocking=True)  # Added non_blocking
-                    targets = targets.to(
-                        device, non_blocking=True
-                    )  # Added non_blocking
-                    if torch.cuda.is_available():
+                    inputs = inputs.to(device, non_blocking=True)
+                    targets = targets.to(device, non_blocking=True)
+                    if device == "cuda":
                         torch.cuda.synchronize()
-                    to_device_end = time.time()
-                    to_device_time = to_device_end - to_device_start
+                    to_device_time, curr_time = time.time() - curr_time, time.time()
                     timing_stats["to_device_time"] += to_device_time
 
-                    # Optimizer zero grad
-                    optimizer_start = time.time()
-                    optimizer.zero_grad(
-                        set_to_none=True
-                    )  # More efficient than zero_grad()
-                    if torch.cuda.is_available():
+                    optimizer.zero_grad()
+                    if device == "cuda":
                         torch.cuda.synchronize()
-                    optimizer_zero_time = time.time() - optimizer_start
-                    timing_stats["optimizer_time"] += optimizer_zero_time
+                    optim_zero_time, curr_time = time.time() - curr_time, time.time()
+                    timing_stats["optimizer_time"] += optim_zero_time
 
                     with torch.set_grad_enabled(phase == "train"):
-                        # Forward pass - with autocast for mixed precision
-                        forward_start_time = time.time()
-
-                        # Use autocast for mixed precision training
-                        enabled = use_amp and torch.cuda.is_available()
+                        enabled = use_amp and device == "cuda"
                         with autocast(device, enabled=enabled):
                             outputs = model(inputs)
-                            # Loss calculation within the same autocast context
                             loss = criterion(outputs, targets)
 
-                        if torch.cuda.is_available():
+                        if device == "cuda":
                             torch.cuda.synchronize()
-                        forward_end_time = time.time()
-                        forward_time = forward_end_time - forward_start_time
+                        forward_time, curr_time = time.time() - curr_time, time.time()
                         timing_stats["forward_time"] += forward_time
 
-                        # Loss calculation time is now included in forward time due to autocast
                         loss_time = 0
                         timing_stats["loss_time"] += loss_time
 
-                        # Backward + optimize only in training phase
                         if phase == "train":
-                            backward_start_time = time.time()
-
-                            if use_amp and torch.cuda.is_available():
-                                # Use scaler for backward pass with mixed precision
+                            if use_amp and device == "cuda":
                                 scaler.scale(loss).backward()
-                                if torch.cuda.is_available():
+                                if device == "cuda":
                                     torch.cuda.synchronize()
-                                backward_end_time = time.time()
-                                backward_time = backward_end_time - backward_start_time
-                                timing_stats["backward_time"] += backward_time
+                                bwd_time, curr_time = (
+                                    time.time() - curr_time,
+                                    time.time(),
+                                )
+                                timing_stats["backward_time"] += bwd_time
 
-                                # Optimizer step with scaler
-                                optim_step_start = time.time()
                                 scaler.step(optimizer)
                                 scaler.update()
                             else:
-                                # Regular backward pass without mixed precision
                                 loss.backward()
-                                if torch.cuda.is_available():
+                                if device == "cuda":
                                     torch.cuda.synchronize()
-                                backward_end_time = time.time()
-                                backward_time = backward_end_time - backward_start_time
-                                timing_stats["backward_time"] += backward_time
+                                bwd_time, curr_time = (
+                                    time.time() - curr_time,
+                                    time.time(),
+                                )
+                                timing_stats["backward_time"] += bwd_time
 
-                                # Regular optimizer step
-                                optim_step_start = time.time()
                                 optimizer.step()
 
-                            if torch.cuda.is_available():
+                            if device == "cuda":
                                 torch.cuda.synchronize()
-                            optim_step_end = time.time()
-                            optim_step_time = optim_step_end - optim_step_start
+                            optim_step_time, curr_time = (
+                                time.time() - curr_time,
+                                time.time(),
+                            )
                             timing_stats["optimizer_time"] += optim_step_time
 
-                    # Track any other synchronizations
-                    sync_start = time.time()
-                    if torch.cuda.is_available():
+                    if device == "cuda":
                         torch.cuda.synchronize()
-                    sync_end = time.time()
-                    sync_time = sync_end - sync_start
+                    sync_time, curr_time = time.time() - curr_time, time.time()
                     timing_stats["synchronization"] += sync_time
 
                     running_loss += loss.item() * inputs.size(0)
@@ -660,17 +605,17 @@ def train_model(
                         + forward_time
                         + loss_time
                         + sync_time
-                        + optimizer_zero_time
+                        + optim_zero_time
                     )
                     if phase == "train":
-                        explicitly_timed += backward_time + optim_step_time
+                        explicitly_timed += bwd_time + optim_step_time
 
                     batch_overhead = batch_total_time - explicitly_timed
                     timing_stats["batch_overhead"] += batch_overhead
 
                     if phase == "train" and i % log_interval == 0:
                         gpu_memory = ""
-                        if torch.cuda.is_available():
+                        if device == "cuda":
                             gpu_memory = f" | gpu_mem={torch.cuda.memory_allocated() / 1024**3:.2f}GB"
 
                         print(
@@ -680,8 +625,8 @@ def train_model(
                             f"to_dev={to_device_time * 1000:.1f}ms | "
                             f"fwd={forward_time * 1000:.1f}ms | "
                             f"loss={loss_time * 1000:.1f}ms | "
-                            f"bwd={backward_time * 1000:.1f}ms | "
-                            f"optim={optimizer_zero_time * 1000 + optim_step_time * 1000:.1f}ms | "
+                            f"bwd={bwd_time * 1000:.1f}ms | "
+                            f"optim={optim_zero_time * 1000 + optim_step_time * 1000:.1f}ms | "
                             f"sync={sync_time * 1000:.1f}ms | "
                             f"overhead={batch_overhead * 1000:.1f}ms{gpu_memory}"
                         )
@@ -704,19 +649,12 @@ def train_model(
                         best_val_loss = epoch_loss
                         best_model_wts = model.state_dict().copy()
 
-            # Calculate and display epoch timing summary
             epoch_time = time.time() - epoch_start_time
-
-            # Calculate average timings
-            avg_data_time = (
-                timing_stats["data_time"] * 1000 / (n_batches * 2)
-            )  # ms, *2 for train+val
+            avg_data_time = timing_stats["data_time"] * 1000 / (n_batches * 2)
             avg_to_device = timing_stats["to_device_time"] * 1000 / (n_batches * 2)
             avg_forward_time = timing_stats["forward_time"] * 1000 / (n_batches * 2)
             avg_loss_time = timing_stats["loss_time"] * 1000 / (n_batches * 2)
-            avg_backward_time = (
-                timing_stats["backward_time"] * 1000 / n_batches
-            )  # Only train phase
+            avg_backward_time = timing_stats["backward_time"] * 1000 / n_batches
             avg_optimizer_time = (
                 timing_stats["optimizer_time"]
                 * 1000
@@ -756,14 +694,6 @@ def train_model(
             bottleneck = max(times.items(), key=lambda x: x[1])
             print(f"  Bottleneck: {bottleneck[0]} ({bottleneck[1]:.1f}ms)")
 
-            # Add diagnostics for CUDA events and stream synchronization
-            if avg_overhead_time > 100:  # Only if overhead is significant
-                print("  Potential CUDA synchronization issue detected. Try:")
-                print("  1. Using non_blocking=True in tensor.to() calls")
-                print("  2. Increasing batch size to amortize kernel launch overhead")
-                print("  3. Check for CPU bottlenecks in data preprocessing")
-                print("  4. Consider using CUDA streams for overlapping operations")
-
             if early_stopper is not None:
                 if early_stopper.early_stop(history["val_loss"][-1]):
                     print("Early stopping...")
@@ -779,7 +709,6 @@ def train_model(
         print("Training interrupted by user...")
         interrupted = True
     finally:
-        # Load best model weights
         if best_model_wts:
             model.load_state_dict(best_model_wts)
 
@@ -788,6 +717,22 @@ def train_model(
         print(f"Best val loss: {best_val_loss:.4f}")
 
     return model, history, interrupted
+
+
+def gpu_warmup(model, in_shape, num_iterations=10):
+    """
+    Warm up the GPU by running a dummy input through the model.
+    This is useful for ensuring that the GPU is ready for training.
+    """
+    if device == "cuda":
+        print()
+        print("GPU warm-up started")
+        dummy_input = torch.randn(1, *in_shape, device=device)
+        with torch.no_grad():
+            for _ in range(num_iterations):
+                model(dummy_input)
+        torch.cuda.synchronize()
+        print("GPU warm-up complete")
 
 
 def create_dataloaders(dataset_path: Path, batch_size: int):
