@@ -60,10 +60,11 @@ class Hdf5Dataset(Dataset):
     Dataset class for loading radiation patterns and phase shift matrices from an HDF5 file.
     """
 
-    def __init__(self, dataset_file: Path, use_steering_info=False):
+    def __init__(self, dataset_file: Path, use_steering_info=False, add_fft=False):
         self.dataset_file = dataset_file
         self.h5f = None  # Lazy loading of the HDF5 file
         self.use_steering_info = use_steering_info
+        self.add_fft = add_fft
 
     def get_dataset(self):
         if self.h5f is None:
@@ -82,6 +83,10 @@ class Hdf5Dataset(Dataset):
         pattern = pattern.unsqueeze(0)  # Add channel dimension for CNN
         pattern = pattern.clamp(min=0)  # Set negative values to 0
         pattern = pattern / 30  # Normalize
+
+        if self.add_fft:
+            fft = torch.fft.fft2(pattern, norm="ortho")
+            pattern = torch.cat([pattern, torch.abs(fft), torch.angle(fft)], dim=0)
 
         if self.use_steering_info:
             steering_info = torch.from_numpy(h5f["steering_info"][idx])
@@ -675,7 +680,8 @@ def train_model(
     # Pre-fetch some data to warm up the GPU
     if torch.cuda.is_available():
         print("Warming up GPU...")
-        dummy_input = torch.randn(1, 1, 180, 180, device=device)
+        n_channels_in = model.n_channels_in
+        dummy_input = torch.randn(1, n_channels_in, 180, 180, device=device)
         with torch.no_grad():
             for _ in range(10):  # Run a few iterations to warm up
                 model(dummy_input)
