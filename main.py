@@ -912,6 +912,7 @@ def plot_steer_loss(exp_path: Path, preds, targets, steering_info):
     Plot the loss by steering angle in the test set.
     """
     losses = circular_mse_loss_np(preds, targets, axis=(1, 2))
+    loss = losses.mean()
     steering_info = steering_info[:, :, 0]  # Take only the first beamforming angle
 
     fig, ax = plt.subplots()
@@ -920,7 +921,7 @@ def plot_steer_loss(exp_path: Path, preds, targets, steering_info):
     ax.set_ylabel("Phi (degrees)")
     ax.set_axisbelow(True)
     ax.grid(True)
-    ax.set_title(f"Loss by steering angle ({losses.size} samples)")
+    ax.set_title(f"Loss by steering angle ({losses.size} samples) | {loss:.4f} avg")
     cbar = plt.colorbar(ax.collections[0], ax=ax)
     cbar.set_label("Circular MSE Loss")
     fig.savefig(exp_path / "steer_loss.png", dpi=600, bbox_inches="tight")
