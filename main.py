@@ -59,13 +59,11 @@ class Hdf5Dataset(Dataset):
     Dataset class for loading radiation patterns and phase shift matrices from an HDF5 file.
     """
 
-    def __init__(
-        self, dataset_file: Path, indices, use_steering_info=False, add_fft=False
-    ):
+    def __init__(self, dataset_file: Path, indices, stats=None, add_fft=False):
         self.dataset_file = dataset_file
         self.h5f = None  # Lazy loading of the HDF5 file
         self.indices = indices
-        self.use_steering_info = use_steering_info
+        self.stats = stats
         self.add_fft = add_fft
 
     def get_dataset(self):
@@ -84,15 +82,25 @@ class Hdf5Dataset(Dataset):
 
         pattern = pattern.unsqueeze(0)  # Add channel dimension for CNN
         pattern = pattern.clamp(min=0)  # Set negative values to 0
-        pattern = pattern / 30  # Normalize
+
+        if self.stats is not None:
+            pattern_mean = self.stats["pattern_mean"]
+            pattern_std = self.stats["pattern_std"]
+            pattern = (pattern - pattern_mean) / (pattern_std + 1e-6)
+        else:
+            pattern = pattern / 30  # Normalize
 
         if self.add_fft:
             fft = torch.fft.fft2(pattern, norm="ortho")
-            pattern = torch.cat([pattern, torch.abs(fft), torch.angle(fft)], dim=0)
-
-        if self.use_steering_info:
-            steering_info = torch.from_numpy(h5f["steering_info"][actual_idx])
-            return pattern, phase_shift, steering_info
+            fft_amp, fft_phase = torch.abs(fft), torch.angle(fft)
+            if self.stats is not None:
+                fft_amp_mean = self.stats["fft_amp_mean"]
+                fft_amp_std = self.stats["fft_amp_std"]
+                fft_phase_mean = self.stats["fft_phase_mean"]
+                fft_phase_std = self.stats["fft_phase_std"]
+                fft_amp = (fft_amp - fft_amp_mean) / (fft_amp_std + 1e-6)
+                fft_phase = (fft_phase - fft_phase_mean) / (fft_phase_std + 1e-6)
+            pattern = torch.cat([pattern, fft_amp, fft_phase], dim=0)
 
         return pattern, phase_shift
 
@@ -406,16 +414,15 @@ def run_model(
     n_epochs: int = 200,
     lr: float = 2e-3,
     model_type: str = "unet",
-    use_fft: bool = False,
-    use_amp: bool = True,  # Enable Automatic Mixed Precision by default
-    benchmark: bool = True,  # Enable CUDA benchmarking by default
+    use_fft: bool = True,
+    use_stats: bool = False,  # Normalization stats
+    use_amp: bool = True,  # Automatic Mixed Precision for training
+    benchmark: bool = True,  # CUDA benchmarking
 ):
-    if benchmark and torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
-
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
-    train_loader, val_loader, _ = create_dataloaders(dataset_path, batch_size, use_fft)
+    loaders = create_dataloaders(dataset_path, batch_size, use_fft, use_stats)
+    train_loader, val_loader, _ = loaders
 
     model = model_type_to_class(model_type, in_channels=3 if use_fft else 1)
     n_params = sum(p.numel() for p in model.parameters())
@@ -424,6 +431,9 @@ def run_model(
     criterion = circular_mse_loss_torch
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs, eta_min=1e-6)
+
+    if benchmark and device == "cuda":
+        torch.backends.cudnn.benchmark = True
 
     model, history, interrupted = train_model(
         model,
@@ -689,17 +699,24 @@ def gpu_warmup(model, in_shape, num_iterations=10):
         print("GPU warm-up complete")
 
 
-def create_dataloaders(dataset_path: Path, batch_size: int, use_fft: bool = False):
+def create_dataloaders(
+    dataset_path: Path,
+    batch_size: int,
+    use_fft: bool = False,
+    use_stats: bool = False,
+):
     with h5py.File(dataset_path, "r") as h5f:
         ds_size = h5f["patterns"].shape[0]
 
     train_idx, val_idx, test_idx = get_indices(ds_size, [0.9, 0.05, 0.05])
-    train_ds = Hdf5Dataset(dataset_path, train_idx, add_fft=use_fft)
-    val_ds = Hdf5Dataset(dataset_path, val_idx, add_fft=use_fft)
-    test_ds = Hdf5Dataset(dataset_path, test_idx, add_fft=use_fft)
+    train, val, test = len(train_idx), len(val_idx), len(test_idx)
+    print(f"dataset={dataset_path}, {use_stats=}, {train=:,}, {val=:,}, {test=:,}")
 
-    train, val, test = len(train_ds), len(val_ds), len(test_ds)
-    print(f"dataset={dataset_path}, {train=:,}, {val=:,}, {test=:,}")
+    stats = calc_normalization_stats(dataset_path, train_idx) if use_stats else None
+
+    train_ds = Hdf5Dataset(dataset_path, train_idx, stats=stats, add_fft=use_fft)
+    val_ds = Hdf5Dataset(dataset_path, val_idx, stats=stats, add_fft=use_fft)
+    test_ds = Hdf5Dataset(dataset_path, test_idx, stats=stats, add_fft=use_fft)
 
     train_loader = DataLoader(
         train_ds,
@@ -735,6 +752,90 @@ def get_indices(n, split_ratios):
     split_indices = np.cumsum(split_ratios[:-1]) * n
     indices = np.split(indices_range, split_indices.astype(np.int32))
     return indices
+
+
+def calc_normalization_stats(dataset_path: Path, train_indices: list | np.ndarray):
+    """
+    Calculates normalization statistics (mean, std) iteratively for original patterns,
+    FFT amplitude, and FFT phase over the training set indices.
+    """
+    pattern_sum = torch.tensor(0.0, dtype=torch.float64)
+    pattern_sum_sq = torch.tensor(0.0, dtype=torch.float64)
+
+    with h5py.File(dataset_path, "r") as h5f:
+        patterns = h5f["patterns"]
+        pattern_count = np.prod(patterns.shape)
+
+        for idx in train_indices:
+            pattern = torch.from_numpy(patterns[idx]).to(torch.float64)
+            pattern = pattern.clamp(min=0)  # Set negative values to 0
+            pattern_sum += torch.sum(pattern)
+            pattern_sum_sq += torch.sum(pattern**2)
+
+    # Calculate final original stats
+    pattern_mean = pattern_sum / pattern_count
+    # Var = E[X^2] - (E[X])^2. Add small epsilon for stability
+    pattern_var = (pattern_sum_sq / pattern_count) - (pattern_mean**2)
+    # Clamp variance to avoid negative values due to floating point errors
+    pattern_std = torch.sqrt(torch.clamp(pattern_var, min=1e-12))
+
+    # Convert to float32 for use in standardization during pass 2
+    pattern_mean_f32 = pattern_mean.float()
+    pattern_std_f32 = pattern_std.float()
+    std_epsilon = 1e-6  # Epsilon for division
+
+    fft_amp_sum = torch.tensor(0.0, dtype=torch.float64)
+    fft_amp_sum_sq = torch.tensor(0.0, dtype=torch.float64)
+    fft_phase_sum = torch.tensor(0.0, dtype=torch.float64)
+    fft_phase_sum_sq = torch.tensor(0.0, dtype=torch.float64)
+
+    with h5py.File(dataset_path, "r") as h5f:
+        patterns = h5f["patterns"]
+
+        for idx in train_indices:
+            pattern = torch.from_numpy(patterns[idx]).float()
+            pattern = pattern.clamp(min=0)  # Set negative values to 0
+
+            # Standardize original pattern using stats from Pass 1
+            normalized_pattern = (pattern - pattern_mean_f32) / (
+                pattern_std_f32 + std_epsilon
+            )
+
+            # Calculate FFT
+            fft_input = normalized_pattern.unsqueeze(0)  # Add channel dim
+            # Using float32 for FFT is usually fine and faster
+            fft_val = torch.fft.fft2(fft_input, norm="ortho")
+
+            # Extract Amp and Phase
+            fft_amp = torch.abs(fft_val).to(torch.float64)  # Cast sums to float64
+            fft_phase = torch.angle(fft_val).to(torch.float64)
+
+            # Accumulate FFT stats
+            fft_amp_sum += torch.sum(fft_amp)
+            fft_amp_sum_sq += torch.sum(fft_amp**2)
+            fft_phase_sum += torch.sum(fft_phase)
+            fft_phase_sum_sq += torch.sum(fft_phase**2)
+
+    # Calculate final FFT stats
+    fft_amp_mean = fft_amp_sum / pattern_count
+    fft_amp_var = (fft_amp_sum_sq / pattern_count) - (fft_amp_mean**2)
+    fft_amp_std = torch.sqrt(torch.clamp(fft_amp_var, min=1e-12))
+
+    fft_phase_mean = fft_phase_sum / pattern_count
+    fft_phase_var = (fft_phase_sum_sq / pattern_count) - (fft_phase_mean**2)
+    fft_phase_std = torch.sqrt(torch.clamp(fft_phase_var, min=1e-12))
+
+    stats = {
+        "pattern_mean": pattern_mean.item(),
+        "pattern_std": pattern_std.item(),
+        "fft_amp_mean": fft_amp_mean.item(),
+        "fft_amp_std": fft_amp_std.item(),
+        "fft_phase_mean": fft_phase_mean.item(),
+        "fft_phase_std": fft_phase_std.item(),
+    }
+    print(stats)
+
+    return stats
 
 
 @app.command()
