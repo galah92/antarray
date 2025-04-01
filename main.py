@@ -870,7 +870,7 @@ def pred_model(
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
     model_type = checkpoint["model_type"]
-    model = model_type_to_class(model_type).to(device)
+    model = model_type_to_class(model_type, in_channels=3 if use_fft else 1).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     n_test = len(test_loader.dataset)
