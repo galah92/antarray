@@ -413,6 +413,7 @@ def run_model(
     batch_size: int = 256,
     n_epochs: int = 200,
     lr: float = 2e-3,
+    weight_decay: float = 1e-4,
     model_type: str = "unet",
     use_fft: bool = True,
     use_stats: bool = False,  # Normalization stats
@@ -426,11 +427,12 @@ def run_model(
 
     model = model_type_to_class(model_type, in_channels=3 if use_fft else 1)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"{model_type=} ({n_params:,}), {use_fft=}, {batch_size=}, {n_epochs=}")
+    print(f"{model_type=} ({n_params:,}), {use_fft=}")
 
     criterion = circular_mse_loss_torch
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs, eta_min=1e-6)
+    print(f"{batch_size=}, {n_epochs=}, {lr=}, {weight_decay=}")
 
     if benchmark and device == "cuda":
         torch.backends.cudnn.benchmark = True
@@ -462,7 +464,14 @@ def run_model(
     plot_training(experiment, overwrite=overwrite, exps_path=exps_path)
 
     if not interrupted:
-        pred_model(experiment, dataset_path, exps_path, n_examples=5)
+        pred_model(
+            experiment,
+            dataset_path,
+            exps_path,
+            use_fft=use_fft,
+            use_stats=use_stats,
+            n_examples=5,
+        )
 
 
 def get_experiment_path(
@@ -843,12 +852,14 @@ def pred_model(
     experiment: str,
     dataset_path: Path = DEFAULT_DATASET_PATH,
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
-    batch_size: int = 128,
     n_examples: int = 5,
+    batch_size: int = 128,
+    use_fft: bool = True,
+    use_stats: bool = False,  # Normalization stats
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite=True)
 
-    _, _, test_loader = create_dataloaders(dataset_path, batch_size)
+    _, _, test_loader = create_dataloaders(dataset_path, batch_size, use_fft, use_stats)
     test_indices = test_loader.dataset.indices
 
     with h5py.File(dataset_path, "r") as h5f:
