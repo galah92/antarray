@@ -236,6 +236,7 @@ class UNetModel(nn.Module):
         self,
         in_channels=1,
         out_channels=1,
+        size=32,  # Base channel size, comments in the code assume size=32
         bilinear=True,
         final_stage="adaptive_pool",
     ):
@@ -256,19 +257,19 @@ class UNetModel(nn.Module):
         self.in_channels = in_channels
 
         # --- Encoder ---
-        self.inc = DoubleConv(in_channels, 32)  # -> (32, 180, 180)
-        self.down1 = Down(32, 64)  # -> (64, 90, 90)
-        self.down2 = Down(64, 128)  # -> (128, 45, 45)
-        self.down3 = Down(128, 256)  # -> (256, 22, 22)
+        self.inc = DoubleConv(in_channels, size)  # -> (32, 180, 180)
+        self.down1 = Down(size, size * 2)  # -> (64, 90, 90)
+        self.down2 = Down(size * 2, size * 4)  # -> (128, 45, 45)
+        self.down3 = Down(size * 4, size * 8)  # -> (256, 22, 22)
         factor = 2 if bilinear else 1
-        self.down4 = Down(256, 512 // factor)  # -> (256, 11, 11) (or 512)
+        self.down4 = Down(size * 8, (size * 16) // factor)  # -> (256, 11, 11)
 
         # --- Decoder ---
-        self.up1 = Up(512, 256 // factor, bilinear)  # -> (128, 22, 22)
-        self.up2 = Up(256, 128 // factor, bilinear)  # -> (64, 44, 44)
+        self.up1 = Up(size * 16, (size * 8) // factor, bilinear)  # -> (128, 22, 22)
+        self.up2 = Up(size * 8, (size * 4) // factor, bilinear)  # -> (64, 44, 44)
 
         # --- Final Stage ---
-        final_in_ch = 128 // factor  # Output channels of self.up2 (64)
+        final_in_ch = (size * 4) // factor  # Output channels of self.up2 (64)
         if final_stage == "adaptive_pool":
             self.final_conv = nn.Sequential(
                 nn.AdaptiveAvgPool2d((16, 16)),  # -> (64, 16, 16)
