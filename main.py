@@ -276,13 +276,6 @@ class ResidualBlock(nn.Module):
 # --- Attention Gate (for Attention U-Net style skip connections) ---
 class AttentionGate(nn.Module):
     def __init__(self, F_g, F_l, F_int):
-        """
-        Attention Gate.
-        Args:
-            F_g: Channels in the gating signal (from decoder, lower res)
-            F_l: Channels in the input signal (from encoder skip connection, higher res)
-            F_int: Channels in the intermediate layer
-        """
         super().__init__()
         self.W_g = nn.Sequential(
             nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
@@ -302,23 +295,49 @@ class AttentionGate(nn.Module):
     def forward(self, g, x):
         """
         Args:
-            g: Gating signal from the decoder path (lower resolution)
-            x: Input signal from the encoder skip connection (higher resolution)
+            g: Gating signal (e.g., from upsampled decoder) [B, F_g, H, W]
+            x: Input signal (e.g., from encoder skip connection) [B, F_l, H', W']
+               where potentially H' >= H and W' >= W
         Returns:
-            Attention-weighted input signal (x * alpha)
+            Attention map psi [B, 1, H, W]
         """
-        # Ensure g and x have same spatial dimensions for addition
-        # Upsample g to match x's spatial dimensions if needed (though usually x is downsampled/pooled in practice before W_x)
-        # Alternatively, process x to match g's dimensions before W_x
-        # Assuming g and x are aligned appropriately before this module in the U-Net's Up block
+        g1 = self.W_g(g)  # Shape: [B, F_int, H, W]
+        x1 = self.W_x(x)  # Shape: [B, F_int, H', W']
 
-        g1 = self.W_g(g)
-        x1 = self.W_x(x)
-        psi = self.relu(g1 + x1)
-        psi = self.psi(psi)
+        # Crop x1 spatially to match g1
+        # Calculate padding differences (should be non-negative)
+        diff_y = x1.size()[2] - g1.size()[2]
+        diff_x = x1.size()[3] - g1.size()[3]
 
-        # Apply attention weights to the original skip connection features (x)
-        return x * psi
+        if diff_y < 0 or diff_x < 0:
+            # This implies g is spatially larger than x, which is unusual for this setup.
+            # Could happen with odd input sizes and specific ConvTranspose settings.
+            # Option 1: Pad g1 (less common)
+            # Option 2: Resize g1 down to x1 using interpolation (potential info loss)
+            # Option 3: Raise error, indicating an issue in network design / layer dims
+            # Let's try resizing g1 down as a fallback, but print a warning.
+            print(f"Warning: AttentionGate resizing g1 {g1.shape} to x1 {x1.shape}")
+            g1 = F.interpolate(
+                g1, size=x1.size()[2:], mode="bilinear", align_corners=False
+            )
+            # Set diffs to 0 as they are now aligned
+            diff_y, diff_x = 0, 0
+            # If using this fallback, x1 is not cropped below.
+            x1_cropped = x1
+        else:
+            # Standard case: Crop x1
+            x1_cropped = x1[
+                :,
+                :,
+                diff_y // 2 : x1.size()[2] - (diff_y - diff_y // 2),
+                diff_x // 2 : x1.size()[3] - (diff_x - diff_x // 2),
+            ]
+
+        # Add aligned tensors
+        psi = self.relu(g1 + x1_cropped)
+        psi = self.psi(psi)  # Calculate attention map [B, 1, H, W]
+
+        return psi  # Return only the attention map
 
 
 # --- Modified DoubleConv ---
@@ -425,40 +444,84 @@ class Up(nn.Module):
 
 # --- Modified Up Block (Option 2: Attention Gate on Skip Connection) ---
 class UpAtt(nn.Module):
-    """Upscaling with Attention Gate then standard double conv"""
-
-    def __init__(
-        self, F_g, F_l, F_out, bilinear=True
-    ):  # F_g: channels from below, F_l: channels from skip, F_out: output channels
+    def __init__(self, F_g, F_l, F_out, bilinear=True):
         super().__init__()
-        F_int = F_g // 2  # Intermediate channels for attention gate, can be tuned
+        F_int = F_g // 2  # Intermediate channels for attention gate
         self.att = AttentionGate(F_g=F_g, F_l=F_l, F_int=F_int)
 
+        conv_in_channels = 0
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            # Input to conv: F_l (gated skip) + F_g (upsampled)
-            self.conv = DoubleConv(F_g + F_l, F_out)  # Use standard DoubleConv here
+            # Input channels to final conv = F_l (gated skip) + F_g (upsampled g)
+            conv_in_channels = F_g + F_l
         else:
-            self.up = nn.ConvTranspose2d(F_g, F_g // 2, kernel_size=2, stride=2)
-            # Input to conv: F_l (gated skip) + F_g // 2 (upsampled)
-            self.conv = DoubleConv(
-                F_l + F_g // 2, F_out
-            )  # Use standard DoubleConv here
+            # ConvTranspose reduces channels (F_g -> F_g // 2 typically)
+            # Make sure output channels match F_g if bilinear=False assumes it for AttGate F_g
+            intermediate_up_ch = (
+                F_g // 2 if F_g % 2 == 0 else F_g
+            )  # Handle odd F_g? Safer to ensure F_g is design parameter
+            if F_g % 2 != 0:
+                print(f"Warning: F_g={F_g} is odd in UpAtt with ConvTranspose.")
 
-    def forward(self, g, x):  # g is gating signal (from below), x is skip connection
-        # Apply attention gate to the skip connection 'x' using 'g'
-        g_up = self.up(g)  # Upsample the gating signal first
-        x_att = self.att(g=g_up, x=x)  # Calculate attention weights and apply to x
+            self.up = nn.ConvTranspose2d(
+                F_g, intermediate_up_ch, kernel_size=2, stride=2
+            )
+            # Input channels to final conv = F_l (gated skip) + intermediate_up_ch
+            conv_in_channels = intermediate_up_ch + F_l
 
-        # Pad g_up to match x_att spatial dimensions (if needed after upsampling)
-        diffY = x_att.size()[2] - g_up.size()[2]
-        diffX = x_att.size()[3] - g_up.size()[3]
-        g_up = F.pad(
-            g_up, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2]
-        )
+        # Use standard DoubleConv for the final convolution in the Up block
+        self.conv = DoubleConv(
+            conv_in_channels, F_out, attention_type=None
+        )  # No extra attention here
 
-        # Concatenate gated skip connection (x_att) and upsampled signal (g_up)
-        x_combined = torch.cat([x_att, g_up], dim=1)
+    def forward(
+        self, g, x
+    ):  # g is from below (decoder), x is from skip connection (encoder)
+        g_up = self.up(g)  # Upsample g -> [B, F_g (or intermediate_up_ch), H_up, W_up]
+
+        # Get attention map 'psi' from AttentionGate.
+        # Pass g_up as the gating signal because it has the target spatial size.
+        # Pass original x as the signal to be attended to.
+        psi = self.att(g=g_up, x=x)  # psi shape: [B, 1, H_up, W_up]
+
+        # Crop the original skip connection 'x' to match the spatial size of psi (and g_up)
+        diff_y = x.size()[2] - psi.size()[2]
+        diff_x = x.size()[3] - psi.size()[3]
+
+        if diff_y < 0 or diff_x < 0:
+            # This implies psi/g_up is spatially larger than x, very unusual.
+            # Indicates a potential issue upstream.
+            print(
+                f"Warning: UpAtt - psi/g_up spatial dims {psi.shape[2:]} > skip connection x dims {x.shape[2:]}. Check layer defs."
+            )
+            # Fallback: Resize psi down? Less ideal. Let's assume x is larger or equal.
+            # Or resize x up? Also not ideal. Raising error might be better here.
+            # For now, proceed assuming x is larger/equal or AG handled it.
+            x_cropped = x  # Assume AG fallback resized g1 if necessary
+        else:
+            # Standard case: Crop x
+            x_cropped = x[
+                :,
+                :,
+                diff_y // 2 : x.size()[2] - (diff_y - diff_y // 2),
+                diff_x // 2 : x.size()[3] - (diff_x - diff_x // 2),
+            ]
+
+        # Apply attention map psi to the (cropped) skip connection features x_cropped
+        x_att = x_cropped * psi  # Element-wise multiplication -> [B, F_l, H_up, W_up]
+
+        # Concatenate the attended skip connection (x_att) and the upsampled g (g_up)
+        # Ensure g_up and x_att have the same spatial dims before concat
+        if g_up.size()[2:] != x_att.size()[2:]:
+            print(
+                f"Warning: Aligning g_up {g_up.shape} to x_att {x_att.shape} before concat."
+            )
+            g_up = F.interpolate(
+                g_up, size=x_att.size()[2:], mode="bilinear", align_corners=False
+            )
+
+        x_combined = torch.cat([x_att, g_up], dim=1)  # Concatenate along channel dim
+
         return self.conv(x_combined)
 
 
