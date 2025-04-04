@@ -458,89 +458,6 @@ class Up(nn.Module):
         return self.conv(x)
 
 
-# --- Modified Up Block (Option 2: Attention Gate on Skip Connection) ---
-class UpAtt(nn.Module):
-    def __init__(self, F_g, F_l, F_out, bilinear=True):
-        super().__init__()
-        F_int = F_g // 2  # Intermediate channels for attention gate
-        self.att = AttentionGate(F_g=F_g, F_l=F_l, F_int=F_int)
-
-        conv_in_channels = 0
-        if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            # Input channels to final conv = F_l (gated skip) + F_g (upsampled g)
-            conv_in_channels = F_g + F_l
-        else:
-            # ConvTranspose reduces channels (F_g -> F_g // 2 typically)
-            # Make sure output channels match F_g if bilinear=False assumes it for AttGate F_g
-            intermediate_up_ch = (
-                F_g // 2 if F_g % 2 == 0 else F_g
-            )  # Handle odd F_g? Safer to ensure F_g is design parameter
-            if F_g % 2 != 0:
-                print(f"Warning: F_g={F_g} is odd in UpAtt with ConvTranspose.")
-
-            self.up = nn.ConvTranspose2d(
-                F_g, intermediate_up_ch, kernel_size=2, stride=2
-            )
-            # Input channels to final conv = F_l (gated skip) + intermediate_up_ch
-            conv_in_channels = intermediate_up_ch + F_l
-
-        # Use standard DoubleConv for the final convolution in the Up block
-        self.conv = DoubleConv(
-            conv_in_channels, F_out, attention_type=None
-        )  # No extra attention here
-
-    def forward(
-        self, g, x
-    ):  # g is from below (decoder), x is from skip connection (encoder)
-        g_up = self.up(g)  # Upsample g -> [B, F_g (or intermediate_up_ch), H_up, W_up]
-
-        # Get attention map 'psi' from AttentionGate.
-        # Pass g_up as the gating signal because it has the target spatial size.
-        # Pass original x as the signal to be attended to.
-        psi = self.att(g=g_up, x=x)  # psi shape: [B, 1, H_up, W_up]
-
-        # Crop the original skip connection 'x' to match the spatial size of psi (and g_up)
-        diff_y = x.size()[2] - psi.size()[2]
-        diff_x = x.size()[3] - psi.size()[3]
-
-        if diff_y < 0 or diff_x < 0:
-            # This implies psi/g_up is spatially larger than x, very unusual.
-            # Indicates a potential issue upstream.
-            print(
-                f"Warning: UpAtt - psi/g_up spatial dims {psi.shape[2:]} > skip connection x dims {x.shape[2:]}. Check layer defs."
-            )
-            # Fallback: Resize psi down? Less ideal. Let's assume x is larger or equal.
-            # Or resize x up? Also not ideal. Raising error might be better here.
-            # For now, proceed assuming x is larger/equal or AG handled it.
-            x_cropped = x  # Assume AG fallback resized g1 if necessary
-        else:
-            # Standard case: Crop x
-            x_cropped = x[
-                :,
-                :,
-                diff_y // 2 : x.size()[2] - (diff_y - diff_y // 2),
-                diff_x // 2 : x.size()[3] - (diff_x - diff_x // 2),
-            ]
-
-        # Apply attention map psi to the (cropped) skip connection features x_cropped
-        x_att = x_cropped * psi  # Element-wise multiplication -> [B, F_l, H_up, W_up]
-
-        # Concatenate the attended skip connection (x_att) and the upsampled g (g_up)
-        # Ensure g_up and x_att have the same spatial dims before concat
-        if g_up.size()[2:] != x_att.size()[2:]:
-            print(
-                f"Warning: Aligning g_up {g_up.shape} to x_att {x_att.shape} before concat."
-            )
-            g_up = F.interpolate(
-                g_up, size=x_att.size()[2:], mode="bilinear", align_corners=False
-            )
-
-        x_combined = torch.cat([x_att, g_up], dim=1)  # Concatenate along channel dim
-
-        return self.conv(x_combined)
-
-
 class UNetModel(nn.Module):
     def __init__(
         self,
@@ -606,158 +523,6 @@ class UNetModel(nn.Module):
         return logits.squeeze(1)  # -> (16, 16)
 
 
-class UNetAttention(nn.Module):
-    def __init__(
-        self,
-        in_channels=1,
-        out_channels=1,
-        size=32,
-        bilinear=True,
-        attention_type="cbam",
-        final_stage="adaptive_pool",
-    ):
-        """U-Net with optional SE or CBAM attention in DoubleConv blocks."""
-        super().__init__()
-        if out_channels != 1:
-            print(f"Warning: {out_channels=}!=1 was not tested")
-        self.in_channels = in_channels  # Store in_channels
-
-        factor = 2 if bilinear else 1
-
-        # Use the modified DoubleConv, Down, Up blocks passing the attention_type
-        self.inc = DoubleConv(in_channels, size, attention_type=attention_type)
-        self.down1 = Down(size, size * 2, attention_type=attention_type)
-        self.down2 = Down(size * 2, size * 4, attention_type=attention_type)
-        self.down3 = Down(size * 4, size * 8, attention_type=attention_type)
-        self.down4 = Down(
-            size * 8, (size * 16) // factor, attention_type=attention_type
-        )
-
-        self.up1 = Up(
-            size * 16, (size * 8) // factor, bilinear, attention_type=attention_type
-        )
-        self.up2 = Up(
-            size * 8, (size * 4) // factor, bilinear, attention_type=attention_type
-        )
-        self.up3 = Up(
-            size * 4, (size * 2) // factor, bilinear, attention_type=attention_type
-        )  # Added Up3/Up4 for symmetry
-        self.up4 = Up(
-            size * 2, size, bilinear, attention_type=attention_type
-        )  # Added Up3/Up4 for symmetry
-
-        # --- Final Stage ---
-        # The final stage input depends on the output channels of the *last* Up block
-        # Note: Original U-Net paper and many impls. have varying decoder depths.
-        # Let's adjust the final stage based on the added Up layers. Output of up4 is 'size' channels.
-        final_in_ch = size
-        if final_stage == "adaptive_pool":
-            # Adapt to the expected 16x16 output
-            self.final_conv = nn.Sequential(
-                # Optional: Add another conv block before pooling
-                # DoubleConv(final_in_ch, final_in_ch // 2, attention_type=attention_type),
-                nn.AdaptiveAvgPool2d((16, 16)),
-                nn.Conv2d(final_in_ch, out_channels, kernel_size=1),
-            )
-        elif final_stage == "conv1x1":  # Standard U-Net final layer
-            self.final_conv = nn.Conv2d(final_in_ch, out_channels, kernel_size=1)
-        else:
-            raise ValueError(f"Unknown {final_stage=}")
-
-    def forward(self, x):
-        x1 = self.inc(x)  # size
-        x2 = self.down1(x1)  # size*2
-        x3 = self.down2(x2)  # size*4
-        x4 = self.down3(x3)  # size*8
-        x5 = self.down4(x4)  # size*16 // factor (bottleneck)
-
-        # Decoder with skip connections
-        dx = self.up1(x5, x4)  # size*8 // factor
-        dx = self.up2(dx, x3)  # size*4 // factor
-        dx = self.up3(dx, x2)  # size*2 // factor  <- Added
-        dx = self.up4(dx, x1)  # size              <- Added
-
-        logits = self.final_conv(dx)
-        # Check if logits need squeezing based on out_channels
-        if logits.size(1) == 1:  # If single output channel
-            return logits.squeeze(1)
-        else:
-            return logits  # Keep channel dim if multiple outputs
-
-
-class UNetAttentionGate(nn.Module):
-    def __init__(
-        self,
-        in_channels=1,
-        out_channels=1,
-        size=32,
-        bilinear=True,
-        final_stage="adaptive_pool",
-    ):
-        """U-Net using Attention Gates on skip connections."""
-        super().__init__()
-        if out_channels != 1:
-            print(f"Warning: {out_channels=}!=1 was not tested")
-        self.in_channels = in_channels
-
-        factor = 2 if bilinear else 1
-        s = size  # Alias for brevity
-
-        # Encoder uses standard DoubleConv
-        self.inc = DoubleConv(in_channels, s, attention_type=None)
-        self.down1 = Down(s, s * 2, attention_type=None)
-        self.down2 = Down(s * 2, s * 4, attention_type=None)
-        self.down3 = Down(s * 4, s * 8, attention_type=None)
-        self.down4 = Down(s * 8, s * 16 // factor, attention_type=None)
-
-        # Decoder uses UpAtt blocks
-        # UpAtt(F_g, F_l, F_out, bilinear)
-        self.up1 = UpAtt(
-            F_g=s * 16 // factor, F_l=s * 8, F_out=s * 8 // factor, bilinear=bilinear
-        )
-        self.up2 = UpAtt(
-            F_g=s * 8 // factor, F_l=s * 4, F_out=s * 4 // factor, bilinear=bilinear
-        )
-        self.up3 = UpAtt(
-            F_g=s * 4 // factor, F_l=s * 2, F_out=s * 2 // factor, bilinear=bilinear
-        )
-        self.up4 = UpAtt(F_g=s * 2 // factor, F_l=s, F_out=s, bilinear=bilinear)
-
-        # --- Final Stage --- (Same logic as UNetAttention)
-        final_in_ch = s
-        if final_stage == "adaptive_pool":
-            self.final_conv = nn.Sequential(
-                nn.AdaptiveAvgPool2d((16, 16)),
-                nn.Conv2d(final_in_ch, out_channels, kernel_size=1),
-            )
-        elif final_stage == "conv1x1":
-            self.final_conv = nn.Conv2d(final_in_ch, out_channels, kernel_size=1)
-        else:
-            raise ValueError(f"Unknown {final_stage=}")
-
-    def forward(self, x):
-        # Encoder
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)  # Bottleneck
-
-        # Decoder with Attention Gates
-        # UpAtt forward is forward(g, x) where g=from below, x=skip
-        dx = self.up1(g=x5, x=x4)
-        dx = self.up2(g=dx, x=x3)
-        dx = self.up3(g=dx, x=x2)
-        dx = self.up4(g=dx, x=x1)
-
-        logits = self.final_conv(dx)
-        if logits.size(1) == 1:
-            return logits.squeeze(1)
-        else:
-            return logits
-
-
-# --- Unified Convolution Block ---
 class ConvBlock(nn.Module):
     """A block consisting of two convolutions with BN and ReLU, optionally followed by attention."""
 
@@ -801,7 +566,6 @@ class ConvBlock(nn.Module):
         return x
 
 
-# --- Simplified Down Block ---
 class DownBlock(nn.Module):
     """Downscaling with maxpool then ConvBlock"""
 
@@ -814,9 +578,8 @@ class DownBlock(nn.Module):
         return self.conv(self.pool(x))
 
 
-# --- Simplified Up Block ---
 class UpBlock(nn.Module):
-    """Upscaling then ConvBlock"""
+    """Upscaling then ConvBlock, handles optional skip connection."""
 
     def __init__(
         self,
@@ -828,182 +591,226 @@ class UpBlock(nn.Module):
         attention_type="none",
     ):
         """
-        Assumes input spatial dimensions will align after upsampling and concatenation.
-        This is guaranteed if input is padded appropriately, otherwise use interpolation
-        or cropping in the forward pass if needed.
-
         Args:
-            in_channels: Channels from the layer below (input x_below to forward)
-            skip_channels: Channels from the skip connection (input x_skip to forward)
-            out_channels: Desired output channels for this Up block
-            bilinear: Whether to use bilinear upsampling or ConvTranspose
-            use_attention_gate: Apply attention gate to skip connection before concat
-            attention_type: Add SE/CBAM attention within the final ConvBlock
+            in_channels: Channels from the layer below
+            skip_channels: Channels from the skip connection (can be 0 if no skip)
+            out_channels: Desired output channels
+            ... other args ...
         """
         super().__init__()
-        self.use_attention_gate = use_attention_gate
+        # Can only use AG if skip exists
+        self.use_attention_gate = use_attention_gate and skip_channels > 0
 
         # Upsampling
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            upsampled_channels = in_channels  # Bilinear doesn't change channels
+            upsampled_channels = in_channels
         else:
-            # ConvTranspose typically halves channels, ensure consistency or make configurable
-            up_out_channels = in_channels // 2
+            up_out_channels = (
+                in_channels // 2 if in_channels > 1 else 1
+            )  # Avoid 0 channels
             self.up = nn.ConvTranspose2d(
                 in_channels, up_out_channels, kernel_size=2, stride=2
             )
             upsampled_channels = up_out_channels
 
-        # Attention Gate (Optional)
+        # Attention Gate (Optional, only if skip exists)
         if self.use_attention_gate:
-            # F_g = channels from upsampled below, F_l = channels from skip
-            # Intermediate channels can be tuned, e.g., F_l // 2
-            self.att_gate = AttentionGate(
-                F_g=upsampled_channels, F_l=skip_channels, F_int=skip_channels // 2
-            )
-            concat_in_channels = (
-                upsampled_channels + skip_channels
-            )  # AG applies attention, doesn't change skip channels count for concat
+            F_g, F_l, F_int = upsampled_channels, skip_channels, skip_channels // 2
+            self.att_gate = AttentionGate(F_g=F_g, F_l=F_l, F_int=F_int)
+            # AG applies attention, skip channels count remains the same for concat input calculation
+            effective_skip_channels = skip_channels
         else:
             self.att_gate = None
-            concat_in_channels = upsampled_channels + skip_channels
+            effective_skip_channels = skip_channels  # Use skip_channels directly if > 0
+
+        # Determine input channels for the final convolution
+        # If skip connection exists (effective_skip_channels > 0), add its channels
+        if effective_skip_channels > 0:
+            concat_in_channels = upsampled_channels + effective_skip_channels
+        else:
+            # No skip connection, input is just the upsampled channels
+            concat_in_channels = upsampled_channels
 
         # Final Convolution Block
         self.conv = ConvBlock(
             concat_in_channels, out_channels, attention_type=attention_type
         )
 
-    def forward(self, x_below, x_skip):
+    def forward(self, x_below, x_skip=None):
         """
         Args:
             x_below: Tensor from the previous layer in the decoder path
-            x_skip: Tensor from the corresponding layer in the encoder path
+            x_skip: Tensor from the corresponding layer in the encoder path (optional: None)
         """
         x_up = self.up(x_below)
 
-        # --- ASSUMPTION: Spatial dimensions match ---
-        # If not using input padding, add explicit check and F.interpolate or cropping here:
-        # if x_up.size()[2:] != x_skip.size()[2:]:
-        #     # Option 1: Interpolate skip connection (simpler)
-        #     x_skip = F.interpolate(x_skip, size=x_up.size()[2:], mode='bilinear', align_corners=False)
-        #     # Option 2: Cropping (potentially more precise) - see previous answers
-        #     # x_skip = center_crop(x_skip, x_up.size()[2:])
+        if x_skip is not None:
+            # --- Add spatial alignment check ---
+            if x_up.size()[2:] != x_skip.size()[2:]:
+                # Interpolate x_skip to match x_up's spatial size
+                print(
+                    f"Aligning skip connection {x_skip.shape} to upsampled {x_up.shape}"
+                )  # Optional debug print
+                x_skip = F.interpolate(
+                    x_skip, size=x_up.size()[2:], mode="bilinear", align_corners=False
+                )
+            # --- End alignment check ---
 
-        # Apply Attention Gate (Optional)
-        if self.att_gate:
-            psi = self.att_gate(g=x_up, x=x_skip)  # Get attention map
-            x_skip_processed = x_skip * psi  # Apply attention to skip features
+            # Apply Attention Gate (Optional) - uses potentially resized x_skip
+            if self.att_gate:
+                psi = self.att_gate(g=x_up, x=x_skip)
+                x_skip_processed = x_skip * psi
+            else:
+                x_skip_processed = x_skip
+
+            # Concatenate (Dimensions MUST match now)
+            x = torch.cat([x_skip_processed, x_up], dim=1)
         else:
-            x_skip_processed = x_skip  # Use skip features directly
-
-        # Concatenate
-        x = torch.cat([x_skip_processed, x_up], dim=1)
+            # No skip connection
+            x = x_up
 
         # Final Convolution
         return self.conv(x)
 
 
-# --- Unified UNet Class ---
 class UNet(nn.Module):
     def __init__(
         self,
         in_channels=1,
         out_channels=1,
-        base_channels=32,  # Corresponds to 'size' before
-        depth=4,  # Number of down/up stages (e.g., depth=4 means 5 levels total)
+        base_channels=32,
+        down_depth=4,
+        up_depth=4,
         bilinear=True,
-        attention_type="none",  # 'none', 'se', 'cbam' applied in ConvBlocks
-        use_attention_gate=False,  # Use Attention Gates in UpBlocks
-        final_stage="adaptive_pool",  # 'adaptive_pool', 'conv1x1'
+        attention_type="none",
+        use_attention_gate=False,
+        final_stage="adaptive_pool",
+        bottleneck_layers=1,
     ):
         super().__init__()
-        if depth < 1:
-            raise ValueError("Depth must be at least 1.")
-        self.depth = depth
+        if down_depth < 1 or up_depth < 1:
+            raise ValueError("Depths must be at least 1.")
+        self.down_depth = down_depth
+        self.up_depth = up_depth
         self.bilinear = bilinear
         self.in_channels = in_channels
 
-        # --- Calculate Channel Sequence ---
-        channels = [base_channels * (2**i) for i in range(depth + 1)]
-        # Example (depth=4, base=32): [32, 64, 128, 256, 512]
+        max_depth = max(down_depth, up_depth)
+        channels = [base_channels * (2**i) for i in range(max_depth + 1)]
+        # Example (down=4, up=3, base=32): [32, 64, 128, 256, 512] needed
+        # Example (down=3, up=4, base=32): [32, 64, 128, 256, 512] needed
 
         # --- Encoder ---
         self.inc = ConvBlock(in_channels, channels[0], attention_type=attention_type)
         self.downs = nn.ModuleList()
-        for i in range(depth):
+        for i in range(down_depth):
             self.downs.append(
                 DownBlock(channels[i], channels[i + 1], attention_type=attention_type)
             )
 
+        # --- Bottleneck ---
+        bottleneck_ch = channels[down_depth]  # Channels after last down block
+        self.bottleneck = nn.Sequential()
+        if bottleneck_layers > 0:
+            # print(f"Adding {bottleneck_layers} ConvBlock(s) in bottleneck (channels={bottleneck_ch})")
+            for _ in range(bottleneck_layers):
+                self.bottleneck.append(
+                    ConvBlock(
+                        bottleneck_ch, bottleneck_ch, attention_type=attention_type
+                    )
+                )
+
         # --- Decoder ---
         self.ups = nn.ModuleList()
-        # Bottleneck channels depend on bilinear mode affecting the last DownBlock's output conv channels
-        # Let's adjust the last encoder channel if bilinear is True, as factor reduces channels in Up block's definition
-        # However, our DownBlock definition *doesn't* use factor. Let's assume DownBlock output is always channels[i+1].
-        bottleneck_ch = channels[depth]
+        # Keep track of the number of channels coming from the layer below in the decoder
+        decoder_in_ch = bottleneck_ch
+        for j in range(up_depth):  # Iterate 'up_depth' times
+            # Determine corresponding encoder level index for skip connection & output channels
+            # Maps decoder stage j=0 to encoder level i=down_depth-1, j=1 to i=down_depth-2, ...
+            encoder_level_idx = down_depth - 1 - j
 
-        for i in reversed(range(depth)):
-            # Channels for UpBlock(in_ch_below, skip_ch, out_ch, ...)
-            in_ch_below = (
-                bottleneck_ch if i == depth - 1 else channels[i + 1]
-            )  # Output from previous UpBlock or bottleneck
-            skip_ch = channels[i]  # Channels from corresponding encoder stage
-            out_ch = channels[i]  # Target output channels for this stage
+            # Get skip connection channels (if the encoder level exists)
+            if encoder_level_idx >= 0:
+                skip_ch = channels[encoder_level_idx]
+            else:
+                # Decoder is deeper than encoder, no skip connection from encoder
+                skip_ch = 0
 
+            # Determine the desired output channels for this Up stage
+            if encoder_level_idx >= 0:
+                out_ch = channels[encoder_level_idx]
+            else:
+                # Halve if possible, fallback to 1
+                out_ch = decoder_in_ch // 2 if decoder_in_ch > 1 else 1
+
+            # Create UpBlock
             self.ups.append(
                 UpBlock(
-                    in_channels=in_ch_below,
-                    skip_channels=skip_ch,
-                    out_channels=out_ch,
+                    in_channels=decoder_in_ch,  # Channels from below
+                    skip_channels=skip_ch,  # Channels from skip (0 if none)
+                    out_channels=out_ch,  # Target output channels
                     bilinear=bilinear,
                     use_attention_gate=use_attention_gate,
-                    attention_type=attention_type
-                    if not use_attention_gate
-                    else "none",  # Avoid double attention
+                    attention_type=attention_type if not use_attention_gate else "none",
                 )
             )
+            # Update the input channels for the *next* UpBlock stage
+            decoder_in_ch = out_ch
 
         # --- Final Stage ---
-        final_in_ch = channels[0]  # Output channels of the last UpBlock
+        final_in_ch = decoder_in_ch  # Output channels of the last UpBlock
+        # print(f"Final layer input channels: {final_in_ch}")
+
         if final_stage == "adaptive_pool":
             self.final_conv = nn.Sequential(
-                nn.AdaptiveAvgPool2d((16, 16)),  # Target output size
+                nn.AdaptiveAvgPool2d((16, 16)),
                 nn.Conv2d(final_in_ch, out_channels, kernel_size=1),
             )
         elif final_stage == "conv1x1":
-            # Outputs at the spatial resolution of the last UpBlock (~input size if padded)
             self.final_conv = nn.Conv2d(final_in_ch, out_channels, kernel_size=1)
         else:
             raise ValueError(f"Unknown {final_stage=}")
 
-        self.out_channels = out_channels  # Store for forward pass squeeze logic
+        self.out_channels = out_channels
 
     def forward(self, x):
         # --- Encoder ---
         skip_connections = []
         xi = self.inc(x)
-        skip_connections.append(xi)
-        for i in range(self.depth):
+        skip_connections.append(xi)  # Level 0 skip
+        for i in range(self.down_depth):
             xi = self.downs[i](xi)
-            if (
-                i < self.depth - 1
-            ):  # Don't store bottleneck as skip connection for Up blocks
-                skip_connections.append(xi)
-        # xi is now bottleneck
+            # Store skip connections *before* bottleneck
+            # Indices: 0 to down_depth-1 correspond to output of inc, downs[0]...downs[down_depth-2]
+            skip_connections.append(xi)
+        # xi is now bottleneck features (output of downs[down_depth-1])
+        # len(skip_connections) should be down_depth + 1
+
+        # --- Bottleneck ---
+        xi = self.bottleneck(xi)
 
         # --- Decoder ---
-        # Iterate through UpBlocks and corresponding skip connections (in reverse)
-        for i in range(self.depth):
-            skip = skip_connections[self.depth - 1 - i]
-            xi = self.ups[i](
+        for j in range(self.up_depth):  # Iterate 'up_depth' times
+            # Determine corresponding encoder level index for skip connection
+            encoder_level_idx = self.down_depth - 1 - j
+            # print(f"Up stage {j}, Encoder level index {encoder_level_idx}")
+
+            # Get skip connection tensor if valid index
+            if encoder_level_idx >= 0:
+                skip = skip_connections[encoder_level_idx]
+                # print(f"  Using skip connection from level {encoder_level_idx}, shape: {skip.shape}")
+            else:
+                skip = None  # Decoder deeper than encoder
+                # print("  No skip connection available.")
+
+            xi = self.ups[j](
                 xi, skip
-            )  # Pass features from below (xi) and skip connection
+            )  # Pass features from below (xi) and skip connection (or None)
+            # print(f"  Output shape after up block {j}: {xi.shape}")
 
         # --- Final Output ---
         logits = self.final_conv(xi)
-
-        # Squeeze channel dimension only if out_channels is 1
         if self.out_channels == 1:
             return logits.squeeze(1)
         else:
@@ -1121,6 +928,12 @@ def run_model(
     use_stats: bool = True,  # Normalization stats
     use_amp: bool = True,  # Automatic Mixed Precision for training
     benchmark: bool = True,  # CUDA benchmarking
+    # U-Net specific parameters
+    base_channels=32,
+    down_depth=4,
+    up_depth=3,
+    attention_type="none",
+    use_attention_gate=False,
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
     sys.stdout = FileIO(exp_path / "stdout.log")
@@ -1128,7 +941,15 @@ def run_model(
     loaders = create_dataloaders(dataset_path, batch_size, use_fft, use_stats)
     train_loader, val_loader, _ = loaders
 
-    model = model_type_to_class(model_type, in_channels=3 if use_fft else 1)
+    in_channels = 3 if use_fft else 1
+    unet_params = {
+        "base_channels": base_channels,
+        "down_depth": down_depth,
+        "up_depth": up_depth,
+        "attention_type": attention_type,
+        "use_attention_gate": use_attention_gate,
+    }
+    model = model_type_to_class(model_type, in_channels=in_channels, **unet_params)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"{model_type=} ({n_params:,}), {use_fft=}")
 
@@ -1416,7 +1237,7 @@ def create_dataloaders(
     batch_size: int,
     use_fft: bool = False,
     use_stats: bool = False,
-    unet_depth: int | None = 4,
+    unet_depth: int | None = None,
 ):
     with h5py.File(dataset_path, "r") as h5f:
         ds_size = h5f["patterns"].shape[0]
@@ -1672,71 +1493,31 @@ def plot_steer_loss(exp_path: Path, preds, targets, steering_info):
     print(f"Steering loss plot saved to {exp_path / 'steer_loss.png'}")
 
 
-# def model_type_to_class(model_type: str, in_channels: int = 1):
-#     if model_type == "cnn":
-#         return ConvModel(in_channels=in_channels)
-#     elif model_type == "resnet":
-#         return resnet18()
-#     elif model_type == "unet":
-#         return UNetModel(in_channels=in_channels)
-#     elif model_type == "unet_balanced":
-#         return UNetModelBalanced(in_channels=in_channels)
-#     elif model_type == "unet_cbam":
-#         return UNetAttention(in_channels=in_channels, attention_type="cbam", size=32)
-#     elif model_type == "unet_se":
-#         return UNetAttention(in_channels=in_channels, attention_type="se", size=32)
-#     elif model_type == "unet_attgate":
-#         return UNetAttentionGate(in_channels=in_channels, size=32)
-#     # Add UNetRes if you implement it
-#     else:
-#         raise ValueError(f"Unknown model type: {model_type}")
-
-
-def model_type_to_class(model_type: str, in_channels: int = 1):
+def model_type_to_class(
+    model_type: str,
+    in_channels: int = 1,
+    base_channels=32,
+    down_depth=4,
+    up_depth=3,
+    attention_type="none",
+    use_attention_gate=False,
+):
+    print(locals())
     if model_type == "cnn":
         return ConvModel(in_channels=in_channels)
     elif model_type == "resnet":
         return resnet18()
-    elif model_type == "unet":  # Balanced, no attention
-        print("Using Unified UNet (depth=4, base=32, no attention)")
+    elif model_type == "unet_orig":
+        return UNetModel(in_channels=in_channels)
+    elif model_type == "unet":
         return UNet(
             in_channels=in_channels,
-            base_channels=32,
-            depth=4,
-            attention_type="none",
-            use_attention_gate=False,
+            base_channels=base_channels,
+            down_depth=down_depth,
+            up_depth=up_depth,
+            attention_type=attention_type,
+            use_attention_gate=use_attention_gate,
         )
-    elif model_type == "unet_cbam":  # Balanced, CBAM in ConvBlocks
-        print("Using Unified UNet (depth=4, base=32, CBAM attention)")
-        return UNet(
-            in_channels=in_channels,
-            base_channels=32,
-            depth=4,
-            attention_type="cbam",
-            use_attention_gate=False,
-        )
-    elif model_type == "unet_se":  # Balanced, SE in ConvBlocks
-        print("Using Unified UNet (depth=4, base=32, SE attention)")
-        return UNet(
-            in_channels=in_channels,
-            base_channels=32,
-            depth=4,
-            attention_type="se",
-            use_attention_gate=False,
-        )
-    elif model_type == "unet_attgate":  # Balanced, Attention Gates in UpBlocks
-        print("Using Unified UNet (depth=4, base=32, Attention Gates)")
-        # Note: Set attention_type='none' if using gates to avoid double attention
-        return UNet(
-            in_channels=in_channels,
-            base_channels=32,
-            depth=4,
-            attention_type="none",
-            use_attention_gate=True,
-        )
-    # Add more configurations as needed (e.g., different depth, base_channels)
-    # elif model_type == "unet_deep_cbam":
-    #     return UNet(in_channels=in_channels, base_channels=64, depth=5, attention_type='cbam', use_attention_gate=False)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
