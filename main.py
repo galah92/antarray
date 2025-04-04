@@ -626,7 +626,7 @@ class UpBlock(nn.Module):
                 # Interpolate x_skip to match x_up's spatial size
                 print(
                     f"Aligning skip connection {x_skip.shape} to upsampled {x_up.shape}"
-                )  # Optional debug print
+                )
                 x_skip = F.interpolate(
                     x_skip, size=x_up.size()[2:], mode="bilinear", align_corners=False
                 )
@@ -661,7 +661,7 @@ class UNet(nn.Module):
         attention_type="none",
         use_attention_gate=False,
         final_stage="adaptive_pool",
-        bottleneck_layers=1,
+        bottleneck_depth=1,
     ):
         super().__init__()
         if down_depth < 1 or up_depth < 1:
@@ -687,9 +687,9 @@ class UNet(nn.Module):
         # --- Bottleneck ---
         bottleneck_ch = channels[down_depth]  # Channels after last down block
         self.bottleneck = nn.Sequential()
-        if bottleneck_layers > 0:
-            # print(f"Adding {bottleneck_layers} ConvBlock(s) in bottleneck (channels={bottleneck_ch})")
-            for _ in range(bottleneck_layers):
+        if bottleneck_depth > 0:
+            # print(f"Adding {bottleneck_depth} ConvBlock(s) in bottleneck (channels={bottleneck_ch})")
+            for _ in range(bottleneck_depth):
                 self.bottleneck.append(
                     ConvBlock(
                         bottleneck_ch, bottleneck_ch, attention_type=attention_type
@@ -904,23 +904,30 @@ def run_model(
     use_amp: bool = True,  # Automatic Mixed Precision for training
     benchmark: bool = True,  # CUDA benchmarking
     # U-Net specific parameters
-    base_channels=32,
-    down_depth=4,
-    up_depth=3,
-    attention_type="none",
-    use_attention_gate=False,
+    base_channels: int = 32,
+    down_depth: int = 4,
+    up_depth: int = 2,
+    bottleneck_depth: int = 0,
+    attention_type: str = "none",
+    use_attention_gate: bool = False,
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
     sys.stdout = FileIO(exp_path / "stdout.log")
 
-    loaders = create_dataloaders(dataset_path, batch_size, use_fft, use_stats)
-    train_loader, val_loader, _ = loaders
+    train_loader, val_loader, _ = create_dataloaders(
+        dataset_path,
+        batch_size,
+        use_fft,
+        use_stats,
+        unet_depth=down_depth,
+    )
 
     in_channels = 3 if use_fft else 1
     unet_params = {
         "base_channels": base_channels,
         "down_depth": down_depth,
         "up_depth": up_depth,
+        "bottleneck_depth": bottleneck_depth,
         "attention_type": attention_type,
         "use_attention_gate": use_attention_gate,
     }
@@ -1474,6 +1481,7 @@ def model_type_to_class(
     base_channels=32,
     down_depth=4,
     up_depth=3,
+    bottleneck_depth=1,
     attention_type="none",
     use_attention_gate=False,
 ):
@@ -1490,6 +1498,7 @@ def model_type_to_class(
             base_channels=base_channels,
             down_depth=down_depth,
             up_depth=up_depth,
+            bottleneck_depth=0,
             attention_type=attention_type,
             use_attention_gate=use_attention_gate,
         )
