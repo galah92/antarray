@@ -32,31 +32,6 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 
-class RadiationPatternDataset(Dataset):
-    def __init__(self, patterns, phase_shifts, transform=None):
-        # Radiation patterns with shape (n_samples, n_phi, n_theta)
-        self.patterns = torch.from_numpy(patterns)
-        # Phase shift matrices with shape (n_samples, xn, yn)
-        self.phase_shifts = torch.from_numpy(phase_shifts)
-        # Optional transform to be applied to the patterns
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.patterns)
-
-    def __getitem__(self, idx):
-        pattern = self.patterns[idx]
-        phase_shift = self.phase_shifts[idx]
-
-        # Expand dims to create a channel dimension for the CNN
-        pattern = pattern.unsqueeze(0)  # Shape becomes (1, n_phi, n_theta)
-
-        if self.transform:
-            pattern = self.transform(pattern)
-
-        return pattern, phase_shift
-
-
 class Hdf5Dataset(Dataset):
     """
     Dataset class for loading radiation patterns and phase shift matrices from an HDF5 file.
