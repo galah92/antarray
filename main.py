@@ -1,6 +1,7 @@
 import json
 import pickle
 import subprocess as sp
+import sys
 import time
 from pathlib import Path
 
@@ -836,6 +837,28 @@ class EarlyStopper:
         return False
 
 
+class FileIO:
+    """
+    This is a simple wrapper around the standard output stream.
+    It captures all print statements and writes them to a file.
+    Based on https://stackoverflow.com/a/14906787/5151909
+    """
+
+    def __init__(self, file_path: Path):
+        self.stdout = sys.stdout
+        self.file = open(file_path, "w+")
+
+    def write(self, message):
+        self.stdout.write(message)
+        self.file.write(message)
+
+    def flush(self):
+        # this flush method is needed for python 3 compatibility.
+        # this handles the flush command by doing nothing.
+        # you might want to specify some extra behavior here.
+        pass
+
+
 @app.command()
 def run_model(
     experiment: str,
@@ -853,6 +876,7 @@ def run_model(
     benchmark: bool = True,  # CUDA benchmarking
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
+    sys.stdout = FileIO(exp_path / "stdout.log")
 
     loaders = create_dataloaders(dataset_path, batch_size, use_fft, use_stats)
     train_loader, val_loader, _ = loaders
