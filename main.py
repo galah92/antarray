@@ -1490,6 +1490,23 @@ def calc_normalization_stats(dataset_path: Path, train_indices: list | np.ndarra
     Calculates normalization statistics (mean, std) iteratively for original patterns,
     FFT amplitude, and FFT phase over the training set indices.
     """
+    # Read patterns from HDF5 file if exists
+    stats = {
+        "pattern_mean": None,
+        "pattern_std": None,
+        "fft_amp_mean": None,
+        "fft_amp_std": None,
+        "fft_phase_mean": None,
+        "fft_phase_std": None,
+    }
+    with h5py.File(dataset_path, "r") as h5f:
+        for key in stats:
+            stats[key] = h5f["patterns"].attrs.get(key)
+        if all(val is not None for val in stats.values()):
+            print("Normalization stats already exist in the dataset.")
+            print(stats)
+            return stats
+
     pattern_sum = torch.tensor(0.0, dtype=torch.float64)
     pattern_sum_sq = torch.tensor(0.0, dtype=torch.float64)
 
@@ -1565,6 +1582,11 @@ def calc_normalization_stats(dataset_path: Path, train_indices: list | np.ndarra
         "fft_phase_std": fft_phase_std.item(),
     }
     print(stats)
+
+    # Store as HDF5 attributes
+    with h5py.File(dataset_path, "r+") as h5f:
+        for key, value in stats.items():
+            h5f["patterns"].attrs[key] = value
 
     return stats
 
