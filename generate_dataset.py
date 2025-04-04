@@ -1091,5 +1091,108 @@ def extract_n_beam_samples(
     )
 
 
+@app.command()
+def unify_datasets(
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset1_name: str = "rand_bf_2d_only_20k.h5",
+    dataset2_name: str = "rand_bf_2d_only_40k.h5",
+    output_dataset: str = "rand_bf_2d_only_60k.h5",
+    chunk_size: int = 1000,
+):
+    """
+    Unify two dataset files into one, processing in chunks to handle large files.
+
+    Parameters:
+    -----------
+    dataset_dir : Path
+        Directory containing the datasets
+    dataset1_name : str
+        Filename of the first dataset
+    dataset2_name : str
+        Filename of the second dataset
+    output_dataset : str
+        Filename for the unified dataset
+    chunk_size : int
+        Number of samples to process at a time
+    """
+    dataset1_path = dataset_dir / dataset1_name
+    dataset2_path = dataset_dir / dataset2_name
+    output_path = dataset_dir / output_dataset
+
+    print(f"Unifying datasets: {dataset1_path} and {dataset2_path} into {output_path}")
+
+    with h5py.File(dataset1_path, "r") as ds1, h5py.File(dataset2_path, "r") as ds2:
+        # Ensure theta and phi are identical in both datasets
+        if not np.array_equal(ds1["theta"][:], ds2["theta"][:]) or not np.array_equal(
+            ds1["phi"][:], ds2["phi"][:]
+        ):
+            print("Error: Theta and Phi arrays do not match between the datasets.")
+            return
+
+        # Get dataset sizes
+        n_samples1 = ds1["patterns"].shape[0]
+        n_samples2 = ds2["patterns"].shape[0]
+        n_theta = ds1["patterns"].shape[2]
+        n_phi = ds1["patterns"].shape[1]
+        xn, yn = ds1["labels"].shape[1:]
+
+        # Create the unified dataset
+        with h5py.File(output_path, "w") as unified_ds:
+            unified_ds.create_dataset("theta", data=ds1["theta"][:])
+            unified_ds.create_dataset("phi", data=ds1["phi"][:])
+            unified_ds.create_dataset(
+                "patterns", shape=(n_samples1 + n_samples2, n_phi, n_theta)
+            )
+            unified_ds.create_dataset("labels", shape=(n_samples1 + n_samples2, xn, yn))
+            unified_ds.create_dataset(
+                "steering_info",
+                shape=(n_samples1 + n_samples2,) + ds1["steering_info"].shape[1:],
+            )
+
+            # Copy attributes from the first dataset
+            for key in ds1.attrs:
+                unified_ds.attrs[key] = ds1.attrs[key]
+
+            # Add metadata about the unification
+            unified_ds.attrs["description"] = (
+                f"Unified dataset combining {dataset1_name} and {dataset2_name}"
+            )
+            unified_ds.attrs["source_datasets"] = f"{dataset1_name}, {dataset2_name}"
+
+            # Process and copy data in chunks
+            def copy_in_chunks(src_ds, dst_ds, start_idx, chunk_size):
+                for i in range(0, src_ds.shape[0], chunk_size):
+                    end_idx = min(i + chunk_size, src_ds.shape[0])
+                    dst_ds[start_idx : start_idx + (end_idx - i)] = src_ds[i:end_idx]
+                    start_idx += end_idx - i
+                return start_idx
+
+            start_idx = 0
+            start_idx = copy_in_chunks(
+                ds1["patterns"], unified_ds["patterns"], start_idx, chunk_size
+            )
+            start_idx = copy_in_chunks(
+                ds2["patterns"], unified_ds["patterns"], start_idx, chunk_size
+            )
+
+            start_idx = 0
+            start_idx = copy_in_chunks(
+                ds1["labels"], unified_ds["labels"], start_idx, chunk_size
+            )
+            start_idx = copy_in_chunks(
+                ds2["labels"], unified_ds["labels"], start_idx, chunk_size
+            )
+
+            start_idx = 0
+            start_idx = copy_in_chunks(
+                ds1["steering_info"], unified_ds["steering_info"], start_idx, chunk_size
+            )
+            start_idx = copy_in_chunks(
+                ds2["steering_info"], unified_ds["steering_info"], start_idx, chunk_size
+            )
+
+    print(f"Successfully unified datasets into {output_path}")
+
+
 if __name__ == "__main__":
     app()
