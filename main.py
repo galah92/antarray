@@ -1403,10 +1403,23 @@ def pred_model(
     batch_size: int = 128,
     use_fft: bool = True,
     use_stats: bool = True,
+    # U-Net specific parameters
+    base_channels: int = 32,
+    down_depth: int = 4,
+    up_depth: int = 2,
+    bottleneck_depth: int = 0,
+    attention_type: str = "none",
+    use_attention_gate: bool = False,
 ):
     exp_path = get_experiment_path(experiment, exps_path, overwrite=True)
 
-    _, _, test_loader = create_dataloaders(dataset_path, batch_size, use_fft, use_stats)
+    _, _, test_loader = create_dataloaders(
+        dataset_path,
+        batch_size,
+        use_fft,
+        use_stats,
+        unet_depth=down_depth,
+    )
     test_indices = test_loader.dataset.indices
 
     with h5py.File(dataset_path, "r") as h5f:
@@ -1417,7 +1430,19 @@ def pred_model(
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
     model_type = checkpoint["model_type"]
-    model = model_type_to_class(model_type, in_channels=3 if use_fft else 1).to(device)
+
+    in_channels = 3 if use_fft else 1
+    unet_params = {
+        "base_channels": base_channels,
+        "down_depth": down_depth,
+        "up_depth": up_depth,
+        "bottleneck_depth": bottleneck_depth,
+        "attention_type": attention_type,
+        "use_attention_gate": use_attention_gate,
+    }
+
+    model = model_type_to_class(model_type, in_channels=in_channels, **unet_params)
+    model = model.to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     n_test = len(test_loader.dataset)
