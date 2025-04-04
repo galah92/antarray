@@ -792,8 +792,91 @@ class UNet(nn.Module):
             return logits
 
 
-# Building a full UNet with ResBlocks (UNetRes) would involve replacing
-# DoubleConv/Down/Up appropriately.
+class DecoderBlock(nn.Module):
+    """Upsamples then applies a ConvBlock."""
+
+    def __init__(self, in_channels, out_channels, attention_type="none"):
+        super().__init__()
+        # Use bilinear upsampling
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+        # Convolution block after upsampling
+        # Input to ConvBlock is in_channels (since Upsample doesn't change channels)
+        self.conv = ConvBlock(in_channels, out_channels, attention_type=attention_type)
+
+    def forward(self, x):
+        x = self.up(x)
+        x = self.conv(x)
+        return x
+
+
+class ConvAutoencoder(nn.Module):
+    def __init__(
+        self,
+        in_channels=1,
+        out_channels=1,
+        base_channels=32,
+        down_depth=4,  # Depth of the encoder
+        bottleneck_depth=2,
+        bottleneck_type=ConvBlock,
+        decoder_depth=3,
+        attention_type="none",  # Attention in ConvBlocks ('none', 'se', 'cbam')
+        out_shape=(16, 16),  # Target spatial size
+    ):
+        """
+        Convolutional Autoencoder-style architecture without skip connections.
+
+        Args:
+            in_channels: Input channels.
+            out_channels: Output channels (1 for phase).
+            base_channels: Starting channel count for the encoder.
+            down_depth: Number of downsampling stages in the encoder.
+            bottleneck_depth: Number of ConvBlocks applied at the bottleneck resolution.
+            decoder_depth: Number of upsampling (DecoderBlock) stages in the decoder.
+            attention_type: Type of attention to use within ConvBlocks.
+            out_shape: Final spatial output dimensions (e.g., (16, 16)).
+        """
+        super().__init__()
+        if down_depth < 1 or decoder_depth < 1:
+            raise ValueError("Depths must be at least 1.")
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        in_ch, out_ch = in_channels, base_channels
+        self.inc = ConvBlock(in_ch, out_ch, attention_type=attention_type)
+
+        self.encoder = nn.Sequential()
+        for i in range(down_depth):
+            in_ch, out_ch = out_ch, out_ch * 2  # Double the channels
+            self.encoder.append(DownBlock(in_ch, out_ch, attention_type))
+
+        self.bottleneck = nn.Sequential()
+        for _ in range(bottleneck_depth):
+            in_ch, out_ch = out_ch, out_ch  # Same channels in bottleneck
+            block = bottleneck_type(out_ch, out_ch, attention_type=attention_type)
+            self.bottleneck.append(block)
+
+        self.decoder = nn.Sequential()
+        for _ in range(decoder_depth):
+            # Half the channels in the decoder up to a minimum of base_channels
+            in_ch, out_ch = out_ch, max(out_ch // 2, base_channels)
+            self.decoder.append(DecoderBlock(in_ch, out_ch, attention_type))
+
+        self.final_conv = nn.Sequential(
+            nn.AdaptiveAvgPool2d(out_shape),
+            nn.Conv2d(out_ch, out_channels, kernel_size=1),
+        )
+
+    def forward(self, x):
+        x = self.inc(x)
+        x = self.encoder(x)
+        x = self.bottleneck(x)
+        x = self.decoder(x)
+
+        logits = self.final_conv(x)
+        if self.out_channels == 1:
+            logits = logits.squeeze(1)
+
+        return logits
 
 
 class ResNet(nn.Module):
@@ -1230,27 +1313,10 @@ def create_dataloaders(
 
     stats = calc_normalization_stats(dataset_path, train_idx) if use_stats else None
 
-    train_ds = Hdf5Dataset(
-        dataset_path,
-        train_idx,
-        stats=stats,
-        add_fft=use_fft,
-        unet_depth=unet_depth,
-    )
-    val_ds = Hdf5Dataset(
-        dataset_path,
-        val_idx,
-        stats=stats,
-        add_fft=use_fft,
-        unet_depth=unet_depth,
-    )
-    test_ds = Hdf5Dataset(
-        dataset_path,
-        test_idx,
-        stats=stats,
-        add_fft=use_fft,
-        unet_depth=unet_depth,
-    )
+    ds_kwargs = {"stats": stats, "add_fft": use_fft, "unet_depth": unet_depth}
+    train_ds = Hdf5Dataset(dataset_path, train_idx, **ds_kwargs)
+    val_ds = Hdf5Dataset(dataset_path, val_idx, **ds_kwargs)
+    test_ds = Hdf5Dataset(dataset_path, test_idx, **ds_kwargs)
 
     train_loader = DataLoader(
         train_ds,
@@ -1523,9 +1589,17 @@ def model_type_to_class(
             base_channels=base_channels,
             down_depth=down_depth,
             up_depth=up_depth,
-            bottleneck_depth=0,
+            bottleneck_depth=bottleneck_depth,
             attention_type=attention_type,
             use_attention_gate=use_attention_gate,
+        )
+    elif model_type == "cae":
+        return ConvAutoencoder(
+            in_channels=in_channels,
+            base_channels=32,  # Maybe start wider for CAE?
+            down_depth=4,
+            bottleneck_depth=2,  # More bottleneck processing
+            decoder_depth=2,  # Fewer decoder stages might be okay
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
