@@ -656,140 +656,84 @@ class UNet(nn.Module):
         out_channels=1,
         base_channels=32,
         down_depth=4,
+        bottleneck_depth=1,
         up_depth=4,
         bilinear=True,
         attention_type="none",
         use_attention_gate=False,
         final_stage="adaptive_pool",
-        bottleneck_depth=1,
+        out_shape=(16, 16),
     ):
         super().__init__()
         if down_depth < 1 or up_depth < 1:
             raise ValueError("Depths must be at least 1.")
-        self.down_depth = down_depth
-        self.up_depth = up_depth
-        self.bilinear = bilinear
         self.in_channels = in_channels
+        self.out_channels = out_channels
 
-        max_depth = max(down_depth, up_depth)
-        channels = [base_channels * (2**i) for i in range(max_depth + 1)]
-        # Example (down=4, up=3, base=32): [32, 64, 128, 256, 512] needed
-        # Example (down=3, up=4, base=32): [32, 64, 128, 256, 512] needed
+        in_ch, out_ch = in_channels, base_channels
+        self.inc = ConvBlock(in_ch, out_ch, attention_type=attention_type)
 
-        # --- Encoder ---
-        self.inc = ConvBlock(in_channels, channels[0], attention_type=attention_type)
         self.downs = nn.ModuleList()
         for i in range(down_depth):
-            self.downs.append(
-                DownBlock(channels[i], channels[i + 1], attention_type=attention_type)
-            )
+            in_ch, out_ch = out_ch, out_ch * 2  # Double the channels
+            self.downs.append(DownBlock(in_ch, out_ch, attention_type=attention_type))
 
-        # --- Bottleneck ---
-        bottleneck_ch = channels[down_depth]  # Channels after last down block
         self.bottleneck = nn.Sequential()
-        if bottleneck_depth > 0:
-            # print(f"Adding {bottleneck_depth} ConvBlock(s) in bottleneck (channels={bottleneck_ch})")
-            for _ in range(bottleneck_depth):
-                self.bottleneck.append(
-                    ConvBlock(
-                        bottleneck_ch, bottleneck_ch, attention_type=attention_type
-                    )
-                )
+        for i in range(bottleneck_depth):
+            in_ch, out_ch = out_ch, out_ch  # Same channels in bottleneck
+            block = ConvBlock(in_ch, out_ch, attention_type=attention_type)
+            self.bottleneck.append(block)
 
-        # --- Decoder ---
         self.ups = nn.ModuleList()
-        # Keep track of the number of channels coming from the layer below in the decoder
-        decoder_in_ch = bottleneck_ch
-        for j in range(up_depth):  # Iterate 'up_depth' times
-            # Determine corresponding encoder level index for skip connection & output channels
-            # Maps decoder stage j=0 to encoder level i=down_depth-1, j=1 to i=down_depth-2, ...
-            encoder_level_idx = down_depth - 1 - j
+        for j in range(up_depth):
+            in_ch = out_ch
+            # Half the channels in the decoder up to a minimum of base_channels
+            in_ch, out_ch = out_ch, max(out_ch // 2, base_channels)
+            # Set skip channels to 0 if no skip connection exists
+            # FIXME: a possible bug, skip_ch should be in_ch, not out_ch
+            skip_ch = out_ch if j < down_depth + 1 else 0  # +1 for inc
 
-            # Get skip connection channels (if the encoder level exists)
-            if encoder_level_idx >= 0:
-                skip_ch = channels[encoder_level_idx]
-            else:
-                # Decoder is deeper than encoder, no skip connection from encoder
-                skip_ch = 0
-
-            # Determine the desired output channels for this Up stage
-            if encoder_level_idx >= 0:
-                out_ch = channels[encoder_level_idx]
-            else:
-                # Halve if possible, fallback to 1
-                out_ch = decoder_in_ch // 2 if decoder_in_ch > 1 else 1
-
-            # Create UpBlock
             self.ups.append(
                 UpBlock(
-                    in_channels=decoder_in_ch,  # Channels from below
-                    skip_channels=skip_ch,  # Channels from skip (0 if none)
-                    out_channels=out_ch,  # Target output channels
+                    in_channels=in_ch,
+                    skip_channels=skip_ch,
+                    out_channels=out_ch,
                     bilinear=bilinear,
                     use_attention_gate=use_attention_gate,
                     attention_type=attention_type if not use_attention_gate else "none",
                 )
             )
-            # Update the input channels for the *next* UpBlock stage
-            decoder_in_ch = out_ch
-
-        # --- Final Stage ---
-        final_in_ch = decoder_in_ch  # Output channels of the last UpBlock
-        # print(f"Final layer input channels: {final_in_ch}")
 
         if final_stage == "adaptive_pool":
             self.final_conv = nn.Sequential(
-                nn.AdaptiveAvgPool2d((16, 16)),
-                nn.Conv2d(final_in_ch, out_channels, kernel_size=1),
+                nn.AdaptiveAvgPool2d(out_shape),
+                nn.Conv2d(out_ch, out_channels, kernel_size=1),
             )
         elif final_stage == "conv1x1":
-            self.final_conv = nn.Conv2d(final_in_ch, out_channels, kernel_size=1)
+            self.final_conv = nn.Conv2d(out_ch, out_channels, kernel_size=1)
         else:
             raise ValueError(f"Unknown {final_stage=}")
 
-        self.out_channels = out_channels
-
     def forward(self, x):
-        # --- Encoder ---
-        skip_connections = []
-        xi = self.inc(x)
-        skip_connections.append(xi)  # Level 0 skip
-        for i in range(self.down_depth):
-            xi = self.downs[i](xi)
-            # Store skip connections *before* bottleneck
-            # Indices: 0 to down_depth-1 correspond to output of inc, downs[0]...downs[down_depth-2]
-            skip_connections.append(xi)
-        # xi is now bottleneck features (output of downs[down_depth-1])
-        # len(skip_connections) should be down_depth + 1
+        x = self.inc(x)
+        skip_connections = [x]
 
-        # --- Bottleneck ---
-        xi = self.bottleneck(xi)
+        for down in self.downs:
+            x = down(x)
+            skip_connections.append(x)
 
-        # --- Decoder ---
-        for j in range(self.up_depth):  # Iterate 'up_depth' times
-            # Determine corresponding encoder level index for skip connection
-            encoder_level_idx = self.down_depth - 1 - j
-            # print(f"Up stage {j}, Encoder level index {encoder_level_idx}")
+        x = self.bottleneck(x)
 
-            # Get skip connection tensor if valid index
-            if encoder_level_idx >= 0:
-                skip = skip_connections[encoder_level_idx]
-                # print(f"  Using skip connection from level {encoder_level_idx}, shape: {skip.shape}")
-            else:
-                skip = None  # Decoder deeper than encoder
-                # print("  No skip connection available.")
+        for i, up in enumerate(self.ups):
+            # FIXME: (i + 2) is probably due to the bug above in skip_ch calculation
+            skip = skip_connections[-(i + 2)] if i < len(skip_connections) else None
+            x = up(x, skip)
 
-            xi = self.ups[j](
-                xi, skip
-            )  # Pass features from below (xi) and skip connection (or None)
-            # print(f"  Output shape after up block {j}: {xi.shape}")
-
-        # --- Final Output ---
-        logits = self.final_conv(xi)
+        logits = self.final_conv(x)
         if self.out_channels == 1:
-            return logits.squeeze(1)
-        else:
-            return logits
+            logits = logits.squeeze(1)
+
+        return logits
 
 
 class DecoderBlock(nn.Module):
