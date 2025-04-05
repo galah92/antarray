@@ -990,7 +990,7 @@ def run_model(
     base_channels: int = 16,
     down_depth: int = 4,
     up_depth: int = 2,
-    bottleneck_depth: int = 0,
+    bottleneck_depth: int = 2,
     attention_type: str = "none",
     use_attention_gate: bool = False,
 ):
@@ -1470,10 +1470,10 @@ def pred_model(
     use_fft: bool = True,
     use_stats: bool = True,
     # U-Net specific parameters
-    base_channels: int = 32,
+    base_channels: int = 16,
     down_depth: int = 4,
     up_depth: int = 2,
-    bottleneck_depth: int = 0,
+    bottleneck_depth: int = 2,
     attention_type: str = "none",
     use_attention_gate: bool = False,
 ):
