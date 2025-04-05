@@ -845,7 +845,7 @@ class ConvAutoencoder(nn.Module):
         self.inc = ConvBlock(in_ch, out_ch, attention_type=attention_type)
 
         self.encoder = nn.Sequential()
-        for i in range(down_depth):
+        for _ in range(down_depth):
             in_ch, out_ch = out_ch, out_ch * 2  # Double the channels
             self.encoder.append(DownBlock(in_ch, out_ch, attention_type))
 
@@ -987,7 +987,7 @@ def run_model(
     use_amp: bool = True,  # Automatic Mixed Precision for training
     benchmark: bool = True,  # CUDA benchmarking
     # U-Net specific parameters
-    base_channels: int = 32,
+    base_channels: int = 16,
     down_depth: int = 4,
     up_depth: int = 2,
     bottleneck_depth: int = 0,
