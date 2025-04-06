@@ -342,15 +342,13 @@ class ConvBlock(nn.Module):
 
     def __init__(self, in_channels, out_channels, attention_type="none"):
         super().__init__()
-        self.conv1 = nn.Conv2d(
-            in_channels, out_channels, kernel_size=3, padding=1, bias=False
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=True),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=True),
+            nn.BatchNorm2d(out_channels),
         )
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu1 = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(
-            out_channels, out_channels, kernel_size=3, padding=1, bias=False
-        )
-        self.bn2 = nn.BatchNorm2d(out_channels)
         self.relu2 = nn.ReLU(inplace=True)
 
         self.attention = None
@@ -362,11 +360,7 @@ class ConvBlock(nn.Module):
             raise ValueError(f"Unknown attention type: {attention_type}")
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu1(x)
-        x = self.conv2(x)
-        x = self.bn2(x)
+        x = self.block(x)
         if self.attention:
             x = self.attention(x)
         x = self.relu2(x)
@@ -378,11 +372,13 @@ class DownBlock(nn.Module):
 
     def __init__(self, in_channels, out_channels, attention_type="none"):
         super().__init__()
-        self.pool = nn.MaxPool2d(2)
-        self.conv = ConvBlock(in_channels, out_channels, attention_type)
+        self.pool_conv = nn.Sequential(
+            nn.MaxPool2d(2),
+            ConvBlock(in_channels, out_channels, attention_type),
+        )
 
     def forward(self, x):
-        return self.conv(self.pool(x))
+        return self.pool_conv(x)
 
 
 class UpBlock(nn.Module):
@@ -391,91 +387,44 @@ class UpBlock(nn.Module):
     def __init__(
         self,
         in_channels,
-        skip_channels,
+        skip_channels,  # 0 if no skip
         out_channels,
         bilinear=True,
         use_attention_gate=False,
         attention_type="none",
     ):
-        """
-        Args:
-            in_channels: Channels from the layer below
-            skip_channels: Channels from the skip connection (can be 0 if no skip)
-            out_channels: Desired output channels
-            ... other args ...
-        """
         super().__init__()
-        # Can only use AG if skip exists
-        self.use_attention_gate = use_attention_gate and skip_channels > 0
-
-        # Upsampling
         if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
             upsampled_channels = in_channels
+            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
         else:
-            up_out_channels = (
-                in_channels // 2 if in_channels > 1 else 1
-            )  # Avoid 0 channels
+            upsampled_channels = max(in_channels // 2, 1)  # Avoid 0 channels
             self.up = nn.ConvTranspose2d(
-                in_channels, up_out_channels, kernel_size=2, stride=2
+                in_channels, upsampled_channels, kernel_size=2, stride=2
             )
-            upsampled_channels = up_out_channels
 
-        # Attention Gate (Optional, only if skip exists)
-        if self.use_attention_gate:
+        self.att_gate = None
+        if use_attention_gate and skip_channels > 0:
             F_g, F_l, F_int = upsampled_channels, skip_channels, skip_channels // 2
             self.att_gate = AttentionGate(F_g=F_g, F_l=F_l, F_int=F_int)
-            # AG applies attention, skip channels count remains the same for concat input calculation
-            effective_skip_channels = skip_channels
-        else:
-            self.att_gate = None
-            effective_skip_channels = skip_channels  # Use skip_channels directly if > 0
 
-        # Determine input channels for the final convolution
-        # If skip connection exists (effective_skip_channels > 0), add its channels
-        if effective_skip_channels > 0:
-            concat_in_channels = upsampled_channels + effective_skip_channels
-        else:
-            # No skip connection, input is just the upsampled channels
-            concat_in_channels = upsampled_channels
-
-        # Final Convolution Block
+        concat_in_channels = upsampled_channels + skip_channels
         self.conv = ConvBlock(concat_in_channels, out_channels, attention_type)
 
-    def forward(self, x_below, x_skip=None):
-        """
-        Args:
-            x_below: Tensor from the previous layer in the decoder path
-            x_skip: Tensor from the corresponding layer in the encoder path (optional: None)
-        """
-        x_up = self.up(x_below)
+    def forward(self, x, x_skip=None):
+        x = self.up(x)
 
         if x_skip is not None:
-            # --- Add spatial alignment check ---
-            if x_up.size()[2:] != x_skip.size()[2:]:
-                # Interpolate x_skip to match x_up's spatial size
-                print(
-                    f"Aligning skip connection {x_skip.shape} to upsampled {x_up.shape}"
-                )
-                x_skip = F.interpolate(
-                    x_skip, size=x_up.size()[2:], mode="bilinear", align_corners=False
-                )
-            # --- End alignment check ---
+            if x.size()[2:] != x_skip.size()[2:]:
+                print(f"Align skip connection {x_skip.shape} to upsampled {x.shape}")
+                x_skip = F.interpolate(x_skip, size=x.size()[2:], mode="bilinear")
 
-            # Apply Attention Gate (Optional) - uses potentially resized x_skip
-            if self.att_gate:
-                psi = self.att_gate(g=x_up, x=x_skip)
-                x_skip_processed = x_skip * psi
-            else:
-                x_skip_processed = x_skip
+            if self.att_gate is not None:
+                psi = self.att_gate(g=x, x=x_skip)
+                x_skip = x_skip * psi
 
-            # Concatenate (Dimensions MUST match now)
-            x = torch.cat([x_skip_processed, x_up], dim=1)
-        else:
-            # No skip connection
-            x = x_up
+            x = torch.cat([x, x_skip], dim=1)
 
-        # Final Convolution
         return self.conv(x)
 
 
