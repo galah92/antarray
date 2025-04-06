@@ -440,7 +440,6 @@ class UNet(nn.Module):
         bilinear=True,
         attention_type="none",
         use_attention_gate=False,
-        final_stage="adaptive_pool",
         out_shape=(16, 16),
     ):
         super().__init__()
@@ -483,15 +482,7 @@ class UNet(nn.Module):
                 )
             )
 
-        if final_stage == "adaptive_pool":
-            self.final_conv = nn.Sequential(
-                nn.AdaptiveAvgPool2d(out_shape),
-                nn.Conv2d(out_ch, out_channels, kernel_size=1),
-            )
-        elif final_stage == "conv1x1":
-            self.final_conv = nn.Conv2d(out_ch, out_channels, kernel_size=1)
-        else:
-            raise ValueError(f"Unknown {final_stage=}")
+        self.final_conv = final_block(out_ch, out_channels, out_shape)
 
     def forward(self, x):
         x = self.inc(x)
@@ -515,15 +506,20 @@ class UNet(nn.Module):
         return logits
 
 
+def final_block(in_channels, out_channels, out_shape):
+    """Final output block for the model."""
+    return nn.Sequential(
+        nn.AdaptiveAvgPool2d(out_shape),
+        nn.Conv2d(in_channels, out_channels, kernel_size=1),
+    )
+
+
 class DecoderBlock(nn.Module):
     """Upsamples then applies a ConvBlock."""
 
     def __init__(self, in_channels, out_channels, attention_type="none"):
         super().__init__()
-        # Use bilinear upsampling
         self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-        # Convolution block after upsampling
-        # Input to ConvBlock is in_channels (since Upsample doesn't change channels)
         self.conv = ConvBlock(in_channels, out_channels, attention_type)
 
     def forward(self, x):
@@ -584,10 +580,7 @@ class ConvAutoencoder(nn.Module):
             in_ch, out_ch = out_ch, max(out_ch // 2, base_channels)
             self.decoder.append(DecoderBlock(in_ch, out_ch, attention_type))
 
-        self.final_conv = nn.Sequential(
-            nn.AdaptiveAvgPool2d(out_shape),
-            nn.Conv2d(out_ch, out_channels, kernel_size=1),
-        )
+        self.final_conv = final_block(out_ch, out_channels, out_shape)
 
     def forward(self, x):
         x = self.inc(x)
