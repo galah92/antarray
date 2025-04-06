@@ -163,7 +163,6 @@ class ConvModel(nn.Module):
         return x
 
 
-# --- Squeeze-and-Excitation (SE) Block ---
 class SEBlock(nn.Module):
     """Squeeze-and-Excitation Block."""
 
@@ -184,7 +183,6 @@ class SEBlock(nn.Module):
         return x * y.expand_as(x)
 
 
-# --- Convolutional Block Attention Module (CBAM) ---
 class ChannelAttention(nn.Module):
     def __init__(self, in_planes, ratio=16):
         super().__init__()
@@ -229,12 +227,11 @@ class CBAM(nn.Module):
         self.sa = SpatialAttention(kernel_size)
 
     def forward(self, x):
-        x = x * self.ca(x)  # Apply channel attention
-        x = x * self.sa(x)  # Apply spatial attention
+        x = x * self.ca(x)
+        x = x * self.sa(x)
         return x
 
 
-# --- Residual Block (taken from your original code) ---
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
@@ -269,25 +266,24 @@ class ResidualBlock(nn.Module):
         out = self.relu(out)
         out = self.conv2(out)
         out = self.bn2(out)
-        out += self.shortcut(residual)  # Add residual before final activation
-        out = self.relu(out)  # Final activation
+        out += self.shortcut(residual)
+        out = self.relu(out)
         return out
 
 
-# --- Attention Gate (for Attention U-Net style skip connections) ---
 class AttentionGate(nn.Module):
     def __init__(self, F_g, F_l, F_int):
         super().__init__()
         self.W_g = nn.Sequential(
-            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(F_g, F_int, kernel_size=1),
             nn.BatchNorm2d(F_int),
         )
         self.W_x = nn.Sequential(
-            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(F_l, F_int, kernel_size=1),
             nn.BatchNorm2d(F_int),
         )
         self.psi = nn.Sequential(
-            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(F_int, 1, kernel_size=1),
             nn.BatchNorm2d(1),
             nn.Sigmoid(),
         )
@@ -341,179 +337,18 @@ class AttentionGate(nn.Module):
         return psi  # Return only the attention map
 
 
-# --- Modified DoubleConv ---
-class DoubleConv(nn.Module):
-    """(convolution => [BN] => ReLU) * 2 + Optional Attention"""
-
-    def __init__(
-        self, in_channels, out_channels, mid_channels=None, attention_type=None
-    ):  # Add attention_type
-        super().__init__()
-        if not mid_channels:
-            mid_channels = out_channels
-        self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            # ReLU is applied *after* attention now
-        )
-
-        self.attention = None
-        if attention_type == "se":
-            self.attention = SEBlock(out_channels)
-            print(f"Using SEBlock in DoubleConv ({in_channels}->{out_channels})")
-        elif attention_type == "cbam":
-            self.attention = CBAM(out_channels)
-            print(f"Using CBAM in DoubleConv ({in_channels}->{out_channels})")
-        elif attention_type is not None and attention_type != "none":
-            raise ValueError(f"Unknown attention type: {attention_type}")
-
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        x = self.double_conv(x)
-        if self.attention:
-            x = self.attention(x)
-        x = self.relu(x)  # Apply final ReLU
-        return x
-
-
-# --- Modified Down Block ---
-# Can use the modified DoubleConv directly
-class Down(nn.Module):
-    """Downscaling with maxpool then modified double conv"""
-
-    def __init__(self, in_channels, out_channels, attention_type=None):
-        super().__init__()
-        self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(2),
-            DoubleConv(
-                in_channels, out_channels, attention_type=attention_type
-            ),  # Pass attention type
-        )
-
-    def forward(self, x):
-        return self.maxpool_conv(x)
-
-
-# --- Modified Up Block (Option 1: Attention within DoubleConv) ---
-class Up(nn.Module):
-    """Upscaling then modified double conv"""
-
-    def __init__(self, in_channels, out_channels, bilinear=True, attention=None):
-        super().__init__()
-        if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            # Note: input channels to DoubleConv is in_channels (from skip) + out_channels (from upsampled)
-            # But CBAM/SE expect the *output* channels of the first conv layer if placed mid-block.
-            # Let's keep it simple and apply attention *after* the DoubleConv here.
-            # The DoubleConv input channels needs careful thought if bilinear=True
-            mid_channels = in_channels // 2 if bilinear else None
-            self.conv = DoubleConv(in_channels, out_channels, mid_channels, attention)
-        else:
-            # ConvTranspose reduces channels first
-            self.up = nn.ConvTranspose2d(
-                in_channels, in_channels // 2, kernel_size=2, stride=2
-            )
-            # Input channels = channels from skip (in_channels//2) + channels from upsampled x1 (in_channels//2)
-            self.conv = DoubleConv(in_channels, out_channels, attention_type=attention)
-
-    def forward(self, x1, x2):
-        # x1 is from deeper layer (upsample), x2 is from skip connection
-        x1 = self.up(x1)
-        # input is CHW
-        diffY = x2.size()[2] - x1.size()[2]
-        diffX = x2.size()[3] - x1.size()[3]
-
-        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
-        # if you have padding issues, see center_crop function in original code
-        x = torch.cat([x2, x1], dim=1)
-        return self.conv(x)
-
-
-class UNetModel(nn.Module):
-    def __init__(
-        self,
-        in_channels=1,
-        out_channels=1,
-        size=32,  # Base channel size, comments in the code assume size=32
-        bilinear=True,
-        final_stage="adaptive_pool",
-    ):
-        """
-        U-Net architecture for predicting phase directly (linear output).
-        Suitable for use with circular MSE/MAE loss functions.
-
-        Args:
-            in_channels (int): Number of input channels (usually 1 for DBi map).
-            out_channels (int): Number of output channels (should be 1 for direct phase).
-            bilinear (bool): If True, use bilinear upsampling. Otherwise, use ConvTranspose2d.
-            final_stage (str): 'adaptive_pool' or 'large_kernel'. How to get to 16x16.
-        """
-        super().__init__()
-        if out_channels != 1:
-            print(f"{out_channels=}!=1 was not tested")
-
-        self.in_channels = in_channels
-
-        # --- Encoder ---
-        self.inc = DoubleConv(in_channels, size)  # -> (32, 180, 180)
-        self.down1 = Down(size, size * 2)  # -> (64, 90, 90)
-        self.down2 = Down(size * 2, size * 4)  # -> (128, 45, 45)
-        self.down3 = Down(size * 4, size * 8)  # -> (256, 22, 22)
-        factor = 2 if bilinear else 1
-        self.down4 = Down(size * 8, (size * 16) // factor)  # -> (256, 11, 11)
-
-        # --- Decoder ---
-        self.up1 = Up(size * 16, (size * 8) // factor, bilinear)  # -> (128, 22, 22)
-        self.up2 = Up(size * 8, (size * 4) // factor, bilinear)  # -> (64, 44, 44)
-
-        # --- Final Stage ---
-        final_in_ch = (size * 4) // factor  # Output channels of self.up2 (64)
-        if final_stage == "adaptive_pool":
-            self.final_conv = nn.Sequential(
-                nn.AdaptiveAvgPool2d((16, 16)),  # -> (64, 16, 16)
-                nn.Conv2d(final_in_ch, out_channels, kernel_size=1),  # -> (1, 16, 16)
-            )
-        elif final_stage == "large_kernel":
-            self.final_conv = nn.Conv2d(final_in_ch, out_channels, kernel_size=29)
-        else:
-            raise ValueError(f"Unknown {final_stage=}")
-
-    def forward(self, x):
-        # --- Encoder ---
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-
-        # --- Decoder ---
-        dx = self.up1(x5, x4)  # -> (128, 22, 22)
-        dx = self.up2(dx, x3)  # -> (64, 44, 44)
-
-        logits = self.final_conv(dx)  # -> (1, 16, 16)
-        return logits.squeeze(1)  # -> (16, 16)
-
-
 class ConvBlock(nn.Module):
     """A block consisting of two convolutions with BN and ReLU, optionally followed by attention."""
 
-    def __init__(
-        self, in_channels, out_channels, mid_channels=None, attention_type="none"
-    ):
+    def __init__(self, in_channels, out_channels, attention_type="none"):
         super().__init__()
-        if not mid_channels:
-            mid_channels = out_channels
         self.conv1 = nn.Conv2d(
-            in_channels, mid_channels, kernel_size=3, padding=1, bias=False
+            in_channels, out_channels, kernel_size=3, padding=1, bias=False
         )
-        self.bn1 = nn.BatchNorm2d(mid_channels)
+        self.bn1 = nn.BatchNorm2d(out_channels)
         self.relu1 = nn.ReLU(inplace=True)
         self.conv2 = nn.Conv2d(
-            mid_channels, out_channels, kernel_size=3, padding=1, bias=False
+            out_channels, out_channels, kernel_size=3, padding=1, bias=False
         )
         self.bn2 = nn.BatchNorm2d(out_channels)
         self.relu2 = nn.ReLU(inplace=True)
@@ -521,10 +356,8 @@ class ConvBlock(nn.Module):
         self.attention = None
         if attention_type == "se":
             self.attention = SEBlock(out_channels)
-            # print(f"Using SEBlock after ConvBlock ({in_channels}->{out_channels})")
         elif attention_type == "cbam":
             self.attention = CBAM(out_channels)
-            # print(f"Using CBAM after ConvBlock ({in_channels}->{out_channels})")
         elif attention_type is not None and attention_type != "none":
             raise ValueError(f"Unknown attention type: {attention_type}")
 
@@ -534,7 +367,6 @@ class ConvBlock(nn.Module):
         x = self.relu1(x)
         x = self.conv2(x)
         x = self.bn2(x)
-        # Apply attention *before* the final ReLU of the block
         if self.attention:
             x = self.attention(x)
         x = self.relu2(x)
@@ -547,7 +379,7 @@ class DownBlock(nn.Module):
     def __init__(self, in_channels, out_channels, attention_type="none"):
         super().__init__()
         self.pool = nn.MaxPool2d(2)
-        self.conv = ConvBlock(in_channels, out_channels, attention_type=attention_type)
+        self.conv = ConvBlock(in_channels, out_channels, attention_type)
 
     def forward(self, x):
         return self.conv(self.pool(x))
@@ -608,9 +440,7 @@ class UpBlock(nn.Module):
             concat_in_channels = upsampled_channels
 
         # Final Convolution Block
-        self.conv = ConvBlock(
-            concat_in_channels, out_channels, attention_type=attention_type
-        )
+        self.conv = ConvBlock(concat_in_channels, out_channels, attention_type)
 
     def forward(self, x_below, x_skip=None):
         """
@@ -671,17 +501,17 @@ class UNet(nn.Module):
         self.out_channels = out_channels
 
         in_ch, out_ch = in_channels, base_channels
-        self.inc = ConvBlock(in_ch, out_ch, attention_type=attention_type)
+        self.inc = ConvBlock(in_ch, out_ch, attention_type)
 
         self.downs = nn.ModuleList()
         for i in range(down_depth):
             in_ch, out_ch = out_ch, out_ch * 2  # Double the channels
-            self.downs.append(DownBlock(in_ch, out_ch, attention_type=attention_type))
+            self.downs.append(DownBlock(in_ch, out_ch, attention_type))
 
         self.bottleneck = nn.Sequential()
         for i in range(bottleneck_depth):
             in_ch, out_ch = out_ch, out_ch  # Same channels in bottleneck
-            block = ConvBlock(in_ch, out_ch, attention_type=attention_type)
+            block = ConvBlock(in_ch, out_ch, attention_type)
             self.bottleneck.append(block)
 
         self.ups = nn.ModuleList()
@@ -745,7 +575,7 @@ class DecoderBlock(nn.Module):
         self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
         # Convolution block after upsampling
         # Input to ConvBlock is in_channels (since Upsample doesn't change channels)
-        self.conv = ConvBlock(in_channels, out_channels, attention_type=attention_type)
+        self.conv = ConvBlock(in_channels, out_channels, attention_type)
 
     def forward(self, x):
         x = self.up(x)
@@ -786,7 +616,7 @@ class ConvAutoencoder(nn.Module):
         self.out_channels = out_channels
 
         in_ch, out_ch = in_channels, base_channels
-        self.inc = ConvBlock(in_ch, out_ch, attention_type=attention_type)
+        self.inc = ConvBlock(in_ch, out_ch, attention_type)
 
         self.encoder = nn.Sequential()
         for _ in range(down_depth):
@@ -796,7 +626,7 @@ class ConvAutoencoder(nn.Module):
         self.bottleneck = nn.Sequential()
         for _ in range(bottleneck_depth):
             in_ch, out_ch = out_ch, out_ch  # Same channels in bottleneck
-            block = bottleneck_type(out_ch, out_ch, attention_type=attention_type)
+            block = bottleneck_type(out_ch, out_ch, attention_type)
             self.bottleneck.append(block)
 
         self.decoder = nn.Sequential()
@@ -1525,8 +1355,6 @@ def model_type_to_class(
         return ConvModel(in_channels=in_channels)
     elif model_type == "resnet":
         return resnet18()
-    elif model_type == "unet_orig":
-        return UNetModel(in_channels=in_channels)
     elif model_type == "unet":
         return UNet(
             in_channels=in_channels,
