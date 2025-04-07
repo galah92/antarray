@@ -233,22 +233,38 @@ class CBAM(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
+    def __init__(self, in_channels, out_channels, stride=1, attention_type="none"):
         super().__init__()
-        self.conv1 = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            stride=stride,
-            padding=1,
-            bias=False,
+        self.block = nn.Sequential(
+            nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size=3,
+                stride=stride,
+                padding=1,
+                bias=False,
+            ),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                bias=False,
+            ),
+            nn.BatchNorm2d(out_channels),
         )
-        self.bn1 = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(
-            out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False
-        )
-        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        self.attention = None
+        if attention_type == "se":
+            self.attention = SEBlock(out_channels)
+        elif attention_type == "cbam":
+            self.attention = CBAM(out_channels)
+        elif attention_type is not None and attention_type != "none":
+            raise ValueError(f"Unknown attention type: {attention_type}")
 
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels:
@@ -261,14 +277,12 @@ class ResidualBlock(nn.Module):
 
     def forward(self, x):
         residual = x
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out += self.shortcut(residual)
-        out = self.relu(out)
-        return out
+        x = self.block(x)
+        if self.attention:
+            x = self.attention(x)
+        x += self.shortcut(residual)
+        x = self.relu(x)
+        return x
 
 
 class AttentionGate(nn.Module):
@@ -349,7 +363,7 @@ class ConvBlock(nn.Module):
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=True),
             nn.BatchNorm2d(out_channels),
         )
-        self.relu2 = nn.ReLU(inplace=True)
+        self.relu = nn.ReLU(inplace=True)
 
         self.attention = None
         if attention_type == "se":
@@ -363,7 +377,7 @@ class ConvBlock(nn.Module):
         x = self.block(x)
         if self.attention:
             x = self.attention(x)
-        x = self.relu2(x)
+        x = self.relu(x)
         return x
 
 
@@ -436,6 +450,7 @@ class UNet(nn.Module):
         base_channels=32,
         down_depth=4,
         bottleneck_depth=1,
+        bottleneck_type=ConvBlock,
         up_depth=4,
         bilinear=True,
         attention_type="none",
@@ -459,7 +474,7 @@ class UNet(nn.Module):
         self.bottleneck = nn.Sequential()
         for i in range(bottleneck_depth):
             in_ch, out_ch = out_ch, out_ch  # Same channels in bottleneck
-            block = ConvBlock(in_ch, out_ch, attention_type)
+            block = bottleneck_type(in_ch, out_ch, attention_type=attention_type)
             self.bottleneck.append(block)
 
         self.ups = nn.ModuleList()
@@ -571,7 +586,7 @@ class ConvAutoencoder(nn.Module):
         self.bottleneck = nn.Sequential()
         for _ in range(bottleneck_depth):
             in_ch, out_ch = out_ch, out_ch  # Same channels in bottleneck
-            block = bottleneck_type(out_ch, out_ch, attention_type)
+            block = bottleneck_type(out_ch, out_ch, attention_type=attention_type)
             self.bottleneck.append(block)
 
         self.decoder = nn.Sequential()
@@ -1317,6 +1332,7 @@ def model_type_to_class(
             bottleneck_depth=bottleneck_depth,
             attention_type=attention_type,
             use_attention_gate=use_attention_gate,
+            bottleneck_type=ResidualBlock,
         )
     elif model_type == "cae":
         return ConvAutoencoder(
