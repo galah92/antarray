@@ -693,7 +693,7 @@ def run_model(
     overwrite: bool = False,
     dataset_path: Path = DEFAULT_DATASET_PATH,
     exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
-    batch_size: int = 256,
+    batch_size: int = 512,
     n_epochs: int = 200,
     lr: float = 2e-3,
     weight_decay: float = 1e-4,
@@ -1267,6 +1267,17 @@ def plot_steer_loss(exp_path: Path, preds, targets, steering_info):
     """
     losses = circular_mse_loss_np(preds, targets, axis=(1, 2))
     loss = losses.mean()
+
+    print(f"{steering_info.shape=}")
+    indices_1_beam = np.argwhere(np.isnan(steering_info[:, 0, 1]))
+    indices_2_beam = np.argwhere(~np.isnan(steering_info[:, 0, 1]))
+
+    loss_1_beam = circular_mse_loss_np(preds[indices_1_beam], targets[indices_1_beam])
+    loss_2_beam = circular_mse_loss_np(preds[indices_2_beam], targets[indices_2_beam])
+    print(f"Loss for 1 beam: {loss_1_beam.mean():.4f}")
+    print(f"Loss for 2 beams: {loss_2_beam.mean():.4f}")
+    print(f"Overall loss: {loss:.4f}")
+
     steering_info = steering_info[:, :, 0]  # Take only the first beamforming angle
 
     fig, ax = plt.subplots()
