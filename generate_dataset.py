@@ -705,15 +705,22 @@ def generate_beamforming(
             "steering_info", shape=(n_samples, 2, max_n_beams)
         )
 
-        for i in tqdm(range(n_samples)):
-            # Generate random steering angles within the specified range
-            theta_steering = np.random.uniform(theta_start, theta_end, size=max_n_beams)
-            phi_steering = np.random.uniform(phi_start, phi_end, size=max_n_beams)
+        # Choose a random number of beams to simulate for each sample
+        n_beams_sq = np.square(np.arange(max_n_beams) + 1)
+        n_beams_prob = n_beams_sq / np.sum(n_beams_sq)  # consider softmax instead
+        print(f"{n_beams_prob=}")
+        n_beams = np.random.choice(max_n_beams, size=n_samples, p=n_beams_prob) + 1
 
-            # Choose a random number of beams to simulate and fill the rest with NaN
-            n_beams = np.random.randint(max_n_beams) + 1
-            theta_steering[n_beams:] = np.nan
-            phi_steering[n_beams:] = np.nan
+        # Generate random steering angles within the specified range
+        steering_size = (n_samples, max_n_beams)
+        theta_steerings = np.random.uniform(theta_start, theta_end, size=steering_size)
+        phi_steerings = np.random.uniform(phi_start, phi_end, size=steering_size)
+
+        for i in tqdm(range(n_samples)):
+            theta_steering, phi_steering = theta_steerings[i], phi_steerings[i]
+            # Set steering angles to NaN for unused beams
+            theta_steering[n_beams[i] :] = np.nan
+            phi_steering[n_beams[i] :] = np.nan
 
             # Generate phase shifts for each element
             phase_shifts = generate_element_phase_shifts(
