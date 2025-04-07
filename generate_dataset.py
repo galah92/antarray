@@ -1,6 +1,9 @@
+from functools import partial
 from pathlib import Path
 
 import h5py
+import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import typer
@@ -299,6 +302,7 @@ def array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy):
     return partial_phase
 
 
+@partial(jax.jit, static_argnums=(0, 1))
 def array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts):
     # Make phase_shifts shape: (1, 1, xn, yn)
     phase_shifts = phase_shifts.reshape(1, 1, xn, yn)
@@ -307,12 +311,12 @@ def array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts):
     total_phase = partial_phase - phase_shifts
 
     # Sum the complex exponentials across all elements
-    AF = np.sum(np.exp(1j * total_phase), axis=(2, 3))
+    AF = jnp.sum(jnp.exp(1j * total_phase), axis=(2, 3))
 
     # Normalize by total number of elements
     AF = AF / (xn * yn)
 
-    return np.abs(AF)
+    return jnp.abs(AF)
 
 
 # Add this function to help understand grating lobes
@@ -725,6 +729,8 @@ def generate_beamforming(
             steering_info[i] = [theta_steering, phi_steering]
 
             # Calculate array factor for all phi and theta values at once
+            partial_phase = jnp.asarray(partial_phase)
+            phase_shifts = jnp.asarray(phase_shifts)
             AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
 
             # Multiply by single element pattern to get total pattern
