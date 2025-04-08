@@ -833,67 +833,8 @@ def ff_from_phase_shifts(
     return total_pattern_db
 
 
-def load_dataset(dataset_file: Path):
-    """
-    Load the generated dataset.
-
-    Parameters:
-    -----------
-    dataset_file : Path
-        Path to the dataset H5 file
-
-    Returns:
-    --------
-    dict
-        Dictionary containing patterns, labels, and metadata
-    """
-    with h5py.File(dataset_file, "r") as h5f:
-        dataset = {
-            "patterns": h5f["patterns"][:],
-            "labels": h5f["labels"][:],
-            "theta": h5f["theta"][:],
-            "phi": h5f["phi"][:],
-            "steering_info": h5f.get("steering_info", np.array([]))[:],
-        }
-
-        # Load metadata
-        for key in h5f.attrs:
-            dataset[key] = h5f.attrs[key]
-
-    return dataset
-
-
 DEFAULT_OUTPUT_DIR = DEFAULT_DATASET_DIR / "plots"
 DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def plot_samples(
-    n_samples: int = 1,
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: Path = DEFAULT_OUTFILE,
-    output_dir: Path = DEFAULT_OUTPUT_DIR,
-):
-    """
-    Visualize a few samples from the dataset.
-
-    Parameters:
-    -----------
-    dataset : dict
-        Dataset loaded with load_dataset
-    n_samples : int
-        Number of samples to visualize
-    """
-    dataset_path = dataset_dir / dataset_name
-    # Choose n_samples random indices
-    dataset = load_dataset(dataset_path)
-    indices = np.random.choice(
-        len(dataset["patterns"]),
-        size=min(n_samples, len(dataset["patterns"])),
-        replace=False,
-    )
-
-    for idx in indices:
-        plot_sample(idx, dataset_path, output_dir)
 
 
 @app.command()
@@ -905,13 +846,6 @@ def plot_sample(
 ):
     """
     Visualize a single sample from the dataset.
-
-    Parameters:
-    -----------
-    dataset : dict
-        Dataset loaded with load_dataset
-    idx : int
-        Index of the sample to visualize
     """
     dataset_path = dataset_dir / dataset_name
     with h5py.File(dataset_path, "r") as h5f:
