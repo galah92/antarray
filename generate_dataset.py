@@ -914,33 +914,32 @@ def plot_sample(
         Index of the sample to visualize
     """
     dataset_path = dataset_dir / dataset_name
-    dataset = load_dataset(dataset_path)
-    theta, phi = dataset["theta"], dataset["phi"]
-    freq = dataset["frequency"]
+    with h5py.File(dataset_path, "r") as h5f:
+        pattern = h5f["patterns"][idx]
+        phase_shifts = h5f["labels"][idx]
+        steering_info = h5f["steering_info"][idx]
+        theta, phi = h5f["theta"][:], h5f["phi"][:]
 
-    # Create figure with three subplots: pattern, phase shifts, and polar pattern
     fig, axs = plt.subplots(1, 3, figsize=[18, 6])
 
-    pattern = dataset["patterns"][idx]
-    phase_shifts = dataset["labels"][idx]
+    pattern = pattern.clip(min=0)
 
-    # pattern[pattern < 0] = 0  # Clip negative values to 0
-
-    analyze.plot_phase_shifts(phase_shifts, title="Phase Shifts", ax=axs[0])
+    analyze.plot_phase_shifts(phase_shifts, ax=axs[0])
     analyze.plot_ff_2d(pattern, theta, phi, ax=axs[1])
 
     axs[2].remove()
     axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
-    pattern_3d = pattern[None, ...]  # Add freq dimension (first one) for 3D plot
-    analyze.plot_ff_3d(theta, phi, pattern_3d, freq=freq, ax=axs[2])
+    analyze.plot_ff_3d(theta, phi, pattern, ax=axs[2])
 
-    steering_str = steering_repr(dataset["steering_info"][idx])
+    steering_str = steering_repr(steering_info)
     phase_shift_title = f"Phase Shifts ({steering_str})"
     fig.suptitle(phase_shift_title)
 
     fig.set_tight_layout(True)
     if output_dir:
-        fig.savefig(output_dir / f"sample_{idx}.png", dpi=600, bbox_inches="tight")
+        outfile = output_dir / f"sample_{idx}.png"
+        fig.savefig(outfile, dpi=600, bbox_inches="tight")
+        print(f"Saved sample plot to {outfile}")
 
 
 def steering_repr(steering_angles: np.ndarray):
