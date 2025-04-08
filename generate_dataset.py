@@ -23,6 +23,125 @@ DEFAULT_SINGLE_ANT_FILENAME = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 
+def generate_element_amplitudes(xn, yn, method="uniform", **kwargs):
+    """
+    Generate amplitude values for individual antenna elements using different methods.
+
+    Parameters:
+    -----------
+    xn : int
+        Number of elements in x direction
+    yn : int
+        Number of elements in y direction
+    method : str
+        Method to generate amplitudes:
+        - "uniform": uniform amplitude for all elements (default 1.0)
+        - "random": random amplitudes between min_amp and max_amp
+        - "taper": apply tapering function (Hamming, Hanning, etc.)
+        - "zones": divide array into zones with different amplitudes
+        - "failure": randomly set some elements to zero to simulate failures
+
+    kwargs:
+        For "uniform": amplitude (default 1.0)
+        For "random": min_amp, max_amp (default 0.5, 1.0)
+        For "taper": taper_type (hamming, hanning, taylor, blackman, etc.)
+        For "zones": n_zones, amplitude_values (list of amplitudes)
+        For "failure": failure_rate (percentage of elements to fail)
+
+    Returns:
+    --------
+    numpy.ndarray
+        Amplitude values for each element, shape (xn, yn)
+    """
+    if method == "uniform":
+        amplitude = kwargs.get("amplitude", 1.0)
+        return np.ones((xn, yn)) * amplitude
+
+    elif method == "random":
+        min_amp = kwargs.get("min_amp", 0.5)
+        max_amp = kwargs.get("max_amp", 1.0)
+        return np.random.uniform(min_amp, max_amp, size=(xn, yn))
+
+    elif method == "taper":
+        taper_type = kwargs.get("taper_type", "hamming")
+
+        # Create 1D window functions
+        if taper_type == "hamming":
+            window_x = np.hamming(xn)
+            window_y = np.hamming(yn)
+        elif taper_type == "hanning":
+            window_x = np.hanning(xn)
+            window_y = np.hanning(yn)
+        elif taper_type == "blackman":
+            window_x = np.blackman(xn)
+            window_y = np.blackman(yn)
+        elif taper_type == "taylor":
+            # Simple approximation of Taylor window using Kaiser
+            window_x = np.kaiser(xn, 3)
+            window_y = np.kaiser(yn, 3)
+        else:
+            # Default to Hamming
+            window_x = np.hamming(xn)
+            window_y = np.hamming(yn)
+
+        # Create 2D taper by multiplying the 1D windows
+        return np.outer(window_x, window_y)
+
+    elif method == "zones":
+        n_zones = kwargs.get("n_zones", 4)
+        amplitude_values = kwargs.get(
+            "amplitude_values", np.linspace(0.5, 1.0, n_zones)
+        )
+
+        # Create zones (similar to phase shift zones)
+        zones = np.zeros((xn, yn), dtype=int)
+        zone_size_x = xn // int(np.sqrt(n_zones))
+        zone_size_y = yn // int(np.sqrt(n_zones))
+
+        for i in range(int(np.sqrt(n_zones))):
+            for j in range(int(np.sqrt(n_zones))):
+                zone_idx = i * int(np.sqrt(n_zones)) + j
+                if zone_idx < n_zones:
+                    x_start = i * zone_size_x
+                    x_end = (
+                        (i + 1) * zone_size_x if i < int(np.sqrt(n_zones)) - 1 else xn
+                    )
+                    y_start = j * zone_size_y
+                    y_end = (
+                        (j + 1) * zone_size_y if j < int(np.sqrt(n_zones)) - 1 else yn
+                    )
+                    zones[x_start:x_end, y_start:y_end] = zone_idx
+
+        # Map zones to amplitude values
+        amplitudes = np.zeros((xn, yn))
+        for i in range(n_zones):
+            amplitudes[zones == i] = amplitude_values[i]
+
+        return amplitudes
+
+    elif method == "failure":
+        failure_rate = kwargs.get("failure_rate", 0.05)  # 5% failure by default
+        amplitudes = np.ones((xn, yn))
+
+        # Calculate number of elements to fail
+        num_elements = xn * yn
+        num_failures = int(num_elements * failure_rate)
+
+        # Choose random elements to fail
+        failure_indices = np.random.choice(
+            num_elements, size=num_failures, replace=False
+        )
+
+        # Set failed elements to zero amplitude
+        flat_amplitudes = amplitudes.flatten()
+        flat_amplitudes[failure_indices] = 0.0
+
+        return flat_amplitudes.reshape((xn, yn))
+
+    else:
+        raise ValueError(f"Unknown amplitude method: {method}")
+
+
 def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
     """
     Generate phase shifts for individual antenna elements using different methods.
@@ -303,18 +422,31 @@ def array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy):
 
 
 @partial(jax.jit, static_argnums=(0, 1))
-def array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts):
+def array_factor_partial_and_shift(
+    xn, yn, partial_phase, phase_shifts, amplitudes=None
+):
+    """
+    Calculate array factor with individual element phase shifts and amplitudes.
+    """
     # Make phase_shifts shape: (1, 1, xn, yn)
     phase_shifts = phase_shifts.reshape(1, 1, xn, yn)
+
+    # Use uniform amplitudes if none provided
+    if amplitudes is None:
+        amplitudes = jnp.ones((xn, yn))
+
+    # Make amplitudes shape: (1, 1, xn, yn)
+    amplitudes = amplitudes.reshape(1, 1, xn, yn)
 
     # Compute the total phase for all elements and all angles at once
     total_phase = partial_phase - phase_shifts
 
-    # Sum the complex exponentials across all elements
-    AF = jnp.sum(jnp.exp(1j * total_phase), axis=(2, 3))
+    # Sum the complex exponentials across all elements, including amplitude weights
+    AF = jnp.sum(amplitudes * jnp.exp(1j * total_phase), axis=(2, 3))
 
-    # Normalize by total number of elements
-    AF = AF / (xn * yn)
+    # Normalize by total sum of amplitudes
+    total_amplitude = jnp.sum(amplitudes)
+    AF = AF / total_amplitude if total_amplitude > 0 else AF
 
     return jnp.abs(AF)
 
@@ -636,12 +768,29 @@ def generate_beamforming(
     phi_start: float = -65,  # Degrees
     phi_end: float = 65,  # Degrees
     max_n_beams: int = 1,
+    amplitude_method: str = "uniform",  # New parameter
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     outfile: Path = DEFAULT_OUTFILE,
     overwrite: bool = False,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
+    """
+    Generate a dataset of farfield radiation patterns with individual element phase shifts and amplitudes.
+
+    Parameters:
+    -----------
+    n_samples : int
+        Number of samples to generate
+    theta_start, theta_end : float
+        Range of steering angles in theta (elevation) in degrees
+    phi_start, phi_end : float
+        Range of steering angles in phi (azimuth) in degrees
+    max_n_beams : int
+        Maximum number of beams to simulate
+    amplitude_method : str
+        Method to generate amplitude values: "uniform", "random", "taper", "zones", "failure"
+    """
     # Fixed parameters for the 16x16 array
     xn = yn = 16  # 16x16 array
     dx = dy = 60  # 60x60 mm spacing
@@ -695,11 +844,14 @@ def generate_beamforming(
         h5f.attrs["spacing"] = f"{dx}x{dy}mm"
         h5f.attrs["frequency"] = freq
         h5f.attrs["phase_method"] = "beamforming"
+        h5f.attrs["amplitude_method"] = amplitude_method
 
         # Store 2D radiation patterns
         patterns = h5f.create_dataset("patterns", shape=(n_samples, n_phi, n_theta))
         # Store individual element phase shifts
         labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
+        # Store amplitudes as well
+        amplitudes = h5f.create_dataset("amplitudes", shape=(n_samples, xn, yn))
         # Store steering info
         steering_info = h5f.create_dataset(
             "steering_info", shape=(n_samples, 2, max_n_beams)
@@ -715,6 +867,23 @@ def generate_beamforming(
         steering_size = (n_samples, max_n_beams)
         theta_steerings = np.random.uniform(theta_start, theta_end, size=steering_size)
         phi_steerings = np.random.uniform(phi_start, phi_end, size=steering_size)
+
+        # Generate amplitude parameters based on method
+        if amplitude_method == "random":
+            # For each sample, choose a random range for amplitudes
+            min_amps = np.random.uniform(0.3, 0.7, size=n_samples)
+            max_amps = np.random.uniform(0.8, 1.0, size=n_samples)
+        elif amplitude_method == "taper":
+            # Choose random taper types for variety
+            taper_types = np.random.choice(
+                ["hamming", "hanning", "blackman", "taylor"], size=n_samples
+            )
+        elif amplitude_method == "zones":
+            # Random number of zones for each sample
+            n_zones_list = np.random.choice([4, 9, 16], size=n_samples)
+        elif amplitude_method == "failure":
+            # Random failure rates
+            failure_rates = np.random.uniform(0.01, 0.1, size=n_samples)
 
         for i in tqdm(range(n_samples)):
             theta_steering, phi_steering = theta_steerings[i], phi_steerings[i]
@@ -735,10 +904,39 @@ def generate_beamforming(
             )
             steering_info[i] = [theta_steering, phi_steering]
 
+            # Generate amplitudes based on the selected method
+            if amplitude_method == "uniform":
+                element_amplitudes = generate_element_amplitudes(xn, yn, "uniform")
+            elif amplitude_method == "random":
+                element_amplitudes = generate_element_amplitudes(
+                    xn, yn, "random", min_amp=min_amps[i], max_amp=max_amps[i]
+                )
+            elif amplitude_method == "taper":
+                element_amplitudes = generate_element_amplitudes(
+                    xn, yn, "taper", taper_type=taper_types[i]
+                )
+            elif amplitude_method == "zones":
+                element_amplitudes = generate_element_amplitudes(
+                    xn, yn, "zones", n_zones=n_zones_list[i]
+                )
+            elif amplitude_method == "failure":
+                element_amplitudes = generate_element_amplitudes(
+                    xn, yn, "failure", failure_rate=failure_rates[i]
+                )
+            else:
+                # Default to uniform amplitudes
+                element_amplitudes = generate_element_amplitudes(xn, yn, "uniform")
+
+            # Store amplitude values
+            amplitudes[i] = element_amplitudes
+
             # Calculate array factor for all phi and theta values at once
             partial_phase = jnp.asarray(partial_phase)
             phase_shifts = jnp.asarray(phase_shifts)
-            AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
+            element_amplitudes = jnp.asarray(element_amplitudes)
+            AF = array_factor_partial_and_shift(
+                xn, yn, partial_phase, phase_shifts, element_amplitudes
+            )
 
             # Multiply by single element pattern to get total pattern
             # The shape of AF is (n_phi, n_theta) after the calculation
@@ -748,7 +946,9 @@ def generate_beamforming(
             total_pattern = total_pattern / np.max(np.abs(total_pattern))
 
             # Convert to dB (normalized directivity)
-            array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
+            array_gain = single_Dmax * np.sum(
+                element_amplitudes
+            )  # Adjusted for amplitudes
             array_gain_db = 10.0 * np.log10(array_gain)
             total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + array_gain_db
 
@@ -854,16 +1054,37 @@ def plot_sample(
         steering_info = h5f["steering_info"][idx]
         theta, phi = h5f["theta"][:], h5f["phi"][:]
 
-    fig, axs = plt.subplots(1, 3, figsize=[18, 6])
+        # Get amplitudes if they exist
+        amplitudes = h5f["amplitudes"][idx] if "amplitudes" in h5f else None
+
+    fig, axs = plt.subplots(
+        1,
+        4 if amplitudes is not None else 3,
+        figsize=[24 if amplitudes is not None else 18, 6],
+    )
 
     pattern = pattern.clip(min=0)
 
     analyze.plot_phase_shifts(phase_shifts, ax=axs[0])
-    analyze.plot_ff_2d(pattern, theta, phi, ax=axs[1])
 
-    axs[2].remove()
-    axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
-    analyze.plot_ff_3d(theta, phi, pattern, ax=axs[2])
+    # Plot amplitudes if available
+    if amplitudes is not None:
+        cax = axs[1].imshow(amplitudes, origin="lower", cmap="viridis", vmin=0, vmax=1)
+        axs[1].set_title("Element Amplitudes")
+        axs[1].set_xlabel("Element X index")
+        axs[1].set_ylabel("Element Y index")
+        plt.colorbar(cax, ax=axs[1])
+        analyze.plot_ff_2d(pattern, theta, phi, ax=axs[2])
+
+        axs[3].remove()
+        axs[3] = fig.add_subplot(1, 4, 4, projection="3d")
+        analyze.plot_ff_3d(theta, phi, pattern, ax=axs[3])
+    else:
+        analyze.plot_ff_2d(pattern, theta, phi, ax=axs[1])
+
+        axs[2].remove()
+        axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
+        analyze.plot_ff_3d(theta, phi, pattern, ax=axs[2])
 
     steering_str = steering_repr(steering_info)
     phase_shift_title = f"Phase Shifts ({steering_str})"
