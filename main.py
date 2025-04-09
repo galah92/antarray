@@ -1337,10 +1337,12 @@ def model_type_to_class(
     elif model_type == "cae":
         return ConvAutoencoder(
             in_channels=in_channels,
-            base_channels=32,  # Maybe start wider for CAE?
-            down_depth=4,
-            bottleneck_depth=2,  # More bottleneck processing
-            decoder_depth=2,  # Fewer decoder stages might be okay
+            base_channels=base_channels,
+            down_depth=down_depth,
+            bottleneck_depth=bottleneck_depth,
+            decoder_depth=up_depth,
+            attention_type=attention_type,
+            bottleneck_type=ResidualBlock,
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
