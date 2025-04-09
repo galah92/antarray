@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader, Dataset
 import analyze
 from generate_dataset import ff_from_phase_shifts, steering_repr
 
-DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_2d_only_40k.h5"
+DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_4d_160k_prop.h5"
 DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
 DEFAULT_MODEL_NAME = "model.pth"
 
