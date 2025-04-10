@@ -687,10 +687,8 @@ class FileIO:
         self.file.write(message)
 
     def flush(self):
-        # this flush method is needed for python 3 compatibility.
-        # this handles the flush command by doing nothing.
-        # you might want to specify some extra behavior here.
-        pass
+        self.stdout.flush()
+        self.file.flush()
 
 
 @app.command()
@@ -703,7 +701,7 @@ def run_model(
     n_epochs: int = 200,
     lr: float = 2e-3,
     weight_decay: float = 1e-4,
-    model_type: str = "unet",
+    model_type: str = "cae",
     use_fft: bool = True,
     use_stats: bool = True,  # Normalization stats
     use_amp: bool = True,  # Automatic Mixed Precision for training
