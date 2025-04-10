@@ -445,8 +445,7 @@ def array_factor_partial_and_shift(
     AF = jnp.sum(amplitudes * jnp.exp(1j * total_phase), axis=(2, 3))
 
     # Normalize by total sum of amplitudes
-    total_amplitude = jnp.sum(amplitudes)
-    AF = AF / total_amplitude if total_amplitude > 0 else AF
+    AF = AF / jnp.sum(amplitudes)
 
     return jnp.abs(AF)
 
