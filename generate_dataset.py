@@ -16,7 +16,7 @@ from analyze import read_nf2ff
 DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
 DEFAULT_DATASET_DIR = Path.cwd() / "dataset"
 DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
-DEFAULT_OUTFILE = "farfield_dataset.h5"
+DEFAULT_DATASET_NAME = "farfield_dataset.h5"
 DEFAULT_SINGLE_ANT_FILENAME = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
 
 
@@ -181,7 +181,7 @@ def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
         end_phase = np.deg2rad(kwargs.get("end_phase", 180))
         x_gradient = np.linspace(start_phase, end_phase, xn)
         y_gradient = np.linspace(start_phase, end_phase, yn)
-        return x_gradient[:, np.newaxis] + y_gradient[np.newaxis, :] / 2
+        return x_gradient[:, None] + y_gradient[None, :] / 2
 
     elif method == "zones":
         n_zones = kwargs.get("n_zones", 4)
@@ -327,9 +327,9 @@ def calculate_array_factor_with_element_phases(
 
     # Reshape arrays for broadcasting
     # Make sin_theta, cos_phi, sin_phi shape: (len(phi), len(theta), 1, 1)
-    sin_theta = sin_theta.T[:, :, np.newaxis, np.newaxis]
-    cos_phi = cos_phi.T[:, :, np.newaxis, np.newaxis]
-    sin_phi = sin_phi.T[:, :, np.newaxis, np.newaxis]
+    sin_theta = sin_theta.T[:, :, None, None]
+    cos_phi = cos_phi.T[:, :, None, None]
+    sin_phi = sin_phi.T[:, :, None, None]
 
     # Make x_positions shape: (1, 1, xn, 1) and y_positions shape: (1, 1, 1, yn)
     x_positions = x_positions.reshape(1, 1, xn, 1)
@@ -404,9 +404,9 @@ def array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy):
 
     # Reshape arrays for broadcasting
     # Make sin_theta, cos_phi, sin_phi shape: (len(phi), len(theta), 1, 1)
-    sin_theta = sin_theta.T[:, :, np.newaxis, np.newaxis]
-    cos_phi = cos_phi.T[:, :, np.newaxis, np.newaxis]
-    sin_phi = sin_phi.T[:, :, np.newaxis, np.newaxis]
+    sin_theta = sin_theta.T[:, :, None, None]
+    cos_phi = cos_phi.T[:, :, None, None]
+    sin_phi = sin_phi.T[:, :, None, None]
 
     # Make x_positions shape: (1, 1, xn, 1) and y_positions shape: (1, 1, 1, yn)
     x_positions = x_positions.reshape(1, 1, xn, 1)
@@ -425,9 +425,7 @@ def array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy):
 def array_factor_partial_and_shift(
     xn, yn, partial_phase, phase_shifts, amplitudes=None
 ):
-    """
-    Calculate array factor with individual element phase shifts and amplitudes.
-    """
+    """Calculate array factor with individual element phase shifts and amplitudes."""
     # Make phase_shifts shape: (1, 1, xn, yn)
     phase_shifts = phase_shifts.reshape(1, 1, xn, yn)
 
@@ -450,25 +448,9 @@ def array_factor_partial_and_shift(
     return jnp.abs(AF)
 
 
-# Add this function to help understand grating lobes
-def check_grating_lobes(freq, dx, dy):
-    """
-    Check for potential grating lobes in an antenna array based on element spacing.
+def check_grating_lobes(freq, dx, dy, verbose=False):
+    """Check for potential grating lobes in an antenna array based on element spacing."""
 
-    Parameters:
-    -----------
-    freq : float
-        Operating frequency in Hz
-    dx : float
-        Element spacing in x direction (mm)
-    dy : float
-        Element spacing in y direction (mm)
-
-    Returns:
-    --------
-    dict
-        Information about potential grating lobes
-    """
     # Calculate wavelength
     c = 299792458  # Speed of light in m/s
     wavelength = c / freq  # Wavelength in meters
@@ -490,14 +472,21 @@ def check_grating_lobes(freq, dx, dy):
     else:
         dy_critical = np.rad2deg(np.arcsin(1 / dy_lambda - 1))
 
-    return {
-        "wavelength_mm": wavelength_mm,
-        "dx_lambda": dx_lambda,
-        "dy_lambda": dy_lambda,
-        "dx_critical_angle": dx_critical if dx_lambda > 0.5 else None,
-        "dy_critical_angle": dy_critical if dy_lambda > 0.5 else None,
-        "has_grating_lobes": dx_lambda > 0.5 or dy_lambda > 0.5,
-    }
+    dx_critical_angle = dx_critical if dx_lambda > 0.5 else None
+    dy_critical_angle = dy_critical if dy_lambda > 0.5 else None
+    has_grating_lobes = dx_lambda > 0.5 or dy_lambda > 0.5
+
+    if verbose:
+        print("Array spacing check:")
+        print(f"Wavelength: {'wavelength_mm':.2f} mm")
+        print(f"Element spacing: {'dx_lambda':.1f}λ x {'dy_lambda':.1f}λ")
+
+    if has_grating_lobes:
+        print("WARNING: Grating lobes will be visible when steering beyond:")
+        if dx_critical_angle is not None:
+            print(f"  - {'dx_critical_angle':.1f}° in the X direction")
+        if dy_critical_angle is not None:
+            print(f"  - {'dy_critical_angle':.1f}° in the Y direction")
 
 
 @app.command()
@@ -508,7 +497,7 @@ def generate(
     phi_steering: float | None = None,  # Degrees
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
-    outfile: Path = DEFAULT_OUTFILE,
+    dataset_name: Path = DEFAULT_DATASET_NAME,
     overwrite: bool = False,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
@@ -533,19 +522,7 @@ def generate(
     dx = dy = 60  # 60x60 mm spacing
     freq = 2.45e9  # 2.45 GHz
 
-    # Check for grating lobes with the given parameters
-    grating_info = check_grating_lobes(freq, dx, dy)
-    # print("Array spacing check:")
-    # print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
-    # print(
-    #     f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
-    # )
-    if grating_info["has_grating_lobes"]:
-        print("WARNING: Grating lobes will be visible when steering beyond:")
-        if grating_info["dx_critical_angle"] is not None:
-            print(f"  - {grating_info['dx_critical_angle']:.1f}° in the X direction")
-        if grating_info["dy_critical_angle"] is not None:
-            print(f"  - {grating_info['dy_critical_angle']:.1f}° in the Y direction")
+    check_grating_lobes(freq, dx, dy)
 
     # Load the single antenna pattern
     single_antenna_path = sim_dir_path / single_antenna_filename
@@ -568,11 +545,11 @@ def generate(
     print(f"Generating dataset with {n_samples} samples...")
 
     # Create output directory if it doesn't exist
-    outfile = dataset_dir / outfile
-    outfile.parent.mkdir(parents=True, exist_ok=True)
+    dataset_name = dataset_dir / dataset_name
+    dataset_name.parent.mkdir(parents=True, exist_ok=True)
 
     mode = "w" if overwrite else "x"
-    with h5py.File(outfile, mode) as h5f:
+    with h5py.File(dataset_name, mode) as h5f:
         h5f.create_dataset("theta", data=theta)
         h5f.create_dataset("phi", data=phi)
 
@@ -677,7 +654,7 @@ def generate(
 def plot_dataset_phase_shifts(
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     dataset_name: Path = "ff_beamforming.h5",
-    outfile: Path = "beamforming_phase_shifts.gif",
+    gif_name: Path = "beamforming_phase_shifts.gif",
 ):
     with h5py.File(dataset_dir / dataset_name, "r") as h5f:
         labels = h5f["labels"]
@@ -726,37 +703,7 @@ def plot_dataset_phase_shifts(
 
         # To save the animation using Pillow as a gif
         writer = animation.PillowWriter(fps=20, bitrate=1800)
-        ani.save(dataset_dir / outfile, writer=writer)
-
-
-@app.command()
-def explore_dataset_phase_shifts(
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: Path = "ff_beamforming.h5",
-):
-    with h5py.File(dataset_dir / dataset_name, "r") as h5f:
-        phi_steering = np.arange(-55, 55 + 1)
-        n_phi = phi_steering.size
-        n_blocks = 111
-        labels = h5f["labels"]
-        blocks = labels[: n_blocks * n_phi, ...].reshape(n_blocks, n_phi, 16, 16)
-
-        def foo(blocks):
-            blocks_diff = np.diff(blocks, axis=0)
-
-            blocks_diffdiff = np.sum(np.diff(blocks_diff, axis=0), axis=(1, 2, 3))
-            print(blocks_diffdiff)
-            print(blocks_diffdiff.max())
-            print(blocks_diff[0, :2, :2, :2])
-            print("------------------------")
-            print(blocks_diff[1, :2, :2, :2])
-            print("------------------------")
-            print(blocks_diff[2, :2, :2, :2])
-
-        phi_blocks = blocks
-        foo(phi_blocks)
-        theta_blocks = blocks.transpose(1, 0, 2, 3)
-        foo(theta_blocks)
+        ani.save(dataset_dir / gif_name, writer=writer)
 
 
 @app.command()
@@ -770,7 +717,7 @@ def generate_beamforming(
     amplitude_method: str = "uniform",  # New parameter
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
-    outfile: Path = DEFAULT_OUTFILE,
+    dataset_name: Path = DEFAULT_DATASET_NAME,
     overwrite: bool = False,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
@@ -795,19 +742,7 @@ def generate_beamforming(
     dx = dy = 60  # 60x60 mm spacing
     freq = 2.45e9  # 2.45 GHz
 
-    # Check for grating lobes with the given parameters
-    grating_info = check_grating_lobes(freq, dx, dy)
-    # print("Array spacing check:")
-    # print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
-    # print(
-    #     f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
-    # )
-    if grating_info["has_grating_lobes"]:
-        print("WARNING: Grating lobes will be visible when steering beyond:")
-        if grating_info["dx_critical_angle"] is not None:
-            print(f"  - {grating_info['dx_critical_angle']:.1f}° in the X direction")
-        if grating_info["dy_critical_angle"] is not None:
-            print(f"  - {grating_info['dy_critical_angle']:.1f}° in the Y direction")
+    check_grating_lobes(freq, dx, dy)
 
     # Load the single antenna pattern
     single_antenna_path = sim_dir_path / single_antenna_filename
@@ -830,11 +765,11 @@ def generate_beamforming(
     print(f"Generating dataset with {n_samples} samples...")
 
     # Create output directory if it doesn't exist
-    outfile = dataset_dir / outfile
-    outfile.parent.mkdir(parents=True, exist_ok=True)
+    dataset_name = dataset_dir / dataset_name
+    dataset_name.parent.mkdir(parents=True, exist_ok=True)
 
     mode = "w" if overwrite else "x"
-    with h5py.File(outfile, mode) as h5f:
+    with h5py.File(dataset_name, mode) as h5f:
         h5f.create_dataset("theta", data=theta)
         h5f.create_dataset("phi", data=phi)
 
@@ -956,27 +891,6 @@ def generate_beamforming(
             labels[i] = phase_shifts  # Store the phase shifts as labels
 
 
-@app.command()
-def plot_beamforming_angles(
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: Path = "ff_beamforming.h5",
-    outfile: Path | None = None,
-):
-    with h5py.File(dataset_dir / dataset_name, "r") as h5f:
-        theta, phi = h5f["steering_info"][:].T
-
-    fig, ax = plt.subplots()
-
-    ax.scatter(theta, phi, s=0.3)
-    ax.set_xlabel("Theta (degrees)")
-    ax.set_ylabel("Phi (degrees)")
-    ax.set_title(f"Beamforming Angles ({dataset_name})")
-    ax.set_aspect("equal", adjustable="box")
-
-    filename = outfile or dataset_name.with_suffix("")
-    fig.savefig(dataset_dir / filename, dpi=600)
-
-
 def ff_from_phase_shifts(
     phase_shifts: np.ndarray,
     sim_dir_path: Path = DEFAULT_SIM_DIR,
@@ -987,19 +901,7 @@ def ff_from_phase_shifts(
     dx = dy = 60  # 60x60 mm spacing
     freq = 2.45e9  # 2.45 GHz
 
-    # Check for grating lobes with the given parameters
-    grating_info = check_grating_lobes(freq, dx, dy)
-    # print("Array spacing check:")
-    # print(f"Wavelength: {grating_info['wavelength_mm']:.2f} mm")
-    # print(
-    #     f"Element spacing: {grating_info['dx_lambda']:.1f}λ x {grating_info['dy_lambda']:.1f}λ"
-    # )
-    if grating_info["has_grating_lobes"]:
-        print("WARNING: Grating lobes will be visible when steering beyond:")
-        if grating_info["dx_critical_angle"] is not None:
-            print(f"  - {grating_info['dx_critical_angle']:.1f}° in the X direction")
-        if grating_info["dy_critical_angle"] is not None:
-            print(f"  - {grating_info['dy_critical_angle']:.1f}° in the Y direction")
+    check_grating_lobes(freq, dx, dy)
 
     # Load the single antenna pattern
     single_antenna_path = sim_dir_path / single_antenna_filename
@@ -1032,16 +934,11 @@ def ff_from_phase_shifts(
     return total_pattern_db
 
 
-DEFAULT_OUTPUT_DIR = DEFAULT_DATASET_DIR / "plots"
-DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
 @app.command()
 def plot_sample(
     idx: int,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: Path = DEFAULT_OUTFILE,
-    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    dataset_name: Path = DEFAULT_DATASET_NAME,
 ):
     """
     Visualize a single sample from the dataset.
@@ -1073,13 +970,13 @@ def plot_sample(
         axs[1].set_xlabel("Element X index")
         axs[1].set_ylabel("Element Y index")
         plt.colorbar(cax, ax=axs[1])
-        analyze.plot_ff_2d(pattern, theta, phi, ax=axs[2])
+        analyze.plot_ff_2d(theta, phi, pattern, ax=axs[2])
 
         axs[3].remove()
         axs[3] = fig.add_subplot(1, 4, 4, projection="3d")
         analyze.plot_ff_3d(theta, phi, pattern, ax=axs[3])
     else:
-        analyze.plot_ff_2d(pattern, theta, phi, ax=axs[1])
+        analyze.plot_ff_2d(theta, phi, pattern, ax=axs[1])
 
         axs[2].remove()
         axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
@@ -1090,10 +987,10 @@ def plot_sample(
     fig.suptitle(phase_shift_title)
 
     fig.set_tight_layout(True)
-    if output_dir:
-        outfile = output_dir / f"sample_{idx}.png"
-        fig.savefig(outfile, dpi=600, bbox_inches="tight")
-        print(f"Saved sample plot to {outfile}")
+
+    sample_path = dataset_dir / f"sample_{idx}.png"
+    fig.savefig(sample_path, dpi=600, bbox_inches="tight")
+    print(f"Saved sample plot to {sample_path}")
 
 
 def steering_repr(steering_angles: np.ndarray):

@@ -1359,9 +1359,9 @@ def compare_phase_shifts(
         label_ff, pred_ff = label_ff.clip(min=0), pred_ff.clip(min=0)
 
     title = "Ground Truth 2D Radiation Pattern"
-    analyze.plot_ff_2d(label_ff, theta, phi, title=title, ax=axs[0, 1])
+    analyze.plot_ff_2d(theta, phi, label_ff, title=title, ax=axs[0, 1])
     title = "Predicted 2D Radiation Pattern"
-    analyze.plot_ff_2d(pred_ff, theta, phi, title=title, ax=axs[1, 1])
+    analyze.plot_ff_2d(theta, phi, pred_ff, title=title, ax=axs[1, 1])
 
     axs[0, 2].remove()
     axs[0, 2] = fig.add_subplot(2, 3, 3, projection="3d")

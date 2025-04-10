@@ -110,8 +110,7 @@ def array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts=None):
     dx_m = dx / 1000  # Convert from mm to meters
     dy_m = dy / 1000  # Convert from mm to meters
 
-    # Wave number
-    k = 2 * np.pi / wavelength
+    k = 2 * np.pi / wavelength  # Wave number
 
     # Initialize default phase shifts if none provided
     if phase_shifts is None:
@@ -141,21 +140,16 @@ def array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts=None):
     psi_y = k * dy_m * sin_theta * sin_phi
 
     # Element positions
-    x_positions = np.arange(xn) - (xn - 1) / 2
-    y_positions = np.arange(yn) - (yn - 1) / 2
+    x_pos = np.arange(xn) - (xn - 1) / 2
+    y_pos = np.arange(yn) - (yn - 1) / 2
 
     # Calculate array factor by summing contributions from each element
     for ix in range(xn):
         for iy in range(yn):
-            # Phase for this element (including phase shift for beamforming)
-            phase = (
-                x_positions[ix] * psi_x + y_positions[iy] * psi_y - phase_shifts[ix, iy]
-            )
-            # Add contribution to array factor
+            phase = x_pos[ix] * psi_x + y_pos[iy] * psi_y - phase_shifts[ix, iy]
             AF += np.exp(1j * phase)
 
-    # Normalize by total number of elements
-    AF = AF / (xn * yn)
+    AF = AF / (xn * yn)  # Normalize by total number of elements
 
     return np.abs(AF)
 
@@ -345,47 +339,23 @@ def plot_sim_and_af(
 def plot_ff_3d(
     theta: np.ndarray,
     phi: np.ndarray,
-    E_norm: np.ndarray,
+    pattern: np.ndarray,
     *,
-    freq: float | None = None,
-    freq_index: int = 0,
-    logscale: float | None = None,
-    normalize: bool = False,
     title: str = "3D Radiation Pattern",
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
-    # Ensure E-field data is 3D (freq, phi, theta)
-    if len(E_norm.shape) == 2:
-        E_norm = E_norm[None, ...]
-
-    # Extract and normalize E-field data if requested
-    if normalize or logscale is not None:
-        E_far = E_norm[freq_index] / np.max(E_norm[freq_index])
-    else:
-        E_far = E_norm[freq_index]
-
-    # Apply logarithmic scaling if requested
-    if logscale is not None:
-        E_far = 20 * np.log10(np.abs(E_far)) / -logscale + 1
-        E_far = E_far * (E_far > 0)  # Clamp negative values
-
-    # Create coordinate meshgrid
-    theta, phi = np.meshgrid(theta, phi, indexing="xy")
-
-    E_far = E_far.clip(min=0)  # Clip negative values to 0
+    pattern = pattern.clip(min=0)  # Clip negative values to 0
+    theta, phi = np.meshgrid(theta, phi)
 
     # Calculate cartesian coordinates
-    x = E_far * np.sin(theta) * np.cos(phi)
-    y = E_far * np.sin(theta) * np.sin(phi)
-    z = E_far * np.cos(theta)
+    x = pattern * np.sin(theta) * np.cos(phi)
+    y = pattern * np.sin(theta) * np.sin(phi)
+    z = pattern * np.cos(theta)
 
-    # Create 3D plot
     if ax is None:
         ax = plt.figure().add_subplot(projection="3d")
 
     ax.plot_surface(x, y, z, cmap="Spectral_r")
-
-    # Configure plot settings
     ax.view_init(elev=20.0, azim=-100)
     ax.set_aspect("equalxy")
     ax.set_box_aspect(None, zoom=1.25)
@@ -396,13 +366,11 @@ def plot_ff_3d(
     ax.set_ylim(-25, 25)
     ax.set_title(title)
 
-    return ax
-
 
 def plot_ff_2d(
-    pattern: np.ndarray,
     theta: np.ndarray,
     phi: np.ndarray,
+    pattern: np.ndarray,
     *,
     title: str = "2D Radiation Pattern",
     colorbar: bool = True,
@@ -434,7 +402,7 @@ def plot_phase_shifts(
     phase_shifts_clipped = (phase_shifts + np.pi) % (2 * np.pi) - np.pi
     im = ax.imshow(
         np.rad2deg(phase_shifts_clipped),
-        cmap="twilight_shifted",  # Cyclic colormap for phase values
+        cmap="twilight_shifted",  # Cyclic colormap suitable for phase values
         origin="lower",
         vmin=-180,
         vmax=180,
