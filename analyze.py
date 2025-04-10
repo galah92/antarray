@@ -33,8 +33,6 @@ def read_nf2ff(nf2ff_path: Path):
         "r": r,
         "Dmax": Dmax,
         "freq": freq,
-        "E_phi": E_phi,
-        "E_theta": E_theta,
         "E_norm": E_norm,
     }
 

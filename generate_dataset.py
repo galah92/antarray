@@ -524,51 +524,28 @@ def generate(
 
     check_grating_lobes(freq, dx, dy)
 
-    # Load the single antenna pattern
-    single_antenna_path = sim_dir_path / single_antenna_filename
-    print(f"Loading single antenna pattern from {single_antenna_path}")
-    single_antenna_nf2ff = read_nf2ff(single_antenna_path)
+    nf2ff_path = sim_dir_path / single_antenna_filename
+    print(f"Loading single antenna pattern from {nf2ff_path}")
+    nf2ff = read_nf2ff(nf2ff_path)
 
-    # Extract necessary data
-    single_E_norm = single_antenna_nf2ff["E_norm"][0]
-    single_Dmax = single_antenna_nf2ff["Dmax"][0]  # Assuming single frequency
-    theta = single_antenna_nf2ff["theta"]
-    phi = single_antenna_nf2ff["phi"]
-
-    # Initialize dataset arrays
-    n_theta = len(theta)
-    n_phi = len(phi)
+    single_E_norm = nf2ff["E_norm"][0]
+    single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
+    theta, phi = nf2ff["theta"], nf2ff["phi"]
+    n_theta, n_phi = len(theta), len(phi)
 
     partial_phase = array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy)
 
-    # Generate dataset
     print(f"Generating dataset with {n_samples} samples...")
 
-    # Create output directory if it doesn't exist
-    dataset_name = dataset_dir / dataset_name
-    dataset_name.parent.mkdir(parents=True, exist_ok=True)
-
     mode = "w" if overwrite else "x"
-    with h5py.File(dataset_name, mode) as h5f:
+    with h5py.File(dataset_dir / dataset_name, mode) as h5f:
         h5f.create_dataset("theta", data=theta)
         h5f.create_dataset("phi", data=phi)
 
-        # Store metadata
-        h5f.attrs["array_size"] = f"{xn}x{yn}"
-        h5f.attrs["spacing"] = f"{dx}x{dy}mm"
-        h5f.attrs["frequency"] = freq
-        h5f.attrs["description"] = (
-            "Farfield radiation patterns dataset with individual element phase shifts"
-        )
-        h5f.attrs["phase_method"] = phase_method
-
-        # Store 2D radiation patterns
         patterns = h5f.create_dataset("patterns", shape=(n_samples, n_phi, n_theta))
-        # Store individual element phase shifts
         labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
 
         if phase_method == "beamforming":
-            # Store steering info
             steering_info = h5f.create_dataset("steering_info", shape=(n_samples, 2))
 
         for i in tqdm(range(n_samples)):
@@ -744,49 +721,27 @@ def generate_beamforming(
 
     check_grating_lobes(freq, dx, dy)
 
-    # Load the single antenna pattern
-    single_antenna_path = sim_dir_path / single_antenna_filename
-    print(f"Loading single antenna pattern from {single_antenna_path}")
-    single_antenna_nf2ff = read_nf2ff(single_antenna_path)
+    nf2ff_path = sim_dir_path / single_antenna_filename
+    print(f"Loading single antenna pattern from {nf2ff_path}")
+    nf2ff = read_nf2ff(nf2ff_path)
 
-    # Extract necessary data
-    single_E_norm = single_antenna_nf2ff["E_norm"][0]
-    single_Dmax = single_antenna_nf2ff["Dmax"][0]  # Assuming single frequency
-    theta = single_antenna_nf2ff["theta"]
-    phi = single_antenna_nf2ff["phi"]
-
-    # Initialize dataset arrays
-    n_theta = len(theta)
-    n_phi = len(phi)
+    single_E_norm = nf2ff["E_norm"][0]
+    single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
+    theta, phi = nf2ff["theta"], nf2ff["phi"]
+    n_theta, n_phi = len(theta), len(phi)
 
     partial_phase = array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy)
 
-    # Generate dataset
     print(f"Generating dataset with {n_samples} samples...")
 
-    # Create output directory if it doesn't exist
-    dataset_name = dataset_dir / dataset_name
-    dataset_name.parent.mkdir(parents=True, exist_ok=True)
-
     mode = "w" if overwrite else "x"
-    with h5py.File(dataset_name, mode) as h5f:
+    with h5py.File(dataset_dir / dataset_name, mode) as h5f:
         h5f.create_dataset("theta", data=theta)
         h5f.create_dataset("phi", data=phi)
 
-        # Store metadata
-        h5f.attrs["array_size"] = f"{xn}x{yn}"
-        h5f.attrs["spacing"] = f"{dx}x{dy}mm"
-        h5f.attrs["frequency"] = freq
-        h5f.attrs["phase_method"] = "beamforming"
-        h5f.attrs["amplitude_method"] = amplitude_method
-
-        # Store 2D radiation patterns
         patterns = h5f.create_dataset("patterns", shape=(n_samples, n_phi, n_theta))
-        # Store individual element phase shifts
         labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
-        # Store amplitudes as well
         amplitudes = h5f.create_dataset("amplitudes", shape=(n_samples, xn, yn))
-        # Store steering info
         steering_info = h5f.create_dataset(
             "steering_info", shape=(n_samples, 2, max_n_beams)
         )
@@ -903,24 +858,19 @@ def ff_from_phase_shifts(
 
     check_grating_lobes(freq, dx, dy)
 
-    # Load the single antenna pattern
-    single_antenna_path = sim_dir_path / single_antenna_filename
-    print(f"Loading single antenna pattern from {single_antenna_path}")
-    single_antenna_nf2ff = read_nf2ff(single_antenna_path)
+    nf2ff_path = sim_dir_path / single_antenna_filename
+    print(f"Loading single antenna pattern from {nf2ff_path}")
+    nf2ff = read_nf2ff(nf2ff_path)
 
-    # Extract necessary data
-    single_E_norm = single_antenna_nf2ff["E_norm"][0]
-    single_Dmax = single_antenna_nf2ff["Dmax"][0]  # Assuming single frequency
-    theta = single_antenna_nf2ff["theta"]
-    phi = single_antenna_nf2ff["phi"]
+    single_E_norm = nf2ff["E_norm"][0]
+    single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
+    theta = nf2ff["theta"]
+    phi = nf2ff["phi"]
 
     partial_phase = array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy)
-
-    # Calculate array factor for all phi and theta values at once
     AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
 
     # Multiply by single element pattern to get total pattern
-    # The shape of AF is (n_phi, n_theta) after the calculation
     total_pattern = single_E_norm[0] * AF
 
     # Normalize
