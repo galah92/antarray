@@ -403,19 +403,12 @@ class UpBlock(nn.Module):
         in_channels,
         skip_channels,  # 0 if no skip
         out_channels,
-        bilinear=True,
         use_attention_gate=False,
         attention_type="none",
     ):
         super().__init__()
-        if bilinear:
-            upsampled_channels = in_channels
-            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-        else:
-            upsampled_channels = max(in_channels // 2, 1)  # Avoid 0 channels
-            self.up = nn.ConvTranspose2d(
-                in_channels, upsampled_channels, kernel_size=2, stride=2
-            )
+        upsampled_channels = in_channels
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
 
         self.att_gate = None
         if use_attention_gate and skip_channels > 0:
@@ -452,7 +445,6 @@ class UNet(nn.Module):
         bottleneck_depth=1,
         bottleneck_type=ConvBlock,
         up_depth=4,
-        bilinear=True,
         attention_type="none",
         use_attention_gate=False,
         out_shape=(16, 16),
@@ -491,7 +483,6 @@ class UNet(nn.Module):
                     in_channels=in_ch,
                     skip_channels=skip_ch,
                     out_channels=out_ch,
-                    bilinear=bilinear,
                     use_attention_gate=use_attention_gate,
                     attention_type=attention_type if not use_attention_gate else "none",
                 )
@@ -565,7 +556,7 @@ class ConvAutoencoder(nn.Module):
             base_channels: Starting channel count for the encoder.
             down_depth: Number of downsampling stages in the encoder.
             bottleneck_depth: Number of ConvBlocks applied at the bottleneck resolution.
-            decoder_depth: Number of upsampling (DecoderBlock) stages in the decoder.
+            decoder_depth: Number of upsampling stages in the decoder.
             attention_type: Type of attention to use within ConvBlocks.
             out_shape: Final spatial output dimensions (e.g., (16, 16)).
         """
