@@ -1,3 +1,4 @@
+from functools import lru_cache
 from pathlib import Path
 
 import h5py
@@ -5,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+@lru_cache
 def read_nf2ff(nf2ff_path: Path):
     with h5py.File(nf2ff_path, "r") as h5:
         mesh = h5["Mesh"]
