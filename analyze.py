@@ -13,19 +13,17 @@ def read_nf2ff(nf2ff_path: Path):
         phi, theta, r = mesh["phi"][:], mesh["theta"][:], mesh["r"][:]
 
         Dmax = h5["nf2ff"].attrs["Dmax"]
-        freq = h5["nf2ff"].attrs["Frequency"]
+        freqs = h5["nf2ff"].attrs["Frequency"]
 
-        E_shape = freq.size, phi.size, theta.size
-        E_phi = np.empty(E_shape, dtype=complex)
+        E_shape = freqs.size, phi.size, theta.size
         E_theta = np.empty(E_shape, dtype=complex)
+        E_phi = np.empty(E_shape, dtype=complex)
 
-        E_phi_ = h5["nf2ff"]["E_phi"]["FD"]
-        E_theta_ = h5["nf2ff"]["E_theta"]["FD"]
-        for i in range(freq.size):
-            real, imag = E_phi_[f"f{i}_real"][:], E_phi_[f"f{i}_imag"][:]
-            E_phi[i] = real + 1j * imag
-            real, imag = E_theta_[f"f{i}_real"][:], E_theta_[f"f{i}_imag"][:]
-            E_theta[i] = real + 1j * imag
+        for freq in range(freqs.size):
+            E_theta.real[freq] = h5[f"/nf2ff/E_theta/FD/f{freq}_real"][:]
+            E_theta.imag[freq] = h5[f"/nf2ff/E_theta/FD/f{freq}_imag"][:]
+            E_phi.real[freq] = h5[f"/nf2ff/E_phi/FD/f{freq}_real"][:]
+            E_phi.imag[freq] = h5[f"/nf2ff/E_phi/FD/f{freq}_imag"][:]
 
         # Transpose to (freq, theta, phi)
         E_theta = E_theta.transpose(0, 2, 1)
@@ -38,7 +36,7 @@ def read_nf2ff(nf2ff_path: Path):
         "phi": phi,
         "r": r,
         "Dmax": Dmax,
-        "freq": freq,
+        "freq": freqs,
         "E_theta": E_theta,
         "E_phi": E_phi,
         "E_norm": E_norm,
@@ -50,17 +48,19 @@ def plot_ff_polar(
     Dmax,
     theta,
     *,
+    normalize: bool = True,
+    label: str | None = None,
     title: str | None = None,
     ax: plt.Axes | None = None,
     filename: str | None = None,
 ):
-    E_norm = E_norm / np.max(np.abs(E_norm))
-    E_norm = 20 * np.log10(np.abs(E_norm)) + 10.0 * np.log10(Dmax)
-
     if ax is None:
         fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
 
-    ax.plot(theta, E_norm, "r-", linewidth=1)
+    if normalize:
+        E_norm = normalize_pattern(E_norm, Dmax)
+
+    ax.plot(theta, E_norm, "r-", linewidth=1, label=label)
     ax.set_thetagrids(np.arange(0, 360, 30))
     ax.set_rgrids(np.arange(-20, 20, 10))
     ax.set_rlim(-25, 15)
@@ -219,6 +219,8 @@ def plot_sim_and_af(
     xns,
     yn,
     dxs,
+    *,
+    freq_idx=0,  # index of the frequency to plot
     steering_theta=0,
     steering_phi=0,
     figname: bool | str = True,
@@ -254,11 +256,10 @@ def plot_sim_and_af(
 
     # Load the single antenna pattern (for array factor calculation)
     single_antenna_filename = f"farfield_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
-    single_antenna_nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
-    theta, phi = single_antenna_nf2ff["theta"], single_antenna_nf2ff["phi"]
-    single_E_theta = single_antenna_nf2ff["E_theta"][0]
-    single_E_phi = single_antenna_nf2ff["E_phi"][0]
-    single_Dmax = single_antenna_nf2ff["Dmax"]
+    nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
+    theta, phi = nf2ff["theta"], nf2ff["phi"]
+    E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
+    Dmax_single = nf2ff["Dmax"]
 
     phi_idx = np.argmin(np.abs(phi - steering_phi))  # Index of steering phi
 
@@ -277,55 +278,37 @@ def plot_sim_and_af(
             ax = axs[i * len(dxs) + j]
             dy = dx
 
-            # Plot 1: OpenEMS full simulation (in red)
+            # Plot OpenEMS full simulation
             filename = f"farfield_{xn}x{yn}_{dx}x{dx}_{freq / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
             try:
-                openems_nf2ff = read_nf2ff(sim_dir / filename)
-                openems_E_norm = openems_nf2ff["E_norm"][0, :, phi_idx]
-                openems_Dmax = openems_nf2ff["Dmax"]
-
-                # Normalize and calculate dB for OpenEMS
-                openems_norm = openems_E_norm / np.max(np.abs(openems_E_norm))
-                openems_db = 20 * np.log10(np.abs(openems_norm)) + 10.0 * np.log10(
-                    openems_Dmax
-                )
-                ax.plot(
-                    theta, openems_db, "r-", linewidth=1, label="OpenEMS Simulation"
-                )
+                nf2ff = read_nf2ff(sim_dir / filename)
             except (FileNotFoundError, KeyError):  # Could not load simulation data
                 pass
 
-            # Plot 2: Array Factor calculation with beamforming
-            # Calculate phase shifts for beamforming
+            plot_ff_polar(
+                E_norm=nf2ff["E_norm"][freq_idx, :, phi_idx],
+                Dmax=nf2ff["Dmax"],
+                theta=theta,
+                label="OpenEMS Simulation",
+                ax=ax,
+            )
+
             phase_shifts = calculate_phase_shifts(
                 xn, yn, dx, dy, freq, steering_theta, steering_phi
             )
-
-            # Calculate array factor with phase shifts
             AF = array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts)
-            E_theta_array = single_E_theta * AF
-            E_phi_array = single_E_phi * AF
+
+            # Calculate radiation pattern for the array factor
+            E_theta_array = AF * E_theta_single
+            E_phi_array = AF * E_phi_single
             E_norm_array = np.sqrt(
                 np.abs(E_theta_array) ** 2 + np.abs(E_phi_array) ** 2
             )
             E_norm_array = E_norm_array[:, phi_idx]  # Select theta slice
 
-            # Normalize and calculate dB for Array Factor
-            af_norm = E_norm_array / np.max(np.abs(E_norm_array))
-            array_Dmax = single_Dmax * (xn * yn)
-            af_db = 20 * np.log10(np.abs(af_norm)) + 10.0 * np.log10(array_Dmax)
-
-            ax.plot(theta, af_db, "g--", linewidth=1, label="Array Factor")
-
-            # Plot settings
-            ax.set_thetagrids(np.arange(30, 360, 30))
-            ax.set_rgrids(np.arange(-20, 20, 10))
-            ax.set_rlim(-25, 15)
-            ax.set_theta_offset(np.pi / 2)  # make 0 degree at the top
-            ax.set_theta_direction(-1)  # clockwise
-            ax.set_rlabel_position(90)  # move radial label to the right
-            ax.grid(True, linestyle="--")
-            ax.tick_params(labelsize=6)
+            Dmax_array = Dmax_single * (xn * yn)
+            E_norm_array_db = normalize_pattern(E_norm_array, Dmax_array)
+            ax.plot(theta, E_norm_array_db, "g--", linewidth=1, label="Array Factor")
 
             c = 299_792_458
             lambda0 = c / freq
@@ -343,6 +326,15 @@ def plot_sim_and_af(
         if figname is True:
             figname = f"ff_{freq_ghz:.0f}GHz_steer_t{steering_theta}_p{steering_phi}"
         fig.savefig(figname, dpi=600)
+
+
+def normalize_pattern(pattern: np.ndarray, Dmax: float) -> np.ndarray:
+    """
+    Normalize the radiation pattern to dBi.
+    """
+    pattern = pattern / np.max(np.abs(pattern))
+    pattern = 20 * np.log10(np.abs(pattern)) + 10.0 * np.log10(Dmax)
+    return pattern
 
 
 def plot_ff_3d(
