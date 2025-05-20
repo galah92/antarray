@@ -1,3 +1,4 @@
+import subprocess as sp
 from functools import partial
 from pathlib import Path
 
@@ -21,6 +22,22 @@ DEFAULT_SINGLE_ANT_FILENAME = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
 
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+
+
+@app.command()
+def simulate(sim_path: str = "antenna_array.py"):
+    image_name = "openems-image"
+
+    cmd = f"""
+	docker run -it --rm \
+		-e DISPLAY=host.docker.internal:0 \
+		-v /tmp/.X11-unix:/tmp/.X11-unix \
+		-v ./src:/app/ \
+		-v /tmp:/tmp/ \
+		{image_name} \
+		python3 /app/{sim_path}
+	"""
+    sp.run(cmd, shell=True)
 
 
 def generate_element_amplitudes(xn, yn, method="uniform", **kwargs):
