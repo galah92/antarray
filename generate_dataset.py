@@ -159,164 +159,67 @@ def generate_element_amplitudes(xn, yn, method="uniform", **kwargs):
         raise ValueError(f"Unknown amplitude method: {method}")
 
 
-def generate_element_phase_shifts(xn, yn, method="random", **kwargs):
-    """
-    Generate phase shifts for individual antenna elements using different methods.
+def generate_element_phase_shifts(
+    xn,
+    yn,
+    theta_steering=0.0,
+    phi_steering=0.0,
+    freq=2.45e9,
+    dx=60,
+    dy=60,
+):
+    # Calculate wavelength and convert spacing to meters
+    c = 299792458  # Speed of light in m/s
+    wavelength = c / freq  # Wavelength in meters
+    dx_m = dx / 1000  # Convert from mm to meters
+    dy_m = dy / 1000  # Convert from mm to meters
 
-    Parameters:
-    -----------
-    xn : int
-        Number of elements in x direction
-    yn : int
-        Number of elements in y direction
-    method : str
-        Method to generate phase shifts:
-        - "random": random phases between min_phase and max_phase
-        - "gradient": linear gradient across array
-        - "zones": divide array into zones with different phases
-        - "beamforming": proper phase shifts for beam steering
+    # Wave number
+    k = 2 * np.pi / wavelength
 
-    kwargs:
-        For "random": min_phase, max_phase (in degrees)
-        For "gradient": start_phase, end_phase (in degrees)
-        For "zones": n_zones, phase_values (list of phases in degrees)
-        For "beamforming": theta_steering, phi_steering (in degrees), freq (in Hz),
-                          dx, dy (element spacing in mm)
+    # Element positions (centered around origin)
+    x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
+    y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
 
-    Returns:
-    --------
-    numpy.ndarray
-        Phase shifts for each element in radians, shape (xn, yn)
-    """
-    if method == "random":
-        min_phase = np.deg2rad(kwargs.get("min_phase", -180))
-        max_phase = np.deg2rad(kwargs.get("max_phase", 180))
-        return np.random.uniform(min_phase, max_phase, size=(xn, yn))
+    # Create 2D arrays of positions
+    x_grid, y_grid = np.meshgrid(x_positions, y_positions, indexing="ij")
 
-    elif method == "gradient":
-        start_phase = np.deg2rad(kwargs.get("start_phase", -180))
-        end_phase = np.deg2rad(kwargs.get("end_phase", 180))
-        x_gradient = np.linspace(start_phase, end_phase, xn)
-        y_gradient = np.linspace(start_phase, end_phase, yn)
-        return x_gradient[:, None] + y_gradient[None, :] / 2
+    # Set amplitude
+    amplitude = 1.0
 
-    elif method == "zones":
-        n_zones = kwargs.get("n_zones", 4)
-        phase_values = kwargs.get(
-            "phase_values", np.deg2rad(np.linspace(-180, 180, n_zones))
-        )
+    # Remove NaN values from steering angles
+    theta_steering = theta_steering[~np.isnan(theta_steering)]
+    phi_steering = phi_steering[~np.isnan(phi_steering)]
 
-        # Create zones
-        zones = np.zeros((xn, yn), dtype=int)
-        zone_size_x = xn // int(np.sqrt(n_zones))
-        zone_size_y = yn // int(np.sqrt(n_zones))
+    # Convert angles to radians
+    thetas = np.deg2rad(theta_steering)
+    phis = np.deg2rad(phi_steering)
 
-        for i in range(int(np.sqrt(n_zones))):
-            for j in range(int(np.sqrt(n_zones))):
-                zone_idx = i * int(np.sqrt(n_zones)) + j
-                if zone_idx < n_zones:
-                    x_start = i * zone_size_x
-                    x_end = (
-                        (i + 1) * zone_size_x if i < int(np.sqrt(n_zones)) - 1 else xn
-                    )
-                    y_start = j * zone_size_y
-                    y_end = (
-                        (j + 1) * zone_size_y if j < int(np.sqrt(n_zones)) - 1 else yn
-                    )
-                    zones[x_start:x_end, y_start:y_end] = zone_idx
+    combined_excitation = np.zeros((xn, yn), dtype=complex)
 
-        # Map zones to phase values
-        phase_shifts = np.zeros((xn, yn))
-        for i in range(n_zones):
-            phase_shifts[zones == i] = phase_values[i]
+    for theta, phi in zip(thetas, phis):
+        # Calculate phase shifts for this beam
+        phase_shift = k * np.sin(theta) * (x_grid * np.cos(phi) + y_grid * np.sin(phi))
 
-        return phase_shifts
+        # Add this beam's excitation to the combined excitation
+        combined_excitation += amplitude * np.exp(1j * phase_shift)
 
-    elif method == "beamforming":
-        # Get parameters for beamforming
-        theta_steering = kwargs.get("theta_steering", 0.0)  # degrees
-        phi_steering = kwargs.get("phi_steering", 0.0)  # degrees
-        freq = kwargs.get("freq", 2.45e9)  # Hz
-        dx = kwargs.get("dx", 60)  # mm
-        dy = kwargs.get("dy", 60)  # mm
+    # Extract phase from combined excitation
+    combined_phase = np.angle(combined_excitation)
 
-        # Calculate wavelength and convert spacing to meters
-        c = 299792458  # Speed of light in m/s
-        wavelength = c / freq  # Wavelength in meters
-        dx_m = dx / 1000  # Convert from mm to meters
-        dy_m = dy / 1000  # Convert from mm to meters
-
-        # Wave number
-        k = 2 * np.pi / wavelength
-
-        # Element positions (centered around origin)
-        x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
-        y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
-
-        # Create 2D arrays of positions
-        x_grid, y_grid = np.meshgrid(x_positions, y_positions, indexing="ij")
-
-        # Set amplitude
-        amplitude = 1.0
-
-        # Remove NaN values from steering angles
-        theta_steering = theta_steering[~np.isnan(theta_steering)]
-        phi_steering = phi_steering[~np.isnan(phi_steering)]
-
-        # Convert angles to radians
-        thetas = np.deg2rad(theta_steering)
-        phis = np.deg2rad(phi_steering)
-
-        combined_excitation = np.zeros((xn, yn), dtype=complex)
-
-        for theta, phi in zip(thetas, phis):
-            # Calculate phase shifts for this beam
-            phase_shift = (
-                k * np.sin(theta) * (x_grid * np.cos(phi) + y_grid * np.sin(phi))
-            )
-
-            # Add this beam's excitation to the combined excitation
-            combined_excitation += amplitude * np.exp(1j * phase_shift)
-
-        # Extract phase from combined excitation
-        combined_phase = np.angle(combined_excitation)
-
-        return combined_phase
-
-    else:
-        raise ValueError(f"Unknown method: {method}")
+    return combined_phase
 
 
 def calculate_array_factor_with_element_phases(
-    theta, phi, freq, xn, yn, dx, dy, phase_shifts
+    theta,
+    phi,
+    freq,
+    xn,
+    yn,
+    dx,
+    dy,
+    phase_shifts,
 ):
-    """
-    Calculate array factor with individual element phase shifts.
-
-    Parameters:
-    -----------
-    theta : numpy.ndarray
-        Elevation angle(s) in radians
-    phi : numpy.ndarray
-        Azimuth angle(s) in radians
-    freq : float
-        Operating frequency in Hz
-    xn : int
-        Number of elements in x direction
-    yn : int
-        Number of elements in y direction
-    dx : float
-        Element spacing in x direction (mm)
-    dy : float
-        Element spacing in y direction (mm)
-    phase_shifts : numpy.ndarray
-        Phase shift for each element in radians, shape (xn, yn)
-
-    Returns:
-    --------
-    numpy.ndarray
-        Array factor magnitude with shape (len(phi), len(theta))
-    """
     # Convert input to numpy arrays if they aren't already
     theta = np.asarray(theta)
     phi = np.asarray(phi)
@@ -507,144 +410,6 @@ def check_grating_lobes(freq, dx, dy, verbose=False):
 
 
 @app.command()
-def generate(
-    n_samples: int = 1_000,
-    phase_method: str = "beamforming",
-    theta_steering: float | None = None,  # Degrees
-    phi_steering: float | None = None,  # Degrees
-    sim_dir_path: Path = DEFAULT_SIM_DIR,
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: Path = DEFAULT_DATASET_NAME,
-    overwrite: bool = False,
-    single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
-):
-    """
-    Generate a dataset of farfield radiation patterns with individual element phase shifts.
-
-    Parameters:
-    -----------
-    sim_dir_path : Path
-        Directory containing OpenEMS simulation results with single antenna pattern
-    output_dir_path : Path
-        Directory to save the generated dataset
-    single_antenna_filename : str
-        Filename of the single antenna pattern H5 file
-    n_samples : int
-        Number of samples to generate
-    phase_method : str
-        Method to generate phase shifts: "random", "gradient", "zones", "beamforming"
-    """
-    # Fixed parameters for the 16x16 array
-    xn = yn = 16  # 16x16 array
-    dx = dy = 60  # 60x60 mm spacing
-    freq = 2.45e9  # 2.45 GHz
-
-    check_grating_lobes(freq, dx, dy)
-
-    nf2ff_path = sim_dir_path / single_antenna_filename
-    print(f"Loading single antenna pattern from {nf2ff_path}")
-    nf2ff = read_nf2ff(nf2ff_path)
-
-    single_E_norm = nf2ff["E_norm"][0]
-    single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
-    theta, phi = nf2ff["theta"], nf2ff["phi"]
-    n_theta, n_phi = len(theta), len(phi)
-
-    partial_phase = array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy)
-
-    print(f"Generating dataset with {n_samples} samples...")
-
-    mode = "w" if overwrite else "x"
-    with h5py.File(dataset_dir / dataset_name, mode) as h5f:
-        h5f.create_dataset("theta", data=theta)
-        h5f.create_dataset("phi", data=phi)
-
-        patterns = h5f.create_dataset("patterns", shape=(n_samples, n_phi, n_theta))
-        labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
-
-        if phase_method == "beamforming":
-            steering_info = h5f.create_dataset("steering_info", shape=(n_samples, 2))
-
-        for i in tqdm(range(n_samples)):
-            # Generate phase shifts for each element
-            if phase_method == "random":
-                phase_shifts = generate_element_phase_shifts(
-                    xn, yn, "random", min_phase=-180, max_phase=180
-                )
-            elif phase_method == "gradient":
-                # Generate a random gradient direction and strength for variety
-                start_phase = np.random.uniform(-180, 0)
-                end_phase = np.random.uniform(0, 180)
-                phase_shifts = generate_element_phase_shifts(
-                    xn, yn, "gradient", start_phase=start_phase, end_phase=end_phase
-                )
-            elif phase_method == "zones":
-                n_zones = np.random.choice([4, 9, 16])  # 2x2, 3x3 or 4x4 zones
-                phase_values = np.random.uniform(-np.pi, np.pi, size=n_zones)
-                phase_shifts = generate_element_phase_shifts(
-                    xn, yn, "zones", n_zones=n_zones, phase_values=phase_values
-                )
-            elif phase_method == "beamforming":
-                if theta_steering is None:
-                    # Generate random steering angles with wider range to make effect more visible
-                    theta_steering = np.random.uniform(-70, 70)  # -70° to 70° elevation
-                if phi_steering is None:
-                    # Use cardinal directions for clearer visualization
-                    phi_steering = np.random.choice([0, 90, 180, 270])
-
-                phase_shifts = generate_element_phase_shifts(
-                    xn,
-                    yn,
-                    "beamforming",
-                    theta_steering=theta_steering,
-                    phi_steering=phi_steering,
-                    freq=freq,
-                    dx=dx,
-                    dy=dy,
-                )
-            else:
-                # Mix of methods for more variety
-                method = np.random.choice(["random", "beamforming", "zones"])
-                if method == "beamforming":
-                    theta_steering = np.random.uniform(-60, 60)
-                    phi_steering = np.random.uniform(0, 360)
-                    phase_shifts = generate_element_phase_shifts(
-                        xn,
-                        yn,
-                        method,
-                        theta_steering=theta_steering,
-                        phi_steering=phi_steering,
-                        freq=freq,
-                        dx=dx,
-                        dy=dy,
-                    )
-                else:
-                    phase_shifts = generate_element_phase_shifts(xn, yn, method)
-
-            if phase_method == "beamforming":
-                steering_info[i] = [theta_steering, phi_steering]
-
-            # Calculate array factor for all phi and theta values at once
-            AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
-
-            # Multiply by single element pattern to get total pattern
-            # The shape of AF is (n_phi, n_theta) after the calculation
-            total_pattern = single_E_norm[0] * AF
-
-            # Normalize
-            total_pattern = total_pattern / np.max(np.abs(total_pattern))
-
-            # Convert to dB (normalized directivity)
-            array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
-            array_gain_db = 10.0 * np.log10(array_gain)
-            total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + array_gain_db
-
-            # Store pattern and label
-            patterns[i] = total_pattern_db
-            labels[i] = phase_shifts  # Store the phase shifts as labels
-
-
-@app.command()
 def plot_dataset_phase_shifts(
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     dataset_name: Path = "ff_beamforming.h5",
@@ -739,7 +504,6 @@ def generate_beamforming(
     check_grating_lobes(freq, dx, dy)
 
     nf2ff_path = sim_dir_path / single_antenna_filename
-    print(f"Loading single antenna pattern from {nf2ff_path}")
     nf2ff = read_nf2ff(nf2ff_path)
 
     single_E_norm = nf2ff["E_norm"][0]
@@ -876,7 +640,6 @@ def ff_from_phase_shifts(
     check_grating_lobes(freq, dx, dy)
 
     nf2ff_path = sim_dir_path / single_antenna_filename
-    print(f"Loading single antenna pattern from {nf2ff_path}")
     nf2ff = read_nf2ff(nf2ff_path)
 
     single_E_norm = nf2ff["E_norm"][0]
@@ -966,70 +729,6 @@ def steering_repr(steering_angles: np.ndarray):
     thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
     phis_s = np.array2string(phis_s, precision=2, separator=", ")
     return f"θ={thetas_s}°, φ={phis_s}°"
-
-
-@app.command()
-def count_beams(
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: Path = "rand_bf_2d.h5",
-):
-    """
-    Count the number of samples with single beam and multiple beams in the dataset.
-
-    Parameters:
-    -----------
-    dataset_dir : Path
-        Directory containing the dataset
-    dataset_name : Path
-        Name of the dataset file
-    """
-    dataset_path = dataset_dir / dataset_name
-    print(f"Analyzing dataset: {dataset_path}")
-
-    try:
-        with h5py.File(dataset_path, "r") as h5f:
-            if "steering_info" not in h5f:
-                print("This dataset does not contain steering information.")
-                return
-
-            steering_info = h5f["steering_info"][:]
-            total_samples = steering_info.shape[0]
-
-            # Check if steering_info has the expected shape
-            if len(steering_info.shape) < 3:
-                print(
-                    "Steering info doesn't have the expected format for beam counting."
-                )
-                return
-
-            # Count samples with different number of beams
-            # NaN values in theta angles indicate unused beams
-            beam_counts = {}
-
-            for i in range(total_samples):
-                # Get theta values for this sample
-                thetas = steering_info[i, 0, :]
-                # Count non-NaN values to determine number of beams
-                num_beams = np.sum(~np.isnan(thetas))
-
-                # Update the counter
-                if num_beams in beam_counts:
-                    beam_counts[num_beams] += 1
-                else:
-                    beam_counts[num_beams] = 1
-
-            print(f"\nTotal samples in dataset: {total_samples}")
-            print("\nBeam distribution:")
-            for num_beams, count in sorted(beam_counts.items()):
-                percentage = (count / total_samples) * 100
-                print(
-                    f"  {num_beams} beam{'s' if num_beams != 1 else ''}: {count} samples ({percentage:.1f}%)"
-                )
-
-    except FileNotFoundError:
-        print(f"Dataset file not found: {dataset_path}")
-    except Exception as e:
-        print(f"Error analyzing dataset: {e}")
 
 
 @app.command()

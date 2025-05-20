@@ -8,6 +8,7 @@ import numpy as np
 
 @lru_cache
 def read_nf2ff(nf2ff_path: Path):
+    print(f"Loading single antenna pattern from {nf2ff_path}")
     with h5py.File(nf2ff_path, "r") as h5:
         mesh = h5["Mesh"]
         phi, theta, r = mesh["phi"][:], mesh["theta"][:], mesh["r"][:]
