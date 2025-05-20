@@ -161,55 +161,42 @@ def array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts=None):
     return AF
 
 
-def calculate_phase_shifts(xn, yn, dx, dy, freq, steering_theta, steering_phi):
-    """
-    Calculate phase shifts for antenna elements to steer the beam in a specific direction.
+def calculate_phase_shifts(
+    xn: int,
+    yn: int,
+    theta_steering: float = 0.0,
+    phi_steering: float = 0.0,
+    freq: float = 2.45e9,
+    dx_mm: float = 60,
+    dy_mm: float = 60,
+) -> np.ndarray:
+    # Convert degrees to radians
+    theta_steering, phi_steering = np.radians(theta_steering), np.radians(phi_steering)
 
-    Parameters:
-    -----------
-    xn : int
-        Number of elements in the x-direction
-    yn : int
-        Number of elements in the y-direction
-    dx : float
-        Element spacing in the x-direction in millimeters
-    dy : float
-        Element spacing in the y-direction in millimeters
-    freq : float
-        Operating frequency in Hz
-    steering_theta : float
-        Steering elevation angle in degrees
-    steering_phi : float
-        Steering azimuth angle in degrees
-
-    Returns:
-    --------
-    numpy.ndarray
-        Phase shifts for each element in radians, with shape (xn, yn)
-    """
-    # Convert angles to radians
-    steering_theta_rad = np.deg2rad(steering_theta)
-    steering_phi_rad = np.deg2rad(steering_phi)
-
-    # Calculate wavelength and convert spacing to meters
-    c = 299792458  # Speed of light in m/s
+    c = 299792458.0  # Speed of light in meters/second
     wavelength = c / freq  # Wavelength in meters
-    dx_m = dx / 1000  # Convert from mm to meters
-    dy_m = dy / 1000  # Convert from mm to meters
+    k = 2 * np.pi / wavelength  # Wave number (in radians per meter)
 
-    # Wave number
-    k = 2 * np.pi / wavelength
+    dx_m, dy_m = dx_mm / 1000, dy_mm / 1000  # Convert element spacing from mm to meters
 
-    # Element positions
-    x_positions = np.arange(xn).reshape(-1, 1) - (xn - 1) / 2
-    y_positions = np.arange(yn).reshape(1, -1) - (yn - 1) / 2
+    # Create element position grid centered around zero
+    x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
+    y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
 
-    # Calculate phase shifts
-    sin_theta = np.sin(steering_theta_rad)
-    phase_x = k * dx_m * sin_theta * np.cos(steering_phi_rad) * x_positions
-    phase_y = k * dy_m * sin_theta * np.sin(steering_phi_rad) * y_positions
+    # Create 2D meshgrids for element position x and y coordinates
+    x_mesh, y_mesh = np.meshgrid(x_positions, y_positions, indexing="ij")
 
-    phase_shifts = phase_x + phase_y
+    # Steering components of a unit vector pointing in the steered direction
+    sin_theta_steering = np.sin(theta_steering)
+    ux = sin_theta_steering * np.cos(phi_steering)
+    uy = sin_theta_steering * np.sin(phi_steering)
+
+    # Path difference = (r_element_vector) dot (unit_steering_vector)
+    # Simplified as: x_element * ux + y_element * uy
+    path_difference = (x_mesh * ux) + (y_mesh * uy)
+
+    phase_shifts = -k * path_difference
+    phase_shifts = phase_shifts % (2 * np.pi)  # Normalize to [0, 2π)
 
     return phase_shifts
 
