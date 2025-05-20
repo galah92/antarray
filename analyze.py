@@ -28,6 +28,7 @@ def read_nf2ff(nf2ff_path: Path):
             E_theta[i] = real + 1j * imag
 
         E_norm = np.sqrt(np.abs(E_phi) ** 2 + np.abs(E_theta) ** 2)
+        E_norm = E_norm.transpose(0, 2, 1)  # Change to (freq, theta, phi)
 
     return {
         "theta": theta,
@@ -249,9 +250,11 @@ def plot_sim_and_af(
     # Load the single antenna pattern (for array factor calculation)
     single_antenna_filename = f"farfield_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
     single_antenna_nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
-    single_E_norm = single_antenna_nf2ff["E_norm"][0][0]
-    single_Dmax = single_antenna_nf2ff["Dmax"]
     theta, phi = single_antenna_nf2ff["theta"], single_antenna_nf2ff["phi"]
+    single_E_norm = single_antenna_nf2ff["E_norm"][0]
+    single_Dmax = single_antenna_nf2ff["Dmax"]
+
+    phi_idx = np.argmin(np.abs(phi - steering_phi))  # Index of steering phi
 
     # Create a figure with polar subplots
     fig, axs = plt.subplots(
@@ -272,7 +275,7 @@ def plot_sim_and_af(
             filename = f"farfield_{xn}x{yn}_{dx}x{dx}_{freq / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
             try:
                 openems_nf2ff = read_nf2ff(sim_dir / filename)
-                openems_E_norm = openems_nf2ff["E_norm"][0][0]
+                openems_E_norm = openems_nf2ff["E_norm"][0, :, phi_idx]
                 openems_Dmax = openems_nf2ff["Dmax"]
 
                 # Normalize and calculate dB for OpenEMS
@@ -293,8 +296,9 @@ def plot_sim_and_af(
             )
 
             # Calculate array factor with phase shifts
-            AF = array_factor(theta, phi[0], freq, xn, yn, dx, dy, phase_shifts)
-            array_factor_E_norm = single_E_norm * AF.T
+            AF = array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts)
+            array_factor_E_norm = single_E_norm * AF
+            array_factor_E_norm = array_factor_E_norm[:, phi_idx]  # Select theta slice
 
             # Normalize and calculate dB for Array Factor
             af_norm = array_factor_E_norm / np.max(np.abs(array_factor_E_norm))
@@ -321,12 +325,7 @@ def plot_sim_and_af(
             title = f"{xn}x{yn} array, {dx}x{dy}mm, {freq_ghz:n}GHz, {dx / lambda0_mm:.2f}λ, steering: θ={steering_theta}°, φ={steering_phi}°"
             ax.set_title(title, fontsize=8)
 
-    # Create legend with appropriate labels
-    legend_labels = ["OpenEMS Simulation"]
-    legend_labels.append("Array Factor")
-    fig.legend(legend_labels, fontsize=8)
-
-    # Add beamforming info to suptitle if applicable
+    fig.legend(["OpenEMS Simulation", "Array Factor"], fontsize=8)
     fig.suptitle("OpenEMS Simulation vs Array Factor Comparison", y=0.99)
 
     fig.set_tight_layout(True)
