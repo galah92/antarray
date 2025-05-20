@@ -27,8 +27,11 @@ def read_nf2ff(nf2ff_path: Path):
             real, imag = E_theta_[f"f{i}_real"][:], E_theta_[f"f{i}_imag"][:]
             E_theta[i] = real + 1j * imag
 
+        # Transpose to (freq, theta, phi)
+        E_theta = E_theta.transpose(0, 2, 1)
+        E_phi = E_phi.transpose(0, 2, 1)
+
         E_norm = np.sqrt(np.abs(E_phi) ** 2 + np.abs(E_theta) ** 2)
-        E_norm = E_norm.transpose(0, 2, 1)  # Change to (freq, theta, phi)
 
     return {
         "theta": theta,
@@ -36,6 +39,8 @@ def read_nf2ff(nf2ff_path: Path):
         "r": r,
         "Dmax": Dmax,
         "freq": freq,
+        "E_theta": E_theta,
+        "E_phi": E_phi,
         "E_norm": E_norm,
     }
 
@@ -152,7 +157,7 @@ def array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts=None):
 
     AF = AF / (xn * yn)  # Normalize by total number of elements
 
-    return np.abs(AF)
+    return AF
 
 
 def calculate_phase_shifts(xn, yn, dx, dy, freq, steering_theta, steering_phi):
@@ -251,7 +256,8 @@ def plot_sim_and_af(
     single_antenna_filename = f"farfield_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
     single_antenna_nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
     theta, phi = single_antenna_nf2ff["theta"], single_antenna_nf2ff["phi"]
-    single_E_norm = single_antenna_nf2ff["E_norm"][0]
+    single_E_theta = single_antenna_nf2ff["E_theta"][0]
+    single_E_phi = single_antenna_nf2ff["E_phi"][0]
     single_Dmax = single_antenna_nf2ff["Dmax"]
 
     phi_idx = np.argmin(np.abs(phi - steering_phi))  # Index of steering phi
@@ -297,11 +303,15 @@ def plot_sim_and_af(
 
             # Calculate array factor with phase shifts
             AF = array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts)
-            array_factor_E_norm = single_E_norm * AF
-            array_factor_E_norm = array_factor_E_norm[:, phi_idx]  # Select theta slice
+            E_theta_array = single_E_theta * AF
+            E_phi_array = single_E_phi * AF
+            E_norm_array = np.sqrt(
+                np.abs(E_theta_array) ** 2 + np.abs(E_phi_array) ** 2
+            )
+            E_norm_array = E_norm_array[:, phi_idx]  # Select theta slice
 
             # Normalize and calculate dB for Array Factor
-            af_norm = array_factor_E_norm / np.max(np.abs(array_factor_E_norm))
+            af_norm = E_norm_array / np.max(np.abs(E_norm_array))
             array_Dmax = single_Dmax * (xn * yn)
             af_db = 20 * np.log10(np.abs(af_norm)) + 10.0 * np.log10(array_Dmax)
 
