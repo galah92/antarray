@@ -159,57 +159,6 @@ def generate_element_amplitudes(xn, yn, method="uniform", **kwargs):
         raise ValueError(f"Unknown amplitude method: {method}")
 
 
-def generate_element_phase_shifts(
-    xn,
-    yn,
-    theta_steering=0.0,
-    phi_steering=0.0,
-    freq=2.45e9,
-    dx=60,
-    dy=60,
-):
-    # Calculate wavelength and convert spacing to meters
-    c = 299792458  # Speed of light in m/s
-    wavelength = c / freq  # Wavelength in meters
-    dx_m = dx / 1000  # Convert from mm to meters
-    dy_m = dy / 1000  # Convert from mm to meters
-
-    # Wave number
-    k = 2 * np.pi / wavelength
-
-    # Element positions (centered around origin)
-    x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
-    y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
-
-    # Create 2D arrays of positions
-    x_grid, y_grid = np.meshgrid(x_positions, y_positions, indexing="ij")
-
-    # Set amplitude
-    amplitude = 1.0
-
-    # Remove NaN values from steering angles
-    theta_steering = theta_steering[~np.isnan(theta_steering)]
-    phi_steering = phi_steering[~np.isnan(phi_steering)]
-
-    # Convert angles to radians
-    thetas = np.deg2rad(theta_steering)
-    phis = np.deg2rad(phi_steering)
-
-    combined_excitation = np.zeros((xn, yn), dtype=complex)
-
-    for theta, phi in zip(thetas, phis):
-        # Calculate phase shifts for this beam
-        phase_shift = k * np.sin(theta) * (x_grid * np.cos(phi) + y_grid * np.sin(phi))
-
-        # Add this beam's excitation to the combined excitation
-        combined_excitation += amplitude * np.exp(1j * phase_shift)
-
-    # Extract phase from combined excitation
-    combined_phase = np.angle(combined_excitation)
-
-    return combined_phase
-
-
 def array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy):
     """
     Parameters:
@@ -498,15 +447,14 @@ def generate_beamforming(
             phi_steering[n_beams[i] :] = np.nan
 
             # Generate phase shifts for each element
-            phase_shifts = generate_element_phase_shifts(
+            phase_shifts = analyze.calculate_phase_shifts(
                 xn,
                 yn,
-                "beamforming",
                 theta_steering=theta_steering,
                 phi_steering=phi_steering,
                 freq=freq,
-                dx=dx,
-                dy=dy,
+                dx_mm=dx,
+                dy_mm=dy,
             )
             steering_info[i] = [theta_steering, phi_steering]
 
