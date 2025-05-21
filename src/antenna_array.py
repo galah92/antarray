@@ -288,8 +288,8 @@ def postprocess(sim_path, nf2ff, f0, ports, outfile=None):
     _s11_dB = 20.0 * np.log10(np.abs(s11))
 
     # Calculate far field
-    theta = np.arange(-90.0, 90.0, 1.0)
-    phi = np.arange(-90.0, 90.0, 1.0)
+    theta = np.arange(0, 90.0, 1.0)
+    phi = np.arange(0, 360, 1.0)
 
     print("Calculating 3D far field...")
     _nf2ff_3d = nf2ff.CalcNF2FF(
@@ -313,7 +313,7 @@ if __name__ == "__main__":
         for d in d_ant:
             for steering_theta in steering_thetas:
                 for steering_phi in steering_phis:
-                    outfile = f"farfield_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
+                    outfile = f"ff_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
                     if (sim_path / outfile).exists():
                         print(f"Skipping {outfile}")
                         continue

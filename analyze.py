@@ -387,7 +387,7 @@ def plot_ff_3d(
 
 
 def test_plot_ff_3d():
-    steering_theta = 9.0
+    steering_theta = 0.0
     steering_phi = 0.0
 
     freq = 2.45e9
@@ -401,6 +401,10 @@ def test_plot_ff_3d():
     theta, phi = nf2ff["theta"], nf2ff["phi"]
     E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"]
+
+    # Convert theta from elevation to polar angle (inclination from Z-axis)
+    # Polar angle: 0 (Z-axis) to pi (-Z-axis)
+    # theta = np.pi/2 - theta
 
     excitations = calc_excitation(
         steering_theta, steering_phi, xn, yn, dx, dy, freq, taper_type="uniform"
