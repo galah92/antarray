@@ -44,40 +44,6 @@ def read_nf2ff(nf2ff_path: Path):
     }
 
 
-def plot_ff_polar(
-    E_norm,
-    Dmax,
-    theta,
-    *,
-    normalize: bool = True,
-    label: str | None = None,
-    title: str | None = None,
-    ax: plt.Axes | None = None,
-    filename: str | None = None,
-):
-    if ax is None:
-        fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
-
-    if normalize:
-        E_norm = normalize_pattern(E_norm, Dmax)
-
-    ax.plot(theta, E_norm, "r-", linewidth=1, label=label)
-    ax.set_thetagrids(np.arange(0, 360, 30))
-    ax.set_rgrids(np.arange(-20, 20, 10))
-    ax.set_rlim(-25, 15)
-    ax.set_theta_offset(np.pi / 2)  # make 0 degree at the top
-    ax.set_theta_direction(-1)  # clockwise
-    ax.set_rlabel_position(90)  # move radial label to the right
-    ax.grid(True, linestyle="--")
-    ax.tick_params(labelsize=6)
-    if title:
-        ax.set_title(title)
-    if ax is None:
-        fig.set_tight_layout(True)
-        if filename:
-            fig.savefig(filename, dpi=600)
-
-
 def get_wavenumber(freq_hz: float) -> float:
     c = 299792458  # Speed of light in m/s
     wavelength = c / freq_hz  # Wavelength in meters
@@ -243,6 +209,40 @@ def calculate_phase_shifts(
     phase_shifts = phase_shifts % (2 * np.pi)  # Normalize to [0, 2π)
 
     return phase_shifts
+
+
+def plot_ff_polar(
+    E_norm,
+    Dmax,
+    theta,
+    *,
+    normalize: bool = True,
+    label: str | None = None,
+    title: str | None = None,
+    ax: plt.Axes | None = None,
+    filename: str | None = None,
+):
+    if ax is None:
+        fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+
+    if normalize:
+        E_norm = normalize_pattern(E_norm, Dmax)
+
+    ax.plot(theta, E_norm, "r-", linewidth=1, label=label)
+    ax.set_thetagrids(np.arange(0, 360, 30))
+    ax.set_rgrids(np.arange(-20, 20, 10))
+    ax.set_rlim(-25, 15)
+    ax.set_theta_offset(np.pi / 2)  # make 0 degree at the top
+    ax.set_theta_direction(-1)  # clockwise
+    ax.set_rlabel_position(90)  # move radial label to the right
+    ax.grid(True, linestyle="--")
+    ax.tick_params(labelsize=6)
+    if title:
+        ax.set_title(title)
+    if ax is None:
+        fig.set_tight_layout(True)
+        if filename:
+            fig.savefig(filename, dpi=600)
 
 
 def plot_sim_and_af(
