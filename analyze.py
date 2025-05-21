@@ -1,9 +1,7 @@
-from functools import lru_cache, partial
+from functools import lru_cache
 from pathlib import Path
 
 import h5py
-import jax
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -116,7 +114,7 @@ class ArrayFactorCalculator:
     """
     A class to calculate the array factor for a given array configuration.
     It pre-calculates terms dependent on geometry and observation angles
-    to efficiently compute the array factor for different excitations.
+    to efficiently compute the array factor for different excitations using.
     """
 
     def __init__(
@@ -129,58 +127,38 @@ class ArrayFactorCalculator:
         dy_mm: float = 60,
         freq_hz: float = 2.45e9,
     ):
-        self.theta = np.asarray(theta)
-        self.phi = np.asarray(phi)
-        self.xn = xn
-        self.yn = yn
-        self.dx_mm = dx_mm
-        self.dy_mm = dy_mm
-        self.freq_hz = freq_hz
+        self.xn, self.yn = xn, yn
 
-        self._precompute_terms()
+        k = get_wavenumber(freq_hz)
+        theta, phi = np.asarray(theta), np.asarray(phi)
 
-    def _precompute_terms(self):
-        """
-        Pre-computes terms that depend only on the array geometry
-        and observation angles. These include k, element positions,
-        and the phase components (psi_x, psi_y) for each element.
-        """
-        self.k = get_wavenumber(self.freq_hz)
+        dx_m, dy_m = dx_mm / 1000, dy_mm / 1000
 
-        dx_m = self.dx_mm / 1000  # Convert from mm to meters
-        dy_m = self.dy_mm / 1000  # Convert from mm to meters
+        x_pos = np.arange(xn) - (xn - 1) / 2
+        y_pos = np.arange(yn) - (yn - 1) / 2
 
-        # Element positions (centered around origin)
-        self.x_pos = np.arange(self.xn) - (self.xn - 1) / 2
-        self.y_pos = np.arange(self.yn) - (self.yn - 1) / 2
+        THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
 
-        # Create a meshgrid for broadcasting
-        THETA, PHI = np.meshgrid(self.theta, self.phi, indexing="ij")
-
-        # Phase differences per unit step in x and y (psi_x_unit, psi_y_unit)
+        # Terms for x and y components of the geometric phase.
+        # Shape: (len(theta), len(phi))
         sin_theta = np.sin(THETA)
-        self.psi_x_unit = self.k * dx_m * sin_theta * np.cos(PHI)
-        self.psi_y_unit = self.k * dy_m * sin_theta * np.sin(PHI)
+        ux = k * dx_m * sin_theta * np.cos(PHI)
+        uy = k * dy_m * sin_theta * np.sin(PHI)
 
-        # Precompute the 'geometry-dependent' phase term for each element and angle
-        # This will be (x_pos[ix] * psi_x_unit + y_pos[iy] * psi_y_unit)
-        self.geometry_phase_terms = np.zeros(
-            (self.xn, self.yn, self.theta.size, self.phi.size), dtype=complex
-        )
+        # Precompute the geometric phase terms for each element and angle.
+        # This uses broadcasting to efficiently create an array of shape
+        # (xn, yn, len(theta), len(phi)).
+        x_component = x_pos[:, None, None, None] * ux[None, None, :, :]
+        y_component = y_pos[None, :, None, None] * uy[None, None, :, :]
 
-        for ix in range(self.xn):
-            for iy in range(self.yn):
-                self.geometry_phase_terms[ix, iy, :, :] = (
-                    self.x_pos[ix] * self.psi_x_unit + self.y_pos[iy] * self.psi_y_unit
-                )
+        self.geometry_phase_terms = x_component + y_component
 
     def calculate_af(self, excitations: np.ndarray | None = None) -> np.ndarray:
         """
         Calculates the array factor given the element excitations.
-        Assumes excitations are (xn, yn) complex array.
+        Excitations should be an (xn, yn) complex NumPy array.
         If excitations is None, all elements are assumed to have 1 + 0j excitation.
         """
-        # Initialize default excitations if none provided
         if excitations is None:
             excitations = np.ones((self.xn, self.yn), dtype=complex)
         elif excitations.shape != (self.xn, self.yn):
@@ -189,28 +167,29 @@ class ArrayFactorCalculator:
                 f"but got {excitations.shape}"
             )
 
-        # Ensure excitations are complex
-        excitations = excitations.astype(complex)
+        # Reshape excitation magnitudes and phases for broadcasting with geometric terms.
+        # Shape: (xn, yn, 1, 1)
+        excitation_magnitudes_reshaped = np.abs(excitations)[:, :, None, None]
+        excitation_phases_reshaped = np.angle(excitations)[:, :, None, None]
 
-        # Extract phase shifts from excitations
-        phase_shifts = np.angle(excitations)
+        # Calculate the total phase for each element across all observation angles.
+        # Shape: (xn, yn, len(theta), len(phi))
+        total_phase_argument = self.geometry_phase_terms - excitation_phases_reshaped
 
-        # Initialize array factor sum
-        AF = np.zeros((self.theta.size, self.phi.size), dtype=complex)
+        # Compute the complex exponential terms for all elements and angles.
+        # Shape: (xn, yn, len(theta), len(phi))
+        exp_terms = np.exp(1j * total_phase_argument)
 
-        # Iterate through elements, applying the excitation phase
-        for ix in range(self.xn):
-            for iy in range(self.yn):
-                # The total phase for this element is the precomputed geometry phase
-                # minus the excitation phase shift for this element.
-                total_phase = (
-                    self.geometry_phase_terms[ix, iy, :, :] - phase_shifts[ix, iy]
-                )
-                AF += excitations[ix, iy] * np.exp(
-                    1j * total_phase
-                )  # Multiply by magnitude as well
+        # Apply excitation magnitudes.
+        # Shape: (xn, yn, len(theta), len(phi))
+        weighted_exp_terms = excitation_magnitudes_reshaped * exp_terms
 
-        AF = AF / (self.xn * self.yn)  # Normalize by total number of elements
+        # Sum contributions from all elements along the element dimensions (xn, yn).
+        # Resulting shape: (len(theta), len(phi))
+        AF = np.sum(weighted_exp_terms, axis=(0, 1))
+
+        # Normalize by the total number of elements.
+        AF = AF / (self.xn * self.yn)
 
         return AF
 
