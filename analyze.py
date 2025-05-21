@@ -78,6 +78,25 @@ def plot_ff_polar(
             fig.savefig(filename, dpi=600)
 
 
+def get_wavenumber(freq_hz: float) -> float:
+    c = 299792458  # Speed of light in m/s
+    wavelength = c / freq_hz  # Wavelength in meters
+    k = 2 * np.pi / wavelength  # Wavenumber in radians/meter
+    return k
+
+
+def get_element_positions(
+    xn: int,
+    yn: int,
+    dx_mm: float = 60,
+    dy_mm: float = 60,
+) -> tuple[np.ndarray, np.ndarray]:
+    dx_m, dy_m = dx_mm / 1000, dy_mm / 1000  # Convert element spacing from mm to meters
+    x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
+    y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
+    return x_positions, y_positions
+
+
 def array_factor(
     theta: np.ndarray,  # Array of observation theta angles (radians)
     phi: np.ndarray,  # Array of observation phi angles (radians)
@@ -88,17 +107,12 @@ def array_factor(
     freq_hz: float = 2.45e9,  # Changed to freq_hz for clarity in units
     excitations: np.ndarray | None = None,  # (xn, yn) complex array of excitations
 ) -> np.ndarray:
-    # Convert input to numpy arrays if they aren't already
-    theta = np.asarray(theta)
-    phi = np.asarray(phi)
+    k = get_wavenumber(freq_hz)
 
-    # Calculate wavelength and convert spacing to meters
-    c = 299792458  # Speed of light in m/s
-    wavelength = c / freq_hz  # Wavelength in meters
+    theta, phi = np.asarray(theta), np.asarray(phi)
+
     dx_m = dx_mm / 1000  # Convert from mm to meters
     dy_m = dy_mm / 1000  # Convert from mm to meters
-
-    k = 2 * np.pi / wavelength  # Wave number
 
     # Initialize default excitations if none provided
     if excitations is None:
@@ -150,9 +164,7 @@ def array_factor2(
     freq_hz: float = 2.45e9,  # Changed to freq_hz for clarity in units
     excitations: np.ndarray | None = None,  # (xn, yn) complex array of excitations
 ) -> np.ndarray:
-    c = 299792458  # Speed of light in meters/second
-    wavelength = c / freq_hz  # Wavelength in meters
-    k = 2 * np.pi / wavelength  # Wave number (in radians per meter)
+    k = get_wavenumber(freq_hz)
 
     dx_m, dy_m = dx_mm / 1000, dy_mm / 1000  # Convert element spacing from mm to meters
 
@@ -165,8 +177,7 @@ def array_factor2(
 
     # 2. Observation Angles (Meshgrid for all combinations)
     # Convert input degrees to radians
-    theta_rad = np.radians(theta)
-    phi_rad = np.radians(phi)
+    theta_rad, phi_rad = np.radians(theta), np.radians(phi)
 
     # Create 2D meshgrids for observation angles (len(theta), len(phi))
     theta_grid, phi_grid = np.meshgrid(theta_rad, phi_rad, indexing="ij")
@@ -202,31 +213,6 @@ def array_factor2(
     return af_pattern
 
 
-def calculate_phase_shifts_orig(
-    xn: int,
-    yn: int,
-    dx_mm: float = 60,
-    dy_mm: float = 60,
-    freq: float = 2.45e9,
-    theta_steering: float = 0.0,
-    phi_steering: float = 0.0,
-):
-    k = get_wavenumber(freq)
-    x_positions, y_positions = get_element_positions(xn, yn, dx_mm, dy_mm)
-
-    # Convert degrees to radians
-    theta_steering, phi_steering = np.radians(theta_steering), np.radians(phi_steering)
-
-    # Calculate phase shifts
-    sin_theta = np.sin(theta_steering)
-    phase_x = k * sin_theta * np.cos(phi_steering) * x_positions
-    phase_y = k * sin_theta * np.sin(phi_steering) * y_positions
-
-    phase_shifts = phase_x + phase_y
-
-    return phase_shifts
-
-
 def calculate_phase_shifts(
     xn: int,
     yn: int,
@@ -237,10 +223,7 @@ def calculate_phase_shifts(
     phi_steering: float = 0.0,
 ) -> np.ndarray:
     k = get_wavenumber(freq)
-    x_positions, y_positions = get_element_positions(xn, yn, dx_mm, dy_mm)
-
-    # Create 2D meshgrids for element position x and y coordinates
-    x_mesh, y_mesh = np.meshgrid(x_positions, y_positions, indexing="ij")
+    x_pos, y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
 
     # Convert degrees to radians
     theta_steering, phi_steering = np.radians(theta_steering), np.radians(phi_steering)
@@ -252,32 +235,14 @@ def calculate_phase_shifts(
 
     # Path difference = (r_element_vector) dot (unit_steering_vector)
     # Simplified as: x_element * ux + y_element * uy
-    path_difference = (x_mesh * ux) + (y_mesh * uy)
+    path_difference = (x_pos * ux)[:, None] + (y_pos * uy)
 
     phase_shifts = -k * path_difference
+
     phase_shifts = -phase_shifts  # FIXME: Should this be negated or not?
     phase_shifts = phase_shifts % (2 * np.pi)  # Normalize to [0, 2π)
 
     return phase_shifts
-
-
-def get_wavenumber(freq_hz: float) -> float:
-    c = 299792458  # Speed of light in m/s
-    wavelength = c / freq_hz  # Wavelength in meters
-    k = 2 * np.pi / wavelength  # Wavenumber in radians/meter
-    return k
-
-
-def get_element_positions(
-    xn: int,
-    yn: int,
-    dx_mm: float = 60,
-    dy_mm: float = 60,
-) -> tuple[np.ndarray, np.ndarray]:
-    dx_m, dy_m = dx_mm / 1000, dy_mm / 1000  # Convert element spacing from mm to meters
-    x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
-    y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
-    return x_positions, y_positions
 
 
 def plot_sim_and_af(
@@ -360,7 +325,7 @@ def plot_sim_and_af(
                 ax=ax,
             )
 
-            phase_shifts = calculate_phase_shifts_orig(
+            phase_shifts = calculate_phase_shifts(
                 xn, yn, dx, dy, freq, steering_theta, steering_phi
             )
             excitations = np.exp(1j * phase_shifts)
