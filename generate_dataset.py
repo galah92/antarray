@@ -447,7 +447,7 @@ def generate_beamforming(
             phi_steering[n_beams[i] :] = np.nan
 
             # Generate phase shifts for each element
-            phase_shifts = analyze.calculate_phase_shifts(
+            phase_shifts = analyze.calc_phase_shifts(
                 xn,
                 yn,
                 theta_steering=theta_steering,

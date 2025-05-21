@@ -125,7 +125,7 @@ class ArrayFactorCalculator:
         return AF
 
 
-def calculate_phase_shifts(
+def calc_phase_shifts(
     theta_steering: float = 0.0,
     phi_steering: float = 0.0,
     xn: int = 16,
@@ -271,7 +271,7 @@ def plot_sim_and_af(
                 ax=ax,
             )
 
-            phase_shifts = calculate_phase_shifts(
+            phase_shifts = calc_phase_shifts(
                 steering_theta, steering_phi, xn, yn, dx, dy, freq
             )
             excitations = np.exp(1j * phase_shifts)
