@@ -1,7 +1,9 @@
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 
 import h5py
+import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -70,8 +72,8 @@ def array_factor(
     yn: int,
     dx_mm: float = 60,
     dy_mm: float = 60,
-    freq_hz: float = 2.45e9,  # Changed to freq_hz for clarity in units
-    excitations: np.ndarray | None = None,  # (xn, yn) complex array of excitations
+    freq_hz: float = 2.45e9,
+    excitations: np.ndarray | None = None,
 ) -> np.ndarray:
     k = get_wavenumber(freq_hz)
 
@@ -80,36 +82,26 @@ def array_factor(
     dx_m = dx_mm / 1000  # Convert from mm to meters
     dy_m = dy_mm / 1000  # Convert from mm to meters
 
+    # Element positions (centered around origin)
+    x_pos = np.arange(xn) - (xn - 1) / 2
+    y_pos = np.arange(yn) - (yn - 1) / 2
+
+    # Create a meshgrid for broadcasting
+    THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
+
+    # Phase differences
+    sin_theta = np.sin(THETA)
+    psi_x = k * dx_m * sin_theta * np.cos(PHI)
+    psi_y = k * dy_m * sin_theta * np.sin(PHI)
+
     # Initialize default excitations if none provided
     if excitations is None:
         excitations = np.ones((xn, yn), dtype=complex)
 
-    phase_shifts = np.angle(excitations)  # Phase shifts from excitations
-
-    # Initialize output array based on input shapes
-    if theta.ndim == 1 and phi.ndim == 1:
-        # Create a meshgrid for broadcasting
-        THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
-        AF = np.zeros((theta.size, phi.size), dtype=complex)
-    else:
-        # Assume pre-meshed inputs
-        THETA, PHI = theta, phi
-        AF = np.zeros_like(THETA, dtype=complex)
-
-    # Calculate array factor
-    sin_theta = np.sin(THETA)
-    cos_phi = np.cos(PHI)
-    sin_phi = np.sin(PHI)
-
-    # Phase differences
-    psi_x = k * dx_m * sin_theta * cos_phi
-    psi_y = k * dy_m * sin_theta * sin_phi
-
-    # Element positions
-    x_pos = np.arange(xn) - (xn - 1) / 2
-    y_pos = np.arange(yn) - (yn - 1) / 2
+    phase_shifts = np.angle(excitations)
 
     # Calculate array factor by summing contributions from each element
+    AF = np.zeros((theta.size, phi.size), dtype=complex)
     for ix in range(xn):
         for iy in range(yn):
             phase = x_pos[ix] * psi_x + y_pos[iy] * psi_y - phase_shifts[ix, iy]
@@ -120,63 +112,130 @@ def array_factor(
     return AF
 
 
-def array_factor2(
-    theta: np.ndarray,  # Array of observation theta angles (radians)
-    phi: np.ndarray,  # Array of observation phi angles (radians)
+class ArrayFactorCalculator:
+    """
+    A class to calculate the array factor for a given array configuration.
+    It pre-calculates terms dependent on geometry and observation angles
+    to efficiently compute the array factor for different excitations.
+    """
+
+    def __init__(
+        self,
+        theta: np.ndarray,  # Array of observation theta angles (radians)
+        phi: np.ndarray,  # Array of observation phi angles (radians)
+        xn: int,
+        yn: int,
+        dx_mm: float = 60,
+        dy_mm: float = 60,
+        freq_hz: float = 2.45e9,
+    ):
+        self.theta = np.asarray(theta)
+        self.phi = np.asarray(phi)
+        self.xn = xn
+        self.yn = yn
+        self.dx_mm = dx_mm
+        self.dy_mm = dy_mm
+        self.freq_hz = freq_hz
+
+        self._precompute_terms()
+
+    def _precompute_terms(self):
+        """
+        Pre-computes terms that depend only on the array geometry
+        and observation angles. These include k, element positions,
+        and the phase components (psi_x, psi_y) for each element.
+        """
+        self.k = get_wavenumber(self.freq_hz)
+
+        dx_m = self.dx_mm / 1000  # Convert from mm to meters
+        dy_m = self.dy_mm / 1000  # Convert from mm to meters
+
+        # Element positions (centered around origin)
+        self.x_pos = np.arange(self.xn) - (self.xn - 1) / 2
+        self.y_pos = np.arange(self.yn) - (self.yn - 1) / 2
+
+        # Create a meshgrid for broadcasting
+        THETA, PHI = np.meshgrid(self.theta, self.phi, indexing="ij")
+
+        # Phase differences per unit step in x and y (psi_x_unit, psi_y_unit)
+        sin_theta = np.sin(THETA)
+        self.psi_x_unit = self.k * dx_m * sin_theta * np.cos(PHI)
+        self.psi_y_unit = self.k * dy_m * sin_theta * np.sin(PHI)
+
+        # Precompute the 'geometry-dependent' phase term for each element and angle
+        # This will be (x_pos[ix] * psi_x_unit + y_pos[iy] * psi_y_unit)
+        self.geometry_phase_terms = np.zeros(
+            (self.xn, self.yn, self.theta.size, self.phi.size), dtype=complex
+        )
+
+        for ix in range(self.xn):
+            for iy in range(self.yn):
+                self.geometry_phase_terms[ix, iy, :, :] = (
+                    self.x_pos[ix] * self.psi_x_unit + self.y_pos[iy] * self.psi_y_unit
+                )
+
+    def calculate_af(self, excitations: np.ndarray | None = None) -> np.ndarray:
+        """
+        Calculates the array factor given the element excitations.
+        Assumes excitations are (xn, yn) complex array.
+        If excitations is None, all elements are assumed to have 1 + 0j excitation.
+        """
+        # Initialize default excitations if none provided
+        if excitations is None:
+            excitations = np.ones((self.xn, self.yn), dtype=complex)
+        elif excitations.shape != (self.xn, self.yn):
+            raise ValueError(
+                f"Excitations must be a ({self.xn}, {self.yn}) array, "
+                f"but got {excitations.shape}"
+            )
+
+        # Ensure excitations are complex
+        excitations = excitations.astype(complex)
+
+        # Extract phase shifts from excitations
+        phase_shifts = np.angle(excitations)
+
+        # Initialize array factor sum
+        AF = np.zeros((self.theta.size, self.phi.size), dtype=complex)
+
+        # Iterate through elements, applying the excitation phase
+        for ix in range(self.xn):
+            for iy in range(self.yn):
+                # The total phase for this element is the precomputed geometry phase
+                # minus the excitation phase shift for this element.
+                total_phase = (
+                    self.geometry_phase_terms[ix, iy, :, :] - phase_shifts[ix, iy]
+                )
+                AF += excitations[ix, iy] * np.exp(
+                    1j * total_phase
+                )  # Multiply by magnitude as well
+
+        AF = AF / (self.xn * self.yn)  # Normalize by total number of elements
+
+        return AF
+
+
+def array_factor3(
+    theta: np.ndarray,
+    phi: np.ndarray,
     xn: int,
     yn: int,
     dx_mm: float = 60,
     dy_mm: float = 60,
-    freq_hz: float = 2.45e9,  # Changed to freq_hz for clarity in units
-    excitations: np.ndarray | None = None,  # (xn, yn) complex array of excitations
+    freq_hz: float = 2.45e9,
+    excitations: np.ndarray | None = None,
 ) -> np.ndarray:
-    k = get_wavenumber(freq_hz)
+    """
+    Calculate the array factor for a given array configuration.
+    This function uses JAX for efficient computation.
+    """
+    # Create an instance of the ArrayFactorCalculator
+    af_calculator = ArrayFactorCalculator(theta, phi, xn, yn, dx_mm, dy_mm, freq_hz)
 
-    dx_m, dy_m = dx_mm / 1000, dy_mm / 1000  # Convert element spacing from mm to meters
+    # Calculate the array factor using the precomputed terms
+    AF = af_calculator.calculate_af(excitations)
 
-    # 1. Element Positions (Centered)
-    x_positions_m = (np.arange(xn) - (xn - 1) / 2.0) * dx_m  # Shape (xn,)
-    y_positions_m = (np.arange(yn) - (yn - 1) / 2.0) * dy_m  # Shape (yn,)
-
-    # Create 2D meshgrid for element coordinates (xn, yn)
-    x_coords, y_coords = np.meshgrid(x_positions_m, y_positions_m, indexing="ij")
-
-    # 2. Observation Angles (Meshgrid for all combinations)
-    # Convert input degrees to radians
-    theta_rad, phi_rad = np.radians(theta), np.radians(phi)
-
-    # Create 2D meshgrids for observation angles (len(theta), len(phi))
-    theta_grid, phi_grid = np.meshgrid(theta_rad, phi_rad, indexing="ij")
-
-    # 3. Calculate Direction Cosines (ux, uy) for all observation points
-    sin_theta_obs = np.sin(theta_grid)
-    u_x_obs = sin_theta_obs * np.cos(phi_grid)  # Shape (len(theta), len(phi))
-    u_y_obs = sin_theta_obs * np.sin(phi_grid)  # Shape (len(theta), len(phi))
-
-    # 4. Handle Excitations
-    if excitations is None:
-        element_excitations = np.ones((xn, yn), dtype=np.complex128)
-    else:
-        element_excitations = np.asarray(excitations, dtype=np.complex128)
-        if element_excitations.shape != (xn, yn):
-            raise ValueError(
-                f"Excitations must be of shape ({xn}, {yn}), but got {element_excitations.shape}"
-            )
-
-    # 5. Core Array Factor Calculation: Sum over elements for each observation point
-    # Expand observation angle terms to match element dims at the end for broadcasting:
-    u_x_obs_expanded = u_x_obs[:, :, None, None]  # (len(theta), len(phi), 1, 1)
-    u_y_obs_expanded = u_y_obs[:, :, None, None]  # (len(theta), len(phi), 1, 1)
-
-    # x_coords and y_coords are (xn, yn)
-    # They will broadcast to (1, 1, xn, yn) for the multiplication
-    arg_exp = k * (x_coords * u_x_obs_expanded + y_coords * u_y_obs_expanded)
-
-    # Multiply by element excitations and sum over elements
-    # element_excitations is (xn, yn), it broadcasts to (1, 1, xn, yn)
-    af_pattern = np.sum(element_excitations * np.exp(1j * arg_exp), axis=(-2, -1))
-
-    return af_pattern
+    return AF
 
 
 def calculate_phase_shifts(
@@ -329,7 +388,7 @@ def plot_sim_and_af(
                 xn, yn, dx, dy, freq, steering_theta, steering_phi
             )
             excitations = np.exp(1j * phase_shifts)
-            AF = array_factor(theta, phi, xn, yn, dx, dy, freq, excitations)
+            AF = array_factor3(theta, phi, xn, yn, dx, dy, freq, excitations)
 
             # Calculate radiation pattern for the array factor
             E_theta_array = AF * E_theta_single
