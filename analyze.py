@@ -78,54 +78,33 @@ def plot_ff_polar(
             fig.savefig(filename, dpi=600)
 
 
-def array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts=None):
-    """
-    Calculate the array factor of a rectangular antenna array with phase shifts for beamforming.
-
-    Parameters:
-    -----------
-    theta : float or numpy.ndarray
-        Elevation angle(s) in radians
-    phi : float or numpy.ndarray
-        Azimuth angle(s) in radians
-    freq : float
-        Operating freq in Hz
-    xn : int
-        Number of elements in the x-direction
-    yn : int
-        Number of elements in the y-direction
-    dx : float
-        Element spacing in the x-direction in millimeters
-    dy : float
-        Element spacing in the y-direction in millimeters
-    phase_shifts : numpy.ndarray, optional
-        Phase shifts for each element in radians, with shape (xn, yn).
-        If None, no phase shifting is applied.
-
-    Returns:
-    --------
-    numpy.ndarray
-        Array factor magnitude
-    """
+def array_factor(
+    theta: np.ndarray,  # Array of observation theta angles (radians)
+    phi: np.ndarray,  # Array of observation phi angles (radians)
+    xn: int,
+    yn: int,
+    dx_mm: float = 60,
+    dy_mm: float = 60,
+    freq_hz: float = 2.45e9,  # Changed to freq_hz for clarity in units
+    excitations: np.ndarray | None = None,  # (xn, yn) complex array of excitations
+) -> np.ndarray:
     # Convert input to numpy arrays if they aren't already
     theta = np.asarray(theta)
     phi = np.asarray(phi)
 
     # Calculate wavelength and convert spacing to meters
     c = 299792458  # Speed of light in m/s
-    wavelength = c / freq  # Wavelength in meters
-    dx_m = dx / 1000  # Convert from mm to meters
-    dy_m = dy / 1000  # Convert from mm to meters
+    wavelength = c / freq_hz  # Wavelength in meters
+    dx_m = dx_mm / 1000  # Convert from mm to meters
+    dy_m = dy_mm / 1000  # Convert from mm to meters
 
     k = 2 * np.pi / wavelength  # Wave number
 
-    # Initialize default phase shifts if none provided
-    if phase_shifts is None:
-        phase_shifts = np.zeros((xn, yn))
+    # Initialize default excitations if none provided
+    if excitations is None:
+        excitations = np.ones((xn, yn), dtype=complex)
 
-    # Ensure phase_shifts has correct dimensions
-    if phase_shifts.shape != (xn, yn):
-        raise ValueError(f"Phase shifts must have shape ({xn}, {yn})")
+    phase_shifts = np.angle(excitations)  # Phase shifts from excitations
 
     # Initialize output array based on input shapes
     if theta.ndim == 1 and phi.ndim == 1:
@@ -161,30 +140,110 @@ def array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts=None):
     return AF
 
 
-def calculate_phase_shifts(
+def array_factor2(
+    theta: np.ndarray,  # Array of observation theta angles (radians)
+    phi: np.ndarray,  # Array of observation phi angles (radians)
     xn: int,
     yn: int,
-    theta_steering: float = 0.0,
-    phi_steering: float = 0.0,
-    freq: float = 2.45e9,
     dx_mm: float = 60,
     dy_mm: float = 60,
+    freq_hz: float = 2.45e9,  # Changed to freq_hz for clarity in units
+    excitations: np.ndarray | None = None,  # (xn, yn) complex array of excitations
 ) -> np.ndarray:
-    # Convert degrees to radians
-    theta_steering, phi_steering = np.radians(theta_steering), np.radians(phi_steering)
-
-    c = 299792458.0  # Speed of light in meters/second
-    wavelength = c / freq  # Wavelength in meters
+    c = 299792458  # Speed of light in meters/second
+    wavelength = c / freq_hz  # Wavelength in meters
     k = 2 * np.pi / wavelength  # Wave number (in radians per meter)
 
     dx_m, dy_m = dx_mm / 1000, dy_mm / 1000  # Convert element spacing from mm to meters
 
-    # Create element position grid centered around zero
-    x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
-    y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
+    # 1. Element Positions (Centered)
+    x_positions_m = (np.arange(xn) - (xn - 1) / 2.0) * dx_m  # Shape (xn,)
+    y_positions_m = (np.arange(yn) - (yn - 1) / 2.0) * dy_m  # Shape (yn,)
+
+    # Create 2D meshgrid for element coordinates (xn, yn)
+    x_coords, y_coords = np.meshgrid(x_positions_m, y_positions_m, indexing="ij")
+
+    # 2. Observation Angles (Meshgrid for all combinations)
+    # Convert input degrees to radians
+    theta_rad = np.radians(theta)
+    phi_rad = np.radians(phi)
+
+    # Create 2D meshgrids for observation angles (len(theta), len(phi))
+    theta_grid, phi_grid = np.meshgrid(theta_rad, phi_rad, indexing="ij")
+
+    # 3. Calculate Direction Cosines (ux, uy) for all observation points
+    sin_theta_obs = np.sin(theta_grid)
+    u_x_obs = sin_theta_obs * np.cos(phi_grid)  # Shape (len(theta), len(phi))
+    u_y_obs = sin_theta_obs * np.sin(phi_grid)  # Shape (len(theta), len(phi))
+
+    # 4. Handle Excitations
+    if excitations is None:
+        element_excitations = np.ones((xn, yn), dtype=np.complex128)
+    else:
+        element_excitations = np.asarray(excitations, dtype=np.complex128)
+        if element_excitations.shape != (xn, yn):
+            raise ValueError(
+                f"Excitations must be of shape ({xn}, {yn}), but got {element_excitations.shape}"
+            )
+
+    # 5. Core Array Factor Calculation: Sum over elements for each observation point
+    # Expand observation angle terms to match element dims at the end for broadcasting:
+    u_x_obs_expanded = u_x_obs[:, :, None, None]  # (len(theta), len(phi), 1, 1)
+    u_y_obs_expanded = u_y_obs[:, :, None, None]  # (len(theta), len(phi), 1, 1)
+
+    # x_coords and y_coords are (xn, yn)
+    # They will broadcast to (1, 1, xn, yn) for the multiplication
+    arg_exp = k * (x_coords * u_x_obs_expanded + y_coords * u_y_obs_expanded)
+
+    # Multiply by element excitations and sum over elements
+    # element_excitations is (xn, yn), it broadcasts to (1, 1, xn, yn)
+    af_pattern = np.sum(element_excitations * np.exp(1j * arg_exp), axis=(-2, -1))
+
+    return af_pattern
+
+
+def calculate_phase_shifts_orig(
+    xn: int,
+    yn: int,
+    dx_mm: float = 60,
+    dy_mm: float = 60,
+    freq: float = 2.45e9,
+    theta_steering: float = 0.0,
+    phi_steering: float = 0.0,
+):
+    k = get_wavenumber(freq)
+    x_positions, y_positions = get_element_positions(xn, yn, dx_mm, dy_mm)
+
+    # Convert degrees to radians
+    theta_steering, phi_steering = np.radians(theta_steering), np.radians(phi_steering)
+
+    # Calculate phase shifts
+    sin_theta = np.sin(theta_steering)
+    phase_x = k * sin_theta * np.cos(phi_steering) * x_positions
+    phase_y = k * sin_theta * np.sin(phi_steering) * y_positions
+
+    phase_shifts = phase_x + phase_y
+
+    return phase_shifts
+
+
+def calculate_phase_shifts(
+    xn: int,
+    yn: int,
+    dx_mm: float = 60,
+    dy_mm: float = 60,
+    freq: float = 2.45e9,
+    theta_steering: float = 0.0,
+    phi_steering: float = 0.0,
+) -> np.ndarray:
+    k = get_wavenumber(freq)
+    x_positions, y_positions = get_element_positions(xn, yn, dx_mm, dy_mm)
 
     # Create 2D meshgrids for element position x and y coordinates
     x_mesh, y_mesh = np.meshgrid(x_positions, y_positions, indexing="ij")
+
+    # Convert degrees to radians
+    theta_steering, phi_steering = np.radians(theta_steering), np.radians(phi_steering)
 
     # Steering components of a unit vector pointing in the steered direction
     sin_theta_steering = np.sin(theta_steering)
@@ -196,9 +255,29 @@ def calculate_phase_shifts(
     path_difference = (x_mesh * ux) + (y_mesh * uy)
 
     phase_shifts = -k * path_difference
+    phase_shifts = -phase_shifts  # FIXME: Should this be negated or not?
     phase_shifts = phase_shifts % (2 * np.pi)  # Normalize to [0, 2π)
 
     return phase_shifts
+
+
+def get_wavenumber(freq_hz: float) -> float:
+    c = 299792458  # Speed of light in m/s
+    wavelength = c / freq_hz  # Wavelength in meters
+    k = 2 * np.pi / wavelength  # Wavenumber in radians/meter
+    return k
+
+
+def get_element_positions(
+    xn: int,
+    yn: int,
+    dx_mm: float = 60,
+    dy_mm: float = 60,
+) -> tuple[np.ndarray, np.ndarray]:
+    dx_m, dy_m = dx_mm / 1000, dy_mm / 1000  # Convert element spacing from mm to meters
+    x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
+    y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
+    return x_positions, y_positions
 
 
 def plot_sim_and_af(
@@ -281,10 +360,11 @@ def plot_sim_and_af(
                 ax=ax,
             )
 
-            phase_shifts = calculate_phase_shifts(
+            phase_shifts = calculate_phase_shifts_orig(
                 xn, yn, dx, dy, freq, steering_theta, steering_phi
             )
-            AF = array_factor(theta, phi, freq, xn, yn, dx, dy, phase_shifts)
+            excitations = np.exp(1j * phase_shifts)
+            AF = array_factor(theta, phi, xn, yn, dx, dy, freq, excitations)
 
             # Calculate radiation pattern for the array factor
             E_theta_array = AF * E_theta_single
