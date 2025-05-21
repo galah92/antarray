@@ -386,6 +386,44 @@ def plot_ff_3d(
     ax.set_title(title)
 
 
+def test_plot_ff_3d():
+    steering_theta = 9.0
+    steering_phi = 0.0
+
+    freq = 2.45e9
+    sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
+    freq_idx = 0
+    xn, yn = 16, 16
+    dx, dy = 60, 60
+
+    single_antenna_filename = f"farfield_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
+    nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
+    theta, phi = nf2ff["theta"], nf2ff["phi"]
+    E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
+    Dmax_single = nf2ff["Dmax"]
+
+    excitations = calc_excitation(
+        steering_theta, steering_phi, xn, yn, dx, dy, freq, taper_type="uniform"
+    )
+    AF = ArrayFactorCalculator(theta, phi, xn, yn, dx, dy, freq)(excitations)
+
+    # Calculate radiation pattern for the array factor
+    E_theta_array = AF * E_theta_single
+    E_phi_array = AF * E_phi_single
+    E_norm_array = np.sqrt(np.abs(E_theta_array) ** 2 + np.abs(E_phi_array) ** 2)
+
+    Dmax_array = Dmax_single * (xn * yn)
+    E_norm_array_db = normalize_pattern(E_norm_array, Dmax_array)
+
+    plot_ff_3d(
+        theta=theta,
+        phi=phi,
+        pattern=E_norm_array_db.T,
+        title=f"3D Radiation Pattern, {xn}x{yn} array, {dx}x{dy}mm, {freq / 1e9:.0f}GHz",
+    )
+    plt.show()
+
+
 def plot_ff_2d(
     theta: np.ndarray,
     phi: np.ndarray,
