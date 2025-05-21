@@ -158,23 +158,43 @@ def calc_phase_shifts(
     return phase_shifts
 
 
+@lru_cache(maxsize=1)
 def calc_taper(
     xn: int = 16,
     yn: int = 16,
     taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
 ) -> np.ndarray:
     if taper_type == "hamming":
-        window_x = np.hamming(xn)
-        window_y = np.hamming(yn)
+        window_x, window_y = np.hamming(xn), np.hamming(yn)
     elif taper_type == "taylor":
         # Simple approximation of Taylor window using Kaiser
-        window_x = np.kaiser(xn, 3)
-        window_y = np.kaiser(yn, 3)
+        window_x, window_y = np.kaiser(xn, 3), np.kaiser(yn, 3)
     else:
-        window_x = np.ones(xn)
-        window_y = np.ones(yn)
+        window_x, window_y = np.ones(xn), np.ones(yn)
 
     return np.outer(window_x, window_y)  # Create 2D taper by multiplying the 1D windows
+
+
+def calc_excitation(
+    steering_theta: float = 0.0,
+    steering_phi: float = 0.0,
+    xn: int = 16,
+    yn: int = 16,
+    dx_mm: float = 60,
+    dy_mm: float = 60,
+    freq: float = 2.45e9,
+    taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
+) -> np.ndarray:
+    """
+    Calculate the element excitations for a given array configuration.
+    The excitations are calculated based on the steering angles and taper type.
+    """
+    phase_shifts = calc_phase_shifts(
+        steering_theta, steering_phi, xn, yn, dx_mm, dy_mm, freq
+    )
+    taper = calc_taper(xn, yn, taper_type)
+    excitations = taper * np.exp(1j * phase_shifts)
+    return excitations
 
 
 def plot_ff_polar(
@@ -291,11 +311,9 @@ def plot_sim_and_af(
                 ax=ax,
             )
 
-            phase_shifts = calc_phase_shifts(
-                steering_theta, steering_phi, xn, yn, dx, dy, freq
+            excitations = calc_excitation(
+                steering_theta, steering_phi, xn, yn, dx, dy, freq, taper_type="uniform"
             )
-            taper = calc_taper(xn, yn, taper_type="uniform")
-            excitations = taper * np.exp(1j * phase_shifts)
             AF = ArrayFactorCalculator(theta, phi, xn, yn, dx, dy, freq)(excitations)
 
             # Calculate radiation pattern for the array factor
