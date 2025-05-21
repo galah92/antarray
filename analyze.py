@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 import h5py
 import matplotlib.pyplot as plt
@@ -157,6 +158,25 @@ def calc_phase_shifts(
     return phase_shifts
 
 
+def calc_taper(
+    xn: int = 16,
+    yn: int = 16,
+    taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
+) -> np.ndarray:
+    if taper_type == "hamming":
+        window_x = np.hamming(xn)
+        window_y = np.hamming(yn)
+    elif taper_type == "taylor":
+        # Simple approximation of Taylor window using Kaiser
+        window_x = np.kaiser(xn, 3)
+        window_y = np.kaiser(yn, 3)
+    else:
+        window_x = np.ones(xn)
+        window_y = np.ones(yn)
+
+    return np.outer(window_x, window_y)  # Create 2D taper by multiplying the 1D windows
+
+
 def plot_ff_polar(
     E_norm,
     Dmax,
@@ -274,7 +294,8 @@ def plot_sim_and_af(
             phase_shifts = calc_phase_shifts(
                 steering_theta, steering_phi, xn, yn, dx, dy, freq
             )
-            excitations = np.exp(1j * phase_shifts)
+            taper = calc_taper(xn, yn, taper_type="uniform")
+            excitations = taper * np.exp(1j * phase_shifts)
             AF = ArrayFactorCalculator(theta, phi, xn, yn, dx, dy, freq)(excitations)
 
             # Calculate radiation pattern for the array factor
