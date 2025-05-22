@@ -12,12 +12,12 @@ def read_nf2ff(nf2ff_path: Path):
     print(f"Loading antenna pattern from {nf2ff_path}")
     with h5py.File(nf2ff_path, "r") as h5:
         mesh = h5["Mesh"]
-        phi, theta, r = mesh["phi"][:], mesh["theta"][:], mesh["r"][:]
+        theta_rad, phi_rad, r = mesh["theta"][:], mesh["phi"][:], mesh["r"][:]
 
         Dmax = h5["nf2ff"].attrs["Dmax"]
         freqs = h5["nf2ff"].attrs["Frequency"]
 
-        E_shape = freqs.size, phi.size, theta.size
+        E_shape = freqs.size, phi_rad.size, theta_rad.size
         E_theta = np.empty(E_shape, dtype=complex)
         E_phi = np.empty(E_shape, dtype=complex)
 
@@ -33,8 +33,8 @@ def read_nf2ff(nf2ff_path: Path):
         E_norm = np.sqrt(np.abs(E_phi) ** 2 + np.abs(E_theta) ** 2)
 
     return {
-        "theta": theta,
-        "phi": phi,
+        "theta_rad": theta_rad,
+        "phi_rad": phi_rad,
         "r": r,
         "Dmax": Dmax,
         "freq": freqs,
@@ -57,9 +57,9 @@ def get_element_positions(
     dx_mm: float = 60,
     dy_mm: float = 60,
 ) -> tuple[np.ndarray, np.ndarray]:
-    dx_m, dy_m = dx_mm / 1000, dy_mm / 1000  # Convert element spacing from mm to meters
-    x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_m
-    y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_m
+    # Calculate the x and y positions of the elements in the array in meters, centered around (0, 0)
+    x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_mm / 1000
+    y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_mm / 1000
     return x_positions, y_positions
 
 
@@ -72,10 +72,10 @@ class ArrayFactorCalculator:
 
     def __init__(
         self,
-        theta: np.ndarray,  # Array of observation theta angles (radians)
-        phi: np.ndarray,  # Array of observation phi angles (radians)
+        theta_rad: np.ndarray,  # Array of observation theta angles
+        phi_rad: np.ndarray,  # Array of observation phi angles
         xn: int = 16,  # Number of elements in the x-direction
-        yn: int = 16,  # Number of elements in the x-direction
+        yn: int = 16,  # Number of elements in the y-direction
         dx_mm: float = 60,
         dy_mm: float = 60,
         freq_hz: float = 2.45e9,
@@ -84,10 +84,10 @@ class ArrayFactorCalculator:
         x_pos, y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
 
         # Terms for x and y components of the geometric phase.
-        # Shape: (len(theta), len(phi))
-        sin_theta = np.sin(theta)[:, None]
-        ux = k * sin_theta * np.cos(phi)
-        uy = k * sin_theta * np.sin(phi)
+        # Shape: (len(theta_rad), len(phi_rad))
+        sin_theta = np.sin(theta_rad)[:, None]
+        ux = k * sin_theta * np.cos(phi_rad)
+        uy = k * sin_theta * np.sin(phi_rad)
 
         # Precompute the geometric phase terms for each element and angle.
         # Shape: (xn, yn, len(theta), len(phi)).
@@ -126,8 +126,8 @@ class ArrayFactorCalculator:
 
 
 def calc_phase_shifts(
-    theta_steering: float = 0.0,
-    phi_steering: float = 0.0,
+    theta_steering_deg: float = 0.0,
+    phi_steering_deg: float = 0.0,
     xn: int = 16,
     yn: int = 16,
     dx_mm: float = 60,
@@ -138,12 +138,13 @@ def calc_phase_shifts(
     x_pos, y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
 
     # Convert degrees to radians
-    theta_steering, phi_steering = np.radians(theta_steering), np.radians(phi_steering)
+    theta_steering_rad = np.radians(theta_steering_deg)
+    phi_steering_rad = np.radians(phi_steering_deg)
 
     # Steering components of a unit vector pointing in the steered direction
-    sin_theta_steering = np.sin(theta_steering)
-    ux = sin_theta_steering * np.cos(phi_steering)
-    uy = sin_theta_steering * np.sin(phi_steering)
+    sin_theta_steering = np.sin(theta_steering_rad)
+    ux = sin_theta_steering * np.cos(phi_steering_rad)
+    uy = sin_theta_steering * np.sin(phi_steering_rad)
 
     # Path difference = (r_element_vector) dot (unit_steering_vector)
     # Simplified as: x_element * ux + y_element * uy
@@ -174,8 +175,8 @@ def calc_taper(
 
 
 def calc_excitation(
-    steering_theta: float = 0.0,
-    steering_phi: float = 0.0,
+    steering_theta_deg: float = 0.0,
+    steering_phi_deg: float = 0.0,
     xn: int = 16,
     yn: int = 16,
     dx_mm: float = 60,
@@ -188,7 +189,7 @@ def calc_excitation(
     The excitations are calculated based on the steering angles and taper type.
     """
     phase_shifts = calc_phase_shifts(
-        steering_theta, steering_phi, xn, yn, dx_mm, dy_mm, freq
+        steering_theta_deg, steering_phi_deg, xn, yn, dx_mm, dy_mm, freq
     )
     taper = calc_taper(xn, yn, taper_type)
     excitations = taper * np.exp(1j * phase_shifts)
@@ -198,7 +199,7 @@ def calc_excitation(
 def plot_ff_polar(
     E_norm,
     Dmax,
-    theta,
+    theta_rad,
     *,
     normalize: bool = True,
     label: str | None = None,
@@ -212,9 +213,7 @@ def plot_ff_polar(
     if normalize:
         E_norm = normalize_pattern(E_norm, Dmax)
 
-    print(f"{E_norm.shape=}, {theta.shape=}")
-
-    ax.plot(theta, E_norm, "r-", linewidth=1, label=label)
+    ax.plot(theta_rad, E_norm, "r-", linewidth=1, label=label)
     ax.set_thetagrids(np.arange(0, 360, 30))
     ax.set_rgrids(np.arange(-20, 20, 10))
     ax.set_rlim(-25, 15)
@@ -239,8 +238,8 @@ def plot_sim_and_af(
     dxs,
     *,
     freq_idx=0,  # index of the frequency to plot
-    steering_theta=0,
-    steering_phi=0,
+    steering_theta_deg=0,
+    steering_phi_deg=0,
     figname: bool | str = True,
 ):
     """
@@ -275,12 +274,12 @@ def plot_sim_and_af(
     # Load the single antenna pattern (for array factor calculation)
     single_antenna_filename = f"ff_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
     nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
-    theta, phi = nf2ff["theta"], nf2ff["phi"]
+    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
     E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"]
 
-    steering_phi_rad = np.radians(steering_phi)
-    phi_idx = np.argmin(np.abs(phi - steering_phi_rad))  # Index of steering phi
+    steering_phi_rad = np.radians(steering_phi_deg)
+    phi_idx = np.argmin(np.abs(phi_rad - steering_phi_rad))  # Index of steering phi
 
     # Create a figure with polar subplots
     fig, axs = plt.subplots(
@@ -298,7 +297,7 @@ def plot_sim_and_af(
             dy = dx
 
             # Plot OpenEMS full simulation
-            filename = f"ff_{xn}x{yn}_{dx}x{dx}_{freq / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
+            filename = f"ff_{xn}x{yn}_{dx}x{dx}_{freq / 1e6:n}_steer_t{steering_theta_deg}_p{steering_phi_deg}.h5"
             try:
                 nf2ff = read_nf2ff(sim_dir / filename)
             except (FileNotFoundError, KeyError):  # Could not load simulation data
@@ -307,15 +306,23 @@ def plot_sim_and_af(
             plot_ff_polar(
                 E_norm=nf2ff["E_norm"][freq_idx, :, phi_idx],
                 Dmax=nf2ff["Dmax"],
-                theta=theta,
+                theta_rad=theta_rad,
                 label="OpenEMS Simulation",
                 ax=ax,
             )
 
             excitations = calc_excitation(
-                steering_theta, steering_phi, xn, yn, dx, dy, freq, taper_type="uniform"
+                steering_theta_deg,
+                steering_phi_deg,
+                xn,
+                yn,
+                dx,
+                dy,
+                freq,
+                taper_type="uniform",
             )
-            AF = ArrayFactorCalculator(theta, phi, xn, yn, dx, dy, freq)(excitations)
+            af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
+            AF = af_calc(excitations)
 
             # Calculate radiation pattern for the array factor
             E_theta_array = AF * E_theta_single
@@ -327,14 +334,16 @@ def plot_sim_and_af(
 
             Dmax_array = Dmax_single * (xn * yn)
             E_norm_array_db = normalize_pattern(E_norm_array, Dmax_array)
-            ax.plot(theta, E_norm_array_db, "g--", linewidth=1, label="Array Factor")
+            ax.plot(
+                theta_rad, E_norm_array_db, "g--", linewidth=1, label="Array Factor"
+            )
 
             c = 299_792_458
             lambda0 = c / freq
             lambda0_mm = lambda0 * 1e3
             freq_ghz = freq / 1e9
 
-            title = f"{xn}x{yn} array, {dx}x{dy}mm, {freq_ghz:n}GHz, {dx / lambda0_mm:.2f}λ, steering: θ={steering_theta}°, φ={steering_phi}°"
+            title = f"{xn}x{yn} array, {dx}x{dy}mm, {freq_ghz:n}GHz, {dx / lambda0_mm:.2f}λ, steering: θ={steering_theta_deg}°, φ={steering_phi_deg}°"
             ax.set_title(title, fontsize=8)
 
     fig.legend(["OpenEMS Simulation", "Array Factor"], fontsize=8)
@@ -343,7 +352,9 @@ def plot_sim_and_af(
     fig.set_tight_layout(True)
     if figname:
         if figname is True:
-            figname = f"ff_{freq_ghz:.0f}GHz_steer_t{steering_theta}_p{steering_phi}"
+            figname = (
+                f"ff_{freq_ghz:.0f}GHz_steer_t{steering_theta_deg}_p{steering_phi_deg}"
+            )
         fig.savefig(figname, dpi=600)
 
 
@@ -357,20 +368,20 @@ def normalize_pattern(pattern: np.ndarray, Dmax: float) -> np.ndarray:
 
 
 def plot_ff_3d(
-    theta: np.ndarray,
-    phi: np.ndarray,
+    theta_rad: np.ndarray,
+    phi_rad: np.ndarray,
     pattern: np.ndarray,
     *,
     title: str = "3D Radiation Pattern",
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
     pattern = pattern.clip(min=0)  # Clip negative values to 0
-    theta, phi = np.meshgrid(theta, phi, indexing="ij")
+    theta_rad, phi_rad = np.meshgrid(theta_rad, phi_rad, indexing="ij")
 
     # Calculate cartesian coordinates
-    x = pattern * np.sin(theta) * np.cos(phi)
-    y = pattern * np.sin(theta) * np.sin(phi)
-    z = pattern * np.cos(theta)
+    x = pattern * np.sin(theta_rad) * np.cos(phi_rad)
+    y = pattern * np.sin(theta_rad) * np.sin(phi_rad)
+    z = pattern * np.cos(theta_rad)
 
     if ax is None:
         ax = plt.figure().add_subplot(projection="3d")
@@ -388,8 +399,8 @@ def plot_ff_3d(
 
 
 def test_plot_ff_3d():
-    steering_theta = 0.0
-    steering_phi = 0.0
+    steering_theta_deg = 0.0
+    steering_phi_deg = 0.0
 
     freq = 2.45e9
     sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
@@ -399,14 +410,14 @@ def test_plot_ff_3d():
 
     single_antenna_filename = f"ff_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
     nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
-    theta, phi = nf2ff["theta"], nf2ff["phi"]
+    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
     E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"]
 
     excitations = calc_excitation(
-        steering_theta, steering_phi, xn, yn, dx, dy, freq, taper_type="uniform"
+        steering_theta_deg, steering_phi_deg, xn, yn, dx, dy, freq, taper_type="uniform"
     )
-    AF = ArrayFactorCalculator(theta, phi, xn, yn, dx, dy, freq)(excitations)
+    AF = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)(excitations)
 
     # Calculate radiation pattern for the array factor
     E_theta_array = AF * E_theta_single
@@ -417,8 +428,8 @@ def test_plot_ff_3d():
     E_norm_array_db = normalize_pattern(E_norm_array, Dmax_array)
 
     plot_ff_3d(
-        theta=theta,
-        phi=phi,
+        theta_rad=theta_rad,
+        phi_rad=phi_rad,
         pattern=E_norm_array_db,
         title=f"3D Radiation Pattern, {xn}x{yn} array, {dx}x{dy}mm, {freq / 1e9:.0f}GHz",
     )
@@ -426,8 +437,8 @@ def test_plot_ff_3d():
 
 
 def plot_ff_2d(
-    theta: np.ndarray,
-    phi: np.ndarray,
+    theta_rad: np.ndarray,
+    phi_rad: np.ndarray,
     pattern: np.ndarray,
     *,
     title: str = "2D Radiation Pattern",
@@ -437,7 +448,7 @@ def plot_ff_2d(
     if ax is None:
         _, ax = plt.subplots(1, 1, figsize=(8, 6))
 
-    theta_deg, phi_deg = np.rad2deg(theta), np.rad2deg(phi)
+    theta_deg, phi_deg = np.rad2deg(theta_rad), np.rad2deg(phi_rad)
     extent = [np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg)]
     im = ax.imshow(pattern, extent=extent, origin="lower")
     ax.set_xlabel("Theta (degrees)")
