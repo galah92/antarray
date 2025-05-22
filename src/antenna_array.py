@@ -288,7 +288,7 @@ def postprocess(sim_path, nf2ff, f0, ports, outfile=None):
     _s11_dB = 20.0 * np.log10(np.abs(s11))
 
     # Calculate far field
-    theta = np.arange(0, 90.0, 1.0)
+    theta = np.arange(0, 180.0, 1.0)
     phi = np.arange(0, 360, 1.0)
 
     print("Calculating 3D far field...")
@@ -303,9 +303,11 @@ def postprocess(sim_path, nf2ff, f0, ports, outfile=None):
 
 
 if __name__ == "__main__":
-    ants = [(16, 16)]
-    d_ant = [60]
-    steering_thetas = [0, 15, 30, 45]
+    # ants = [(16, 16)]
+    ants = [(1, 1), (2, 1), (4, 1)]
+    d_ant = [60, 90]
+    # steering_thetas = [0, 15, 30, 45]
+    steering_thetas = [0]
     steering_phis = [0]
 
     # Run standard simulations without beam steering

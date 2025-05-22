@@ -28,8 +28,7 @@ def read_nf2ff(nf2ff_path: Path):
             E_phi.imag[freq] = h5[f"/nf2ff/E_phi/FD/f{freq}_imag"][:]
 
         # Transpose to (freq, theta, phi)
-        E_theta = E_theta.transpose(0, 2, 1)
-        E_phi = E_phi.transpose(0, 2, 1)
+        E_theta, E_phi = E_theta.transpose(0, 2, 1), E_phi.transpose(0, 2, 1)
 
         E_norm = np.sqrt(np.abs(E_phi) ** 2 + np.abs(E_theta) ** 2)
 
@@ -150,9 +149,8 @@ def calc_phase_shifts(
     # Simplified as: x_element * ux + y_element * uy
     path_difference = (x_pos * ux)[:, None] + (y_pos * uy)
 
-    phase_shifts = -k * path_difference
+    phase_shifts = k * path_difference
 
-    phase_shifts = -phase_shifts  # FIXME: Should this be negated or not?
     phase_shifts = phase_shifts % (2 * np.pi)  # Normalize to [0, 2π)
 
     return phase_shifts
@@ -214,6 +212,8 @@ def plot_ff_polar(
     if normalize:
         E_norm = normalize_pattern(E_norm, Dmax)
 
+    print(f"{E_norm.shape=}, {theta.shape=}")
+
     ax.plot(theta, E_norm, "r-", linewidth=1, label=label)
     ax.set_thetagrids(np.arange(0, 360, 30))
     ax.set_rgrids(np.arange(-20, 20, 10))
@@ -273,13 +273,14 @@ def plot_sim_and_af(
     dxs = np.array(dxs)  # distance between antennas in mm
 
     # Load the single antenna pattern (for array factor calculation)
-    single_antenna_filename = f"farfield_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
+    single_antenna_filename = f"ff_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
     nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
     theta, phi = nf2ff["theta"], nf2ff["phi"]
     E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"]
 
-    phi_idx = np.argmin(np.abs(phi - steering_phi))  # Index of steering phi
+    steering_phi_rad = np.radians(steering_phi)
+    phi_idx = np.argmin(np.abs(phi - steering_phi_rad))  # Index of steering phi
 
     # Create a figure with polar subplots
     fig, axs = plt.subplots(
@@ -297,7 +298,7 @@ def plot_sim_and_af(
             dy = dx
 
             # Plot OpenEMS full simulation
-            filename = f"farfield_{xn}x{yn}_{dx}x{dx}_{freq / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
+            filename = f"ff_{xn}x{yn}_{dx}x{dx}_{freq / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
             try:
                 nf2ff = read_nf2ff(sim_dir / filename)
             except (FileNotFoundError, KeyError):  # Could not load simulation data
@@ -364,7 +365,7 @@ def plot_ff_3d(
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
     pattern = pattern.clip(min=0)  # Clip negative values to 0
-    theta, phi = np.meshgrid(theta, phi)
+    theta, phi = np.meshgrid(theta, phi, indexing="ij")
 
     # Calculate cartesian coordinates
     x = pattern * np.sin(theta) * np.cos(phi)
@@ -375,7 +376,7 @@ def plot_ff_3d(
         ax = plt.figure().add_subplot(projection="3d")
 
     ax.plot_surface(x, y, z, cmap="Spectral_r")
-    ax.view_init(elev=20.0, azim=-100)
+    # ax.view_init(elev=20.0, azim=-100)
     ax.set_aspect("equalxy")
     ax.set_box_aspect(None, zoom=1.25)
     ax.set_xlabel("x")
@@ -396,15 +397,11 @@ def test_plot_ff_3d():
     xn, yn = 16, 16
     dx, dy = 60, 60
 
-    single_antenna_filename = f"farfield_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
+    single_antenna_filename = f"ff_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
     nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
     theta, phi = nf2ff["theta"], nf2ff["phi"]
     E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"]
-
-    # Convert theta from elevation to polar angle (inclination from Z-axis)
-    # Polar angle: 0 (Z-axis) to pi (-Z-axis)
-    # theta = np.pi/2 - theta
 
     excitations = calc_excitation(
         steering_theta, steering_phi, xn, yn, dx, dy, freq, taper_type="uniform"
@@ -422,7 +419,7 @@ def test_plot_ff_3d():
     plot_ff_3d(
         theta=theta,
         phi=phi,
-        pattern=E_norm_array_db.T,
+        pattern=E_norm_array_db,
         title=f"3D Radiation Pattern, {xn}x{yn} array, {dx}x{dy}mm, {freq / 1e9:.0f}GHz",
     )
     plt.show()
