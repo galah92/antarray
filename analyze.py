@@ -205,26 +205,38 @@ def calc_taper(
     return np.outer(window_x, window_y)  # Create 2D taper by multiplying the 1D windows
 
 
-def calc_excitation(
-    steering_theta_deg: float = 0.0,
-    steering_phi_deg: float = 0.0,
-    xn: int = 16,
-    yn: int = 16,
-    dx_mm: float = 60,
-    dy_mm: float = 60,
-    freq: float = 2.45e9,
-    taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
-) -> np.ndarray:
+class ExcitationCalculator:
     """
-    Calculate the element excitations for a given array configuration.
-    The excitations are calculated based on the steering angles and taper type.
+    Calculate element excitations for a given array configuration.
+    Pre-calculate terms dependent on geometry to efficiently compute excitations
+    for different steering angles and taper types.
     """
-    phase_shifts = calc_phase_shifts(
-        steering_theta_deg, steering_phi_deg, xn, yn, dx_mm, dy_mm, freq
-    )
-    taper = calc_taper(xn, yn, taper_type)
-    excitations = taper * np.exp(1j * phase_shifts)
-    return excitations
+
+    def __init__(
+        self,
+        xn: int = 16,
+        yn: int = 16,
+        dx_mm: float = 60,
+        dy_mm: float = 60,
+        freq: float = 2.45e9,
+    ):
+        self.xn = xn
+        self.yn = yn
+        self.phase_calc = PhaseShiftCalculator(xn, yn, dx_mm, dy_mm, freq)
+
+    def __call__(
+        self,
+        steering_theta_deg: float = 0.0,
+        steering_phi_deg: float = 0.0,
+        taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
+    ) -> np.ndarray:
+        """
+        Calculate element excitations for given steering angles and taper type.
+        """
+        phase_shifts = self.phase_calc(steering_theta_deg, steering_phi_deg)
+        taper = calc_taper(self.xn, self.yn, taper_type)
+        excitations = taper * np.exp(1j * phase_shifts)
+        return excitations
 
 
 def plot_ff_polar(
@@ -342,22 +354,13 @@ def plot_sim_and_af(
                 ax=ax,
             )
 
-            excitations = calc_excitation(
-                steering_theta_deg,
-                steering_phi_deg,
-                xn,
-                yn,
-                dx,
-                dy,
-                freq,
-                taper_type="uniform",
-            )
+            ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
+            excitations = ex_calc(steering_theta_deg, steering_phi_deg, "uniform")
             af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
             AF = af_calc(excitations)
 
             # Calculate radiation pattern for the array factor
-            E_theta_array = AF * E_theta_single
-            E_phi_array = AF * E_phi_single
+            E_theta_array, E_phi_array = AF * E_theta_single, AF * E_phi_single
             E_norm_array = np.sqrt(
                 np.abs(E_theta_array) ** 2 + np.abs(E_phi_array) ** 2
             )
@@ -448,14 +451,12 @@ def test_plot_ff_3d():
     E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"]
 
-    excitations = calc_excitation(
-        steering_theta_deg, steering_phi_deg, xn, yn, dx, dy, freq, taper_type="uniform"
-    )
+    ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
+    excitations = ex_calc(steering_theta_deg, steering_phi_deg)
     AF = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)(excitations)
 
     # Calculate radiation pattern for the array factor
-    E_theta_array = AF * E_theta_single
-    E_phi_array = AF * E_phi_single
+    E_theta_array, E_phi_array = AF * E_theta_single, AF * E_phi_single
     E_norm_array = np.sqrt(np.abs(E_theta_array) ** 2 + np.abs(E_phi_array) ** 2)
 
     Dmax_array = Dmax_single * (xn * yn)
