@@ -220,8 +220,7 @@ class ExcitationCalculator:
         dy_mm: float = 60,
         freq: float = 2.45e9,
     ):
-        self.xn = xn
-        self.yn = yn
+        self.xn, self.yn = xn, yn
         self.phase_calc = PhaseShiftCalculator(xn, yn, dx_mm, dy_mm, freq)
 
     def __call__(
@@ -237,6 +236,16 @@ class ExcitationCalculator:
         taper = calc_taper(self.xn, self.yn, taper_type)
         excitations = taper * np.exp(1j * phase_shifts)
         return excitations
+
+
+def run_array_factor(
+    E_theta_single: np.ndarray,
+    E_phi_single: np.ndarray,
+    AF: np.ndarray,
+) -> np.ndarray:
+    E_theta_array, E_phi_array = AF * E_theta_single, AF * E_phi_single
+    E_norm_array = np.sqrt(np.abs(E_theta_array) ** 2 + np.abs(E_phi_array) ** 2)
+    return E_norm_array
 
 
 def plot_ff_polar(
@@ -359,11 +368,7 @@ def plot_sim_and_af(
             af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
             AF = af_calc(excitations)
 
-            # Calculate radiation pattern for the array factor
-            E_theta_array, E_phi_array = AF * E_theta_single, AF * E_phi_single
-            E_norm_array = np.sqrt(
-                np.abs(E_theta_array) ** 2 + np.abs(E_phi_array) ** 2
-            )
+            E_norm_array = run_array_factor(E_theta_single, E_phi_single, AF)
             E_norm_array = E_norm_array[:, phi_idx]  # Select theta slice
 
             Dmax_array = Dmax_single * (xn * yn)
@@ -455,9 +460,7 @@ def test_plot_ff_3d():
     excitations = ex_calc(steering_theta_deg, steering_phi_deg)
     AF = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)(excitations)
 
-    # Calculate radiation pattern for the array factor
-    E_theta_array, E_phi_array = AF * E_theta_single, AF * E_phi_single
-    E_norm_array = np.sqrt(np.abs(E_theta_array) ** 2 + np.abs(E_phi_array) ** 2)
+    E_norm_array = run_array_factor(E_theta_single, E_phi_single, AF)
 
     Dmax_array = Dmax_single * (xn * yn)
     E_norm_array_db = normalize_pattern(E_norm_array, Dmax_array)
