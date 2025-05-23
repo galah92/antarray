@@ -372,6 +372,9 @@ def plot_ff_3d(
     phi_rad: np.ndarray,
     pattern: np.ndarray,
     *,
+    hide_backlobe: bool = True,
+    elev: float | None = None,
+    azim: float | None = None,
     title: str = "3D Radiation Pattern",
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
@@ -382,24 +385,25 @@ def plot_ff_3d(
     y = pattern * np.sin(theta_rad)[:, None] * np.sin(phi_rad)[None, :]
     z = pattern * np.cos(theta_rad)[:, None]
 
+    if hide_backlobe:
+        z[z < 0] = np.nan  # Set backlobe values to NaN
+
     if ax is None:
-        ax = plt.figure().add_subplot(projection="3d")
+        fig = plt.figure(constrained_layout=True)
+        ax = fig.add_subplot(projection="3d")
 
     ax.plot_surface(x, y, z, cmap="Spectral_r")
-    # ax.view_init(elev=20.0, azim=-100)
-    ax.set_aspect("equalxy")
-    ax.set_box_aspect(None, zoom=1.25)
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_zlabel("z")
+    ax.view_init(elev=elev, azim=azim)
+    ax.set_box_aspect(None, zoom=1.2)
     ax.set_xlim(-25, 25)
     ax.set_ylim(-25, 25)
+    ax.set_zlim(0, 30)
     ax.set_title(title)
 
 
 def test_plot_ff_3d():
-    steering_theta_deg = 0.0
-    steering_phi_deg = 0.0
+    steering_theta_deg = 15.0
+    steering_phi_deg = 15.0
 
     freq = 2.45e9
     sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
