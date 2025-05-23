@@ -376,12 +376,11 @@ def plot_ff_3d(
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
     pattern = pattern.clip(min=0)  # Clip negative values to 0
-    theta_rad, phi_rad = np.meshgrid(theta_rad, phi_rad, indexing="ij")
 
     # Calculate cartesian coordinates
-    x = pattern * np.sin(theta_rad) * np.cos(phi_rad)
-    y = pattern * np.sin(theta_rad) * np.sin(phi_rad)
-    z = pattern * np.cos(theta_rad)
+    x = pattern * np.sin(theta_rad)[:, None] * np.cos(phi_rad)[None, :]
+    y = pattern * np.sin(theta_rad)[:, None] * np.sin(phi_rad)[None, :]
+    z = pattern * np.cos(theta_rad)[:, None]
 
     if ax is None:
         ax = plt.figure().add_subplot(projection="3d")
