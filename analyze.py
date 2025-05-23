@@ -282,6 +282,21 @@ def plot_ff_polar(
             fig.savefig(filename, dpi=600)
 
 
+def extend_pattern_to_360_theta(pattern: np.ndarray) -> np.ndarray:
+    """
+    Extend radiation pattern from [0,180°] to [0,360°] in theta.
+    Useful for plotting 2D E-plane patterns.
+    The input pattern is assumed to be in the range [0, 180°] for theta.
+    The output pattern will be in the range [0, 360°] for theta.
+    """
+    _, n_phi = pattern.shape
+
+    phi_indices = (np.arange(n_phi) + n_phi // 2) % n_phi  # Shift phi indices
+    extension = pattern[::-1, phi_indices]  # Mirror pattern
+
+    return np.vstack((pattern, extension))
+
+
 def plot_sim_and_af(
     sim_dir,
     freq,
@@ -355,10 +370,15 @@ def plot_sim_and_af(
             except (FileNotFoundError, KeyError):  # Could not load simulation data
                 pass
 
+            E_norm = extend_pattern_to_360_theta(nf2ff["E_norm"][freq_idx])
+            E_norm = E_norm[:, phi_idx]  # Select theta slice
+            theta_rad2 = np.concatenate((theta_rad, theta_rad + np.pi))
+            Dmax = nf2ff["Dmax"]
+
             plot_ff_polar(
-                E_norm=nf2ff["E_norm"][freq_idx, :, phi_idx],
-                Dmax=nf2ff["Dmax"],
-                theta_rad=theta_rad,
+                E_norm=E_norm,
+                Dmax=Dmax,
+                theta_rad=theta_rad2,
                 label="OpenEMS Simulation",
                 ax=ax,
             )
@@ -369,12 +389,13 @@ def plot_sim_and_af(
             AF = af_calc(excitations)
 
             E_norm_array = run_array_factor(E_theta_single, E_phi_single, AF)
+            E_norm_array = extend_pattern_to_360_theta(E_norm_array)
             E_norm_array = E_norm_array[:, phi_idx]  # Select theta slice
 
             Dmax_array = Dmax_single * (xn * yn)
             E_norm_array_db = normalize_pattern(E_norm_array, Dmax_array)
             ax.plot(
-                theta_rad, E_norm_array_db, "g--", linewidth=1, label="Array Factor"
+                theta_rad2, E_norm_array_db, "g--", linewidth=1, label="Array Factor"
             )
 
             c = 299_792_458
