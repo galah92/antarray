@@ -125,6 +125,51 @@ class ArrayFactorCalculator:
         return AF
 
 
+class PhaseShiftCalculator:
+    """
+    Calculate phase shifts for beam steering with a given array configuration.
+    Pre-calculate terms dependent on geometry to efficiently compute phase shifts
+    for different steering angles.
+    """
+
+    def __init__(
+        self,
+        xn: int = 16,
+        yn: int = 16,
+        dx_mm: float = 60,
+        dy_mm: float = 60,
+        freq: float = 2.45e9,
+    ):
+        self.k = get_wavenumber(freq)
+        self.x_pos, self.y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
+
+    def __call__(
+        self,
+        theta_steering_deg: float = 0.0,
+        phi_steering_deg: float = 0.0,
+    ) -> np.ndarray:
+        """
+        Calculate phase shifts for given steering angles.
+        """
+        # Convert degrees to radians
+        theta_steering_rad = np.radians(theta_steering_deg)
+        phi_steering_rad = np.radians(phi_steering_deg)
+
+        # Steering components of a unit vector pointing in the steered direction
+        sin_theta_steering = np.sin(theta_steering_rad)
+        ux = sin_theta_steering * np.cos(phi_steering_rad)
+        uy = sin_theta_steering * np.sin(phi_steering_rad)
+
+        # Path difference = (r_element_vector) dot (unit_steering_vector)
+        # Simplified as: x_element * ux + y_element * uy
+        path_difference = (self.x_pos * ux)[:, None] + (self.y_pos * uy)
+
+        phase_shifts = self.k * path_difference
+        phase_shifts = phase_shifts % (2 * np.pi)  # Normalize to [0, 2π)
+
+        return phase_shifts
+
+
 def calc_phase_shifts(
     theta_steering_deg: float = 0.0,
     phi_steering_deg: float = 0.0,
@@ -134,27 +179,13 @@ def calc_phase_shifts(
     dy_mm: float = 60,
     freq: float = 2.45e9,
 ) -> np.ndarray:
-    k = get_wavenumber(freq)
-    x_pos, y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
-
-    # Convert degrees to radians
-    theta_steering_rad = np.radians(theta_steering_deg)
-    phi_steering_rad = np.radians(phi_steering_deg)
-
-    # Steering components of a unit vector pointing in the steered direction
-    sin_theta_steering = np.sin(theta_steering_rad)
-    ux = sin_theta_steering * np.cos(phi_steering_rad)
-    uy = sin_theta_steering * np.sin(phi_steering_rad)
-
-    # Path difference = (r_element_vector) dot (unit_steering_vector)
-    # Simplified as: x_element * ux + y_element * uy
-    path_difference = (x_pos * ux)[:, None] + (y_pos * uy)
-
-    phase_shifts = k * path_difference
-
-    phase_shifts = phase_shifts % (2 * np.pi)  # Normalize to [0, 2π)
-
-    return phase_shifts
+    """
+    Calculate phase shifts for beam steering. This function creates a new
+    PhaseShiftCalculator for each call. For repeated calculations with the same
+    geometry, use PhaseShiftCalculator directly for better performance.
+    """
+    calculator = PhaseShiftCalculator(xn, yn, dx_mm, dy_mm, freq)
+    return calculator(theta_steering_deg, phi_steering_deg)
 
 
 @lru_cache(maxsize=1)
