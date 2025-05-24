@@ -230,10 +230,21 @@ def run_array_factor(
     return E_norm_array
 
 
-def plot_ff_polar(
+def extract_E_plane_cut(pattern: np.ndarray, phi_idx: int = 0) -> np.ndarray:
+    """
+    Extract the E-plane cut (phi = 0°) from the 3D radiation pattern.
+    The input pattern is assumed to be in the range [0, 180°] for theta.
+    The output pattern will be in the range [0, 360°] for theta.
+    """
+    semi_cut1 = pattern[:, phi_idx]  # Extract the E-plane cut at phi_idx
+    semi_cut2 = pattern[::-1, (phi_idx + 180) % 360]  # Mirror the other cut
+    return np.hstack((semi_cut1, semi_cut2))
+
+
+def plot_E_plane(
     E_norm,
     Dmax,
-    theta_rad,
+    fmt: str = "r-",
     *,
     normalize: bool = True,
     label: str | None = None,
@@ -244,10 +255,13 @@ def plot_ff_polar(
     if ax is None:
         fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
 
-    if normalize:
-        E_norm = normalize_pattern(E_norm, Dmax)
+    E_norm_cut = extract_E_plane_cut(E_norm, phi_idx=0)
+    theta_rad = np.linspace(0, 2 * np.pi, E_norm_cut.size)
 
-    ax.plot(theta_rad, E_norm, "r-", linewidth=1, label=label)
+    if normalize:
+        E_norm_cut = normalize_pattern(E_norm_cut, Dmax)
+
+    ax.plot(theta_rad, E_norm_cut, fmt, linewidth=1, label=label)
     ax.set_thetagrids(np.arange(0, 360, 30))
     ax.set_rgrids(np.arange(-20, 20, 10))
     ax.set_rlim(-25, 15)
@@ -327,9 +341,6 @@ def plot_sim_and_af(
     E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"]
 
-    steering_phi_rad = np.radians(steering_phi_deg)
-    phi_idx = np.argmin(np.abs(phi_rad - steering_phi_rad))  # Index of steering phi
-
     # Create a figure with polar subplots
     fig, axs = plt.subplots(
         nrows=len(xns),
@@ -352,33 +363,20 @@ def plot_sim_and_af(
             except (FileNotFoundError, KeyError):  # Could not load simulation data
                 pass
 
-            E_norm = extend_pattern_to_360_theta(nf2ff["E_norm"][freq_idx])
-            E_norm = E_norm[:, phi_idx]  # Select theta slice
-            theta_rad2 = np.concatenate((theta_rad, theta_rad + np.pi))
+            E_norm = nf2ff["E_norm"][freq_idx]
             Dmax = nf2ff["Dmax"]
-
-            plot_ff_polar(
-                E_norm=E_norm,
-                Dmax=Dmax,
-                theta_rad=theta_rad2,
-                label="OpenEMS Simulation",
-                ax=ax,
-            )
+            label = "OpenEMS Simulation"
+            plot_E_plane(E_norm=E_norm, Dmax=Dmax, label=label, ax=ax)
 
             ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
             excitations = ex_calc(steering_theta_deg, steering_phi_deg, "uniform")
             af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
             AF = af_calc(excitations)
 
-            E_norm_array = run_array_factor(E_theta_single, E_phi_single, AF)
-            E_norm_array = extend_pattern_to_360_theta(E_norm_array)
-            E_norm_array = E_norm_array[:, phi_idx]  # Select theta slice
-
-            Dmax_array = Dmax_single * (xn * yn)
-            E_norm_array_db = normalize_pattern(E_norm_array, Dmax_array)
-            ax.plot(
-                theta_rad2, E_norm_array_db, "g--", linewidth=1, label="Array Factor"
-            )
+            E_norm = run_array_factor(E_theta_single, E_phi_single, AF)
+            Dmax = Dmax_single * (xn * yn)
+            label = "Array Factor"
+            plot_E_plane(E_norm=E_norm, Dmax=Dmax, fmt="g--", label=label, ax=ax)
 
             c = 299_792_458
             lambda0 = c / freq
