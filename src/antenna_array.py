@@ -303,11 +303,9 @@ def postprocess(sim_path, nf2ff, f0, ports, outfile=None):
 
 
 if __name__ == "__main__":
-    # ants = [(16, 16)]
-    ants = [(1, 1), (2, 1), (4, 1)]
+    ants = [(1, 1), (4, 1), (16, 1), (4, 4), (16, 16)]
     d_ant = [60, 90]
-    # steering_thetas = [0, 15, 30, 45]
-    steering_thetas = [0]
+    steering_thetas = [0, 15, 30, 45]
     steering_phis = [0]
 
     # Run standard simulations without beam steering
@@ -316,9 +314,9 @@ if __name__ == "__main__":
             for steering_theta in steering_thetas:
                 for steering_phi in steering_phis:
                     outfile = f"ff_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
-                    if (sim_path / outfile).exists():
-                        print(f"Skipping {outfile}")
-                        continue
+                    # if (sim_path / outfile).exists():
+                    #     print(f"Skipping {outfile}")
+                    #     continue
                     sim_path, nf2ff, ports = simulate(
                         n_x=n_x,
                         n_y=n_y,
