@@ -1,10 +1,7 @@
 import subprocess as sp
-from functools import partial
 from pathlib import Path
 
 import h5py
-import jax
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import typer
@@ -38,73 +35,6 @@ def simulate(sim_path: str = "antenna_array.py"):
 		python3 /app/{sim_path}
 	"""
     sp.run(cmd, shell=True)
-
-
-def array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy):
-    # Convert input to numpy arrays if they aren't already
-    theta = np.asarray(theta)
-    phi = np.asarray(phi)
-
-    # Calculate wavelength and convert spacing to meters
-    c = 299792458  # Speed of light in m/s
-    wavelength = c / freq  # Wavelength in meters
-    dx_m = dx / 1000  # Convert from mm to meters
-    dy_m = dy / 1000  # Convert from mm to meters
-
-    # Wave number
-    k = 2 * np.pi / wavelength
-
-    # Create meshgrid for calculations
-    THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
-
-    # Calculate sin(theta) and sin/cos(phi) once
-    sin_theta = np.sin(THETA)
-    cos_phi = np.cos(PHI)
-    sin_phi = np.sin(PHI)
-
-    # Element positions (centered around origin)
-    x_positions = np.arange(xn) - (xn - 1) / 2
-    y_positions = np.arange(yn) - (yn - 1) / 2
-
-    # Reshape arrays for broadcasting
-    # Make sin_theta, cos_phi, sin_phi shape: (len(phi), len(theta), 1, 1)
-    sin_theta = sin_theta[:, :, None, None]
-    cos_phi = cos_phi[:, :, None, None]
-    sin_phi = sin_phi[:, :, None, None]
-
-    # Make x_positions shape: (1, 1, xn, 1) and y_positions shape: (1, 1, 1, yn)
-    x_positions = x_positions.reshape(1, 1, xn, 1)
-    y_positions = y_positions.reshape(1, 1, 1, yn)
-
-    # Calculate phase terms for all elements at once
-    psi_x = k * dx_m * sin_theta * cos_phi
-    psi_y = k * dy_m * sin_theta * sin_phi
-
-    # Compute the partial phase for all elements and all angles at once
-    partial_phase = x_positions * psi_x + y_positions * psi_y
-    return partial_phase
-
-
-@partial(jax.jit, static_argnums=(0, 1))
-def array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts):
-    # Make phase_shifts shape: (1, 1, xn, yn)
-    phase_shifts = phase_shifts.reshape(1, 1, xn, yn)
-
-    amplitudes = jnp.ones((xn, yn))
-
-    # Make amplitudes shape: (1, 1, xn, yn)
-    amplitudes = amplitudes.reshape(1, 1, xn, yn)
-
-    # Compute the total phase for all elements and all angles at once
-    total_phase = partial_phase - phase_shifts
-
-    # Sum the complex exponentials across all elements, including amplitude weights
-    AF = jnp.sum(amplitudes * jnp.exp(1j * total_phase), axis=(2, 3))
-
-    # Normalize by total sum of amplitudes
-    AF = AF / jnp.sum(amplitudes)
-
-    return jnp.abs(AF)
 
 
 def check_grating_lobes(freq, dx, dy, verbose=False):
@@ -177,8 +107,6 @@ def generate_beamforming(
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
     n_theta, n_phi = len(theta_rad), len(phi_rad)
 
-    partial_phase = array_factor_partial_phase(theta_rad, phi_rad, freq, xn, yn, dx, dy)
-
     print(f"Generating dataset with {n_samples} samples...")
 
     mode = "w" if overwrite else "x"
@@ -202,6 +130,11 @@ def generate_beamforming(
         theta_steerings = np.random.uniform(theta_start, theta_end, size=steering_size)
         phi_steerings = np.random.uniform(phi_start, phi_end, size=steering_size)
 
+        phase_shift_calc = analyze.PhaseShiftCalculator(xn, yn, dx, dy, freq)
+        af_calc = analyze.ArrayFactorCalculator(
+            theta_rad, phi_rad, xn, yn, dx, dy, freq
+        )
+
         for i in tqdm(range(n_samples)):
             theta_steering, phi_steering = theta_steerings[i], phi_steerings[i]
             # Set steering angles to NaN for unused beams
@@ -209,14 +142,11 @@ def generate_beamforming(
             phi_steering[n_beams[i] :] = np.nan
 
             # Generate phase shifts for each element
-            phase_shift_calc = analyze.PhaseShiftCalculator(xn, yn, dx, dy, freq)
             phase_shifts = phase_shift_calc(theta_steering, phi_steering)
             steering_info[i] = [theta_steering, phi_steering]
 
             # Calculate array factor for all phi and theta values at once
-            partial_phase = jnp.asarray(partial_phase)
-            phase_shifts = jnp.asarray(phase_shifts)
-            AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
+            AF = af_calc(np.exp(1j * phase_shifts))
 
             # Multiply by single element pattern to get total pattern
             # The shape of AF is (n_phi, n_theta) after the calculation
@@ -343,8 +273,8 @@ def ff_from_phase_shifts(
     single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
 
-    partial_phase = array_factor_partial_phase(theta_rad, phi_rad, freq, xn, yn, dx, dy)
-    AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
+    af_calc = analyze.ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
+    AF = af_calc(np.exp(1j * phase_shifts))
 
     # Multiply by single element pattern to get total pattern
     total_pattern = single_E_norm[0] * AF

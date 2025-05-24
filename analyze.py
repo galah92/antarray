@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Literal
 
 import h5py
+import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -63,6 +65,33 @@ def get_element_positions(
     return x_positions, y_positions
 
 
+@jax.jit
+def _af_calc(geo_exp, excitations):
+    """
+    Calculates the array factor given the element excitations.
+    Excitations should be an (xn, yn) complex NumPy array.
+    If excitations is None, all elements are assumed to have 1 + 0j excitation.
+    """
+    xn, yn = geo_exp.shape[:2]
+    if excitations is None:
+        excitations = np.ones((xn, yn), dtype=complex)
+
+    # The array factor sum term for each element is Excitation * exp(j * GeometricPhase)
+    # However, if the Excitation is defined as A_n * exp(j * alpha_n), and the array
+    # factor includes a *subtraction* of this phase, like A_n * exp(j * (G_n - alpha_n)),
+    # then this is equivalent to A_n * exp(j G_n) * exp(-j alpha_n) = Excitation.conjugate() * exp(j G_n).
+    weighted_exp_terms = excitations[:, :, None, None].conjugate() * geo_exp
+
+    # Sum contributions from all elements along the element dimensions (xn, yn).
+    # Shape: (len(theta), len(phi))
+    AF = np.sum(weighted_exp_terms, axis=(0, 1))
+
+    # Normalize by the total number of elements.
+    AF = AF / (xn * yn)
+
+    return AF
+
+
 class ArrayFactorCalculator:
     """
     Calculate the array factor for a given array configuration.
@@ -98,31 +127,11 @@ class ArrayFactorCalculator:
         geo_phase = x_geo_phase + y_geo_phase
         # Complex exponential of the geometric phase terms.
         self.geo_exp = np.exp(1j * geo_phase)
+        # Convert to JAX array for JIT compilation
+        self.geo_exp = jnp.asarray(self.geo_exp)
 
     def __call__(self, excitations: np.ndarray | None = None) -> np.ndarray:
-        """
-        Calculates the array factor given the element excitations.
-        Excitations should be an (xn, yn) complex NumPy array.
-        If excitations is None, all elements are assumed to have 1 + 0j excitation.
-        """
-        xn, yn = self.geo_exp.shape[:2]
-        if excitations is None:
-            excitations = np.ones((xn, yn), dtype=complex)
-
-        # The array factor sum term for each element is Excitation * exp(j * GeometricPhase)
-        # However, if the Excitation is defined as A_n * exp(j * alpha_n), and the array
-        # factor includes a *subtraction* of this phase, like A_n * exp(j * (G_n - alpha_n)),
-        # then this is equivalent to A_n * exp(j G_n) * exp(-j alpha_n) = Excitation.conjugate() * exp(j G_n).
-        weighted_exp_terms = excitations[:, :, None, None].conjugate() * self.geo_exp
-
-        # Sum contributions from all elements along the element dimensions (xn, yn).
-        # Shape: (len(theta), len(phi))
-        AF = np.sum(weighted_exp_terms, axis=(0, 1))
-
-        # Normalize by the total number of elements.
-        AF = AF / (xn * yn)
-
-        return AF
+        return _af_calc(self.geo_exp, excitations)
 
 
 class PhaseShiftCalculator:
