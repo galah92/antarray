@@ -170,24 +170,6 @@ class PhaseShiftCalculator:
         return phase_shifts
 
 
-def calc_phase_shifts(
-    theta_steering_deg: float = 0.0,
-    phi_steering_deg: float = 0.0,
-    xn: int = 16,
-    yn: int = 16,
-    dx_mm: float = 60,
-    dy_mm: float = 60,
-    freq: float = 2.45e9,
-) -> np.ndarray:
-    """
-    Calculate phase shifts for beam steering. This function creates a new
-    PhaseShiftCalculator for each call. For repeated calculations with the same
-    geometry, use PhaseShiftCalculator directly for better performance.
-    """
-    calculator = PhaseShiftCalculator(xn, yn, dx_mm, dy_mm, freq)
-    return calculator(theta_steering_deg, phi_steering_deg)
-
-
 @lru_cache(maxsize=1)
 def calc_taper(
     xn: int = 16,
