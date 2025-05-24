@@ -18,7 +18,7 @@ DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
 DEFAULT_DATASET_DIR = Path.cwd() / "dataset"
 DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_DATASET_NAME = "farfield_dataset.h5"
-DEFAULT_SINGLE_ANT_FILENAME = "farfield_1x1_60x60_2450_steer_t0_p0.h5"
+DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
 
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
@@ -68,9 +68,9 @@ def array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy):
 
     # Reshape arrays for broadcasting
     # Make sin_theta, cos_phi, sin_phi shape: (len(phi), len(theta), 1, 1)
-    sin_theta = sin_theta.T[:, :, None, None]
-    cos_phi = cos_phi.T[:, :, None, None]
-    sin_phi = sin_phi.T[:, :, None, None]
+    sin_theta = sin_theta[:, :, None, None]
+    cos_phi = cos_phi[:, :, None, None]
+    sin_phi = sin_phi[:, :, None, None]
 
     # Make x_positions shape: (1, 1, xn, 1) and y_positions shape: (1, 1, 1, yn)
     x_positions = x_positions.reshape(1, 1, xn, 1)
@@ -162,20 +162,6 @@ def generate_beamforming(
     overwrite: bool = False,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
-    """
-    Generate a dataset of farfield radiation patterns with individual element phase shifts.
-
-    Parameters:
-    -----------
-    n_samples : int
-        Number of samples to generate
-    theta_start, theta_end : float
-        Range of steering angles in theta (elevation) in degrees
-    phi_start, phi_end : float
-        Range of steering angles in phi (azimuth) in degrees
-    max_n_beams : int
-        Maximum number of beams to simulate
-    """
     # Fixed parameters for the 16x16 array
     xn = yn = 16  # 16x16 array
     dx = dy = 60  # 60x60 mm spacing
@@ -188,19 +174,19 @@ def generate_beamforming(
 
     single_E_norm = nf2ff["E_norm"][0]
     single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
-    theta, phi = nf2ff["theta"], nf2ff["phi"]
-    n_theta, n_phi = len(theta), len(phi)
+    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
+    n_theta, n_phi = len(theta_rad), len(phi_rad)
 
-    partial_phase = array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy)
+    partial_phase = array_factor_partial_phase(theta_rad, phi_rad, freq, xn, yn, dx, dy)
 
     print(f"Generating dataset with {n_samples} samples...")
 
     mode = "w" if overwrite else "x"
     with h5py.File(dataset_dir / dataset_name, mode) as h5f:
-        h5f.create_dataset("theta", data=theta)
-        h5f.create_dataset("phi", data=phi)
+        h5f.create_dataset("theta", data=theta_rad)
+        h5f.create_dataset("phi", data=phi_rad)
 
-        patterns = h5f.create_dataset("patterns", shape=(n_samples, n_phi, n_theta))
+        patterns = h5f.create_dataset("patterns", shape=(n_samples, n_theta, n_phi))
         labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
         steering_info = h5f.create_dataset(
             "steering_info", shape=(n_samples, 2, max_n_beams)
@@ -209,7 +195,6 @@ def generate_beamforming(
         # Choose a random number of beams to simulate for each sample
         n_beams_sq = np.square(np.arange(max_n_beams) + 1)
         n_beams_prob = n_beams_sq / np.sum(n_beams_sq)  # consider softmax instead
-        print(f"{n_beams_prob=}")
         n_beams = np.random.choice(max_n_beams, size=n_samples, p=n_beams_prob) + 1
 
         # Generate random steering angles within the specified range
@@ -224,15 +209,8 @@ def generate_beamforming(
             phi_steering[n_beams[i] :] = np.nan
 
             # Generate phase shifts for each element
-            phase_shifts = analyze.calc_phase_shifts(
-                xn,
-                yn,
-                theta_steering=theta_steering,
-                phi_steering=phi_steering,
-                freq=freq,
-                dx_mm=dx,
-                dy_mm=dy,
-            )
+            phase_shift_calc = analyze.PhaseShiftCalculator(xn, yn, dx, dy, freq)
+            phase_shifts = phase_shift_calc(theta_steering, phi_steering)
             steering_info[i] = [theta_steering, phi_steering]
 
             # Calculate array factor for all phi and theta values at once
@@ -242,7 +220,7 @@ def generate_beamforming(
 
             # Multiply by single element pattern to get total pattern
             # The shape of AF is (n_phi, n_theta) after the calculation
-            total_pattern = single_E_norm[0] * AF
+            total_pattern = single_E_norm * AF
 
             # Normalize
             total_pattern = total_pattern / np.max(np.abs(total_pattern))
@@ -363,10 +341,9 @@ def ff_from_phase_shifts(
 
     single_E_norm = nf2ff["E_norm"][0]
     single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
-    theta = nf2ff["theta"]
-    phi = nf2ff["phi"]
+    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
 
-    partial_phase = array_factor_partial_phase(theta, phi, freq, xn, yn, dx, dy)
+    partial_phase = array_factor_partial_phase(theta_rad, phi_rad, freq, xn, yn, dx, dy)
     AF = array_factor_partial_and_shift(xn, yn, partial_phase, phase_shifts)
 
     # Multiply by single element pattern to get total pattern
