@@ -52,7 +52,7 @@ class Hdf5Dataset(Dataset):
 
         self.padding_values = None
         if unet_depth:
-            H, W = (180, 180)
+            H, W = (90, 360)
             divisor = 2**unet_depth
             target_H = math.ceil(H / divisor) * divisor
             target_W = math.ceil(W / divisor) * divisor
