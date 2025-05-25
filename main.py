@@ -474,9 +474,17 @@ class UNet(nn.Module):
             in_ch = out_ch
             # Half the channels in the decoder up to a minimum of base_channels
             in_ch, out_ch = out_ch, max(out_ch // 2, base_channels)
-            # Set skip channels to 0 if no skip connection exists
-            # FIXME: a possible bug, skip_ch should be in_ch, not out_ch
-            skip_ch = out_ch if j < down_depth + 1 else 0  # +1 for inc
+            # FIXED: Calculate correct skip channels based on encoder structure
+            if j == 0:
+                # First upsampling connects to bottleneck output (no skip from encoder)
+                skip_ch = 0
+            elif j <= down_depth:
+                # Calculate channels at corresponding encoder level
+                encoder_level = down_depth - j
+                skip_ch = base_channels * (2**encoder_level)
+            else:
+                # No more skip connections available
+                skip_ch = 0
 
             self.ups.append(
                 UpBlock(
@@ -501,8 +509,15 @@ class UNet(nn.Module):
         x = self.bottleneck(x)
 
         for i, up in enumerate(self.ups):
-            # FIXME: (i + 2) is probably due to the bug above in skip_ch calculation
-            skip = skip_connections[-(i + 2)] if i < len(skip_connections) else None
+            # FIXED: Correct skip connection indexing
+            if i == 0:
+                # First upsampling has no skip connection
+                skip = None
+            elif i <= len(skip_connections) - 1:
+                # Use skip connections in reverse order (excluding bottleneck)
+                skip = skip_connections[-(i + 1)]
+            else:
+                skip = None
             x = up(x, skip)
 
         logits = self.final_conv(x)
@@ -1252,9 +1267,11 @@ def pred_model(
     rand_indices = np.random.choice(n_test, n_examples, replace=False)
     for idx in rand_indices:
         pred, target = all_preds[idx], all_targets[idx]
-        steering = steering[idx]
+        steering_sample = steering[idx]
         filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
-        compare_phase_shifts(pred, target, theta_rad, phi_rad, steering, filepath)
+        compare_phase_shifts(
+            pred, target, theta_rad, phi_rad, steering_sample, filepath
+        )
 
 
 def calc_metrics(exp_path: Path, preds, targets):
