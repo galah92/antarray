@@ -107,62 +107,6 @@ class Hdf5Dataset(Dataset):
         return pattern, phase_shift
 
 
-class ConvModel(nn.Module):
-    def __init__(
-        self,
-        in_channels=1,  # Number of input channels (1 for single radiation pattern)
-        in_shape=(180, 180),  # Shape of the input radiation pattern (n_phi, n_theta)
-        out_shape=(16, 16),  # Size of the output phase shift matrix (xn, yn)
-        # Number of channels in each convolutional layer
-        conv_channels=[32, 64, 128, 256, 512],
-        # Number of units in each fully connected layer
-        fc_units=[2048, 1024],
-        # Use global pooling instead ofusing max pooling to reduce feature size
-        use_global_pool=False,
-    ):
-        super().__init__()
-
-        self.use_global_pool = use_global_pool
-        self.out_shape = out_shape
-
-        self.conv = nn.Sequential()
-        ch = [in_channels] + conv_channels
-        for i in range(1, len(ch)):
-            self.conv += nn.Sequential(
-                nn.Conv2d(ch[i - 1], ch[i], kernel_size=3, stride=1, padding=1),
-                nn.BatchNorm2d(ch[i]),
-                nn.ReLU(),
-            )
-            if not self.use_global_pool:  # Use max pooling
-                self.conv += nn.Sequential(nn.MaxPool2d(2))
-
-        if self.use_global_pool:
-            # Reduces feature size while preserving information
-            self.conv.append(nn.AdaptiveAvgPool2d(1))
-            feature_size = 1
-        else:
-            # Calculate the size of the feature maps after encoding
-            # After n channels MaxPool2d with stride=2
-            feature_size = np.prod(np.array(in_shape) // (2 ** len(conv_channels)))
-
-        self.fc = nn.Sequential(nn.Flatten())
-        fcs = [conv_channels[-1] * feature_size] + fc_units
-        for i in range(1, len(fcs)):
-            self.fc += nn.Sequential(
-                nn.Linear(fcs[i - 1], fcs[i]),
-                nn.ReLU(),
-                nn.Dropout(0.5),
-            )
-
-        self.fc.append(nn.Linear(fcs[-1], np.prod(out_shape)))
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.fc(x)
-        x = x.view(-1, *self.out_shape)
-        return x
-
-
 class SEBlock(nn.Module):
     """Squeeze-and-Excitation Block."""
 
@@ -285,72 +229,6 @@ class ResidualBlock(nn.Module):
         return x
 
 
-class AttentionGate(nn.Module):
-    def __init__(self, F_g, F_l, F_int):
-        super().__init__()
-        self.W_g = nn.Sequential(
-            nn.Conv2d(F_g, F_int, kernel_size=1),
-            nn.BatchNorm2d(F_int),
-        )
-        self.W_x = nn.Sequential(
-            nn.Conv2d(F_l, F_int, kernel_size=1),
-            nn.BatchNorm2d(F_int),
-        )
-        self.psi = nn.Sequential(
-            nn.Conv2d(F_int, 1, kernel_size=1),
-            nn.BatchNorm2d(1),
-            nn.Sigmoid(),
-        )
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, g, x):
-        """
-        Args:
-            g: Gating signal (e.g., from upsampled decoder) [B, F_g, H, W]
-            x: Input signal (e.g., from encoder skip connection) [B, F_l, H', W']
-               where potentially H' >= H and W' >= W
-        Returns:
-            Attention map psi [B, 1, H, W]
-        """
-        g1 = self.W_g(g)  # Shape: [B, F_int, H, W]
-        x1 = self.W_x(x)  # Shape: [B, F_int, H', W']
-
-        # Crop x1 spatially to match g1
-        # Calculate padding differences (should be non-negative)
-        diff_y = x1.size()[2] - g1.size()[2]
-        diff_x = x1.size()[3] - g1.size()[3]
-
-        if diff_y < 0 or diff_x < 0:
-            # This implies g is spatially larger than x, which is unusual for this setup.
-            # Could happen with odd input sizes and specific ConvTranspose settings.
-            # Option 1: Pad g1 (less common)
-            # Option 2: Resize g1 down to x1 using interpolation (potential info loss)
-            # Option 3: Raise error, indicating an issue in network design / layer dims
-            # Let's try resizing g1 down as a fallback, but print a warning.
-            print(f"Warning: AttentionGate resizing g1 {g1.shape} to x1 {x1.shape}")
-            g1 = F.interpolate(
-                g1, size=x1.size()[2:], mode="bilinear", align_corners=False
-            )
-            # Set diffs to 0 as they are now aligned
-            diff_y, diff_x = 0, 0
-            # If using this fallback, x1 is not cropped below.
-            x1_cropped = x1
-        else:
-            # Standard case: Crop x1
-            x1_cropped = x1[
-                :,
-                :,
-                diff_y // 2 : x1.size()[2] - (diff_y - diff_y // 2),
-                diff_x // 2 : x1.size()[3] - (diff_x - diff_x // 2),
-            ]
-
-        # Add aligned tensors
-        psi = self.relu(g1 + x1_cropped)
-        psi = self.psi(psi)  # Calculate attention map [B, 1, H, W]
-
-        return psi  # Return only the attention map
-
-
 class ConvBlock(nn.Module):
     """A block consisting of two convolutions with BN and ReLU, optionally followed by attention."""
 
@@ -395,146 +273,6 @@ class DownBlock(nn.Module):
         return self.pool_conv(x)
 
 
-class UpBlock(nn.Module):
-    """Upscaling then ConvBlock, handles optional skip connection."""
-
-    def __init__(
-        self,
-        in_channels,
-        skip_channels,  # 0 if no skip
-        out_channels,
-        use_attention_gate=False,
-        attention_type="none",
-    ):
-        super().__init__()
-        upsampled_channels = in_channels
-        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-
-        self.att_gate = None
-        if use_attention_gate and skip_channels > 0:
-            F_g, F_l, F_int = upsampled_channels, skip_channels, skip_channels // 2
-            self.att_gate = AttentionGate(F_g=F_g, F_l=F_l, F_int=F_int)
-
-        concat_in_channels = upsampled_channels + skip_channels
-        self.conv = ConvBlock(concat_in_channels, out_channels, attention_type)
-
-    def forward(self, x, x_skip=None):
-        x = self.up(x)
-
-        if x_skip is not None:
-            if x.size()[2:] != x_skip.size()[2:]:
-                print(f"Align skip connection {x_skip.shape} to upsampled {x.shape}")
-                x_skip = F.interpolate(x_skip, size=x.size()[2:], mode="bilinear")
-
-            if self.att_gate is not None:
-                psi = self.att_gate(g=x, x=x_skip)
-                x_skip = x_skip * psi
-
-            x = torch.cat([x, x_skip], dim=1)
-
-        return self.conv(x)
-
-
-class UNet(nn.Module):
-    def __init__(
-        self,
-        in_channels=1,
-        out_channels=1,
-        base_channels=32,
-        down_depth=4,
-        bottleneck_depth=1,
-        bottleneck_type=ConvBlock,
-        up_depth=4,
-        attention_type="none",
-        use_attention_gate=False,
-        out_shape=(16, 16),
-    ):
-        super().__init__()
-        if down_depth < 1 or up_depth < 1:
-            raise ValueError("Depths must be at least 1.")
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-
-        in_ch, out_ch = in_channels, base_channels
-        self.inc = ConvBlock(in_ch, out_ch, attention_type)
-
-        self.downs = nn.ModuleList()
-        for i in range(down_depth):
-            in_ch, out_ch = out_ch, out_ch * 2  # Double the channels
-            self.downs.append(DownBlock(in_ch, out_ch, attention_type))
-
-        self.bottleneck = nn.Sequential()
-        for i in range(bottleneck_depth):
-            in_ch, out_ch = out_ch, out_ch  # Same channels in bottleneck
-            block = bottleneck_type(in_ch, out_ch, attention_type=attention_type)
-            self.bottleneck.append(block)
-
-        self.ups = nn.ModuleList()
-        for j in range(up_depth):
-            in_ch = out_ch
-            # Half the channels in the decoder up to a minimum of base_channels
-            in_ch, out_ch = out_ch, max(out_ch // 2, base_channels)
-            # FIXED: Calculate correct skip channels based on encoder structure
-            if j == 0:
-                # First upsampling connects to bottleneck output (no skip from encoder)
-                skip_ch = 0
-            elif j <= down_depth:
-                # Calculate channels at corresponding encoder level
-                encoder_level = down_depth - j
-                skip_ch = base_channels * (2**encoder_level)
-            else:
-                # No more skip connections available
-                skip_ch = 0
-
-            self.ups.append(
-                UpBlock(
-                    in_channels=in_ch,
-                    skip_channels=skip_ch,
-                    out_channels=out_ch,
-                    use_attention_gate=use_attention_gate,
-                    attention_type=attention_type if not use_attention_gate else "none",
-                )
-            )
-
-        self.final_conv = final_block(out_ch, out_channels, out_shape)
-
-    def forward(self, x):
-        x = self.inc(x)
-        skip_connections = [x]
-
-        for down in self.downs:
-            x = down(x)
-            skip_connections.append(x)
-
-        x = self.bottleneck(x)
-
-        for i, up in enumerate(self.ups):
-            # FIXED: Correct skip connection indexing
-            if i == 0:
-                # First upsampling has no skip connection
-                skip = None
-            elif i <= len(skip_connections) - 1:
-                # Use skip connections in reverse order (excluding bottleneck)
-                skip = skip_connections[-(i + 1)]
-            else:
-                skip = None
-            x = up(x, skip)
-
-        logits = self.final_conv(x)
-        if self.out_channels == 1:
-            logits = logits.squeeze(1)
-
-        return logits
-
-
-def final_block(in_channels, out_channels, out_shape):
-    """Final output block for the model."""
-    return nn.Sequential(
-        nn.AdaptiveAvgPool2d(out_shape),
-        nn.Conv2d(in_channels, out_channels, kernel_size=1),
-    )
-
-
 class DecoderBlock(nn.Module):
     """Upsamples then applies a ConvBlock."""
 
@@ -547,6 +285,14 @@ class DecoderBlock(nn.Module):
         x = self.up(x)
         x = self.conv(x)
         return x
+
+
+def final_block(in_channels, out_channels, out_shape):
+    """Final output block for the model."""
+    return nn.Sequential(
+        nn.AdaptiveAvgPool2d(out_shape),
+        nn.Conv2d(in_channels, out_channels, kernel_size=1),
+    )
 
 
 class ConvAutoencoder(nn.Module):
@@ -614,52 +360,6 @@ class ConvAutoencoder(nn.Module):
             logits = logits.squeeze(1)
 
         return logits
-
-
-class ResNet(nn.Module):
-    def __init__(self, block, layers, out_shape=(16, 16)):
-        super().__init__()
-        self.out_shape = out_shape
-        self.in_channels = 64
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.layer1 = self._make_layer(block, 64, layers[0], stride=1)
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512, np.prod(out_shape))
-
-    def _make_layer(self, block, out_channels, num_blocks, stride):
-        strides = [stride] + [1] * (num_blocks - 1)
-        layers = []
-        for stride in strides:
-            layers.append(block(self.in_channels, out_channels, stride))
-            self.in_channels = out_channels
-        return nn.Sequential(*layers)
-
-    def forward(self, x):
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        out = self.avg_pool(out)
-        out = out.view(out.size(0), -1)
-        out = self.fc(out)
-        out = out.view(-1, *self.out_shape)
-        return out
-
-
-def resnet18(out_shape=(16, 16)):
-    return ResNet(ResidualBlock, [2, 2, 2, 2], out_shape)
-
-
-def resnet34(out_shape=(16, 16)):
-    return ResNet(ResidualBlock, [3, 4, 6, 3], out_shape)
 
 
 def circular_mse_loss_torch(pred: torch.Tensor, target: torch.Tensor):
@@ -1326,25 +1026,9 @@ def model_type_to_class(
     up_depth=3,
     bottleneck_depth=1,
     attention_type="none",
-    use_attention_gate=False,
 ):
     print(locals())
-    if model_type == "cnn":
-        return ConvModel(in_channels=in_channels)
-    elif model_type == "resnet":
-        return resnet18()
-    elif model_type == "unet":
-        return UNet(
-            in_channels=in_channels,
-            base_channels=base_channels,
-            down_depth=down_depth,
-            up_depth=up_depth,
-            bottleneck_depth=bottleneck_depth,
-            attention_type=attention_type,
-            use_attention_gate=use_attention_gate,
-            bottleneck_type=ResidualBlock,
-        )
-    elif model_type == "cae":
+    if model_type == "cae":
         return ConvAutoencoder(
             in_channels=in_channels,
             base_channels=base_channels,
