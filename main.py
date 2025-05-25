@@ -1,6 +1,5 @@
 import json
 import math
-import pickle
 import sys
 import time
 from pathlib import Path
@@ -14,8 +13,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 import typer
 from matplotlib.ticker import FormatStrFormatter
-from sklearn import neighbors
-from sklearn.model_selection import train_test_split
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader, Dataset
 
@@ -1436,108 +1433,6 @@ def plot_training(
     save_path = exp_path / "training_history.png"
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
     print(f"Training history plot saved to {save_path}")
-
-
-def index_from_beamforming_angles(steering_info, theta: int, phi: int) -> int:
-    """
-    Find the index of the given steering angles: https://stackoverflow.com/a/25823710/5151909
-    """
-    idx = (steering_info == (theta, phi)).all(axis=1).nonzero()[0].min()
-    return idx
-
-
-@app.command()
-def run_knn(
-    experiment: str,
-    overwrite: bool = False,
-    dataset_path: Path = DEFAULT_DATASET_PATH,
-    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
-    n_neighbors: int = 5,
-):
-    exp_path = get_experiment_path(experiment, exps_path, overwrite)
-
-    with h5py.File(dataset_path, "r") as h5f:
-        patterns, excitations = h5f["patterns"][:], h5f["excitations"][:]
-        labels = np.angle(excitations)
-        theta_rad, phi_rad = h5f["theta_rad"][:], h5f["phi_rad"][:]
-        steering = h5f["steering"][:]
-
-    # Flatten the features
-    patterns = patterns.reshape(patterns.shape[0], -1)
-    labels = labels.reshape(labels.shape[0], -1)
-
-    patterns[patterns < 0] = 0  # Set negative values to 0
-    patterns = patterns / 30  # Normalize
-
-    # Print dataset info
-    print(f"Dataset loaded: {len(patterns)} samples")
-    print(f"Pattern shape: {patterns.shape}")
-    print(f"Labels shape: {labels.shape}")
-
-    # Split data into train, validation, and test sets
-    X_train_val, X_test, y_train_val, y_test, idx_train_val, idx_test = (
-        train_test_split(
-            patterns,
-            labels,
-            np.arange(labels.shape[0]),
-            test_size=0.2,
-            random_state=42,
-        )
-    )
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train_val, y_train_val, test_size=0.25, random_state=42
-    )
-
-    print(f"Training set: {len(X_train)} samples")
-    print(f"Validation set: {len(X_val)} samples")
-    print(f"Test set: {len(X_test)} samples")
-
-    knn = neighbors.KNeighborsRegressor(n_neighbors=n_neighbors, weights="distance")
-    y_pred = knn.fit(X_train, y_train).predict(X_test)
-
-    loss = circular_mse_loss_np(y_pred, y_test)
-    print(f"Val loss: {loss:.4f}")
-
-    # save y_pred to h5 file
-    with h5py.File(exp_path / "knn_pred.h5", "w") as h5f:
-        h5f.create_dataset("y_pred", data=y_pred)
-        h5f.create_dataset("y_test", data=y_test)
-        h5f.create_dataset("loss", data=loss)
-        h5f.create_dataset("steering", data=steering[idx_test])
-        h5f.create_dataset("theta", data=theta_rad)
-        h5f.create_dataset("phi", data=phi_rad)
-
-    mode = "wb" if overwrite else "xb"
-    with (exp_path / "knn_model.pkl").open(mode) as f:
-        pickle.dump(knn, f)
-
-
-@app.command()
-def pred_knn(
-    experiment: str,
-    idx: int | None = None,
-    exps_path: Path = DEFAULT_EXPERIMENTS_PATH,
-):
-    exp_path = exps_path / experiment
-
-    with h5py.File(exp_path / "knn_pred.h5", "r") as h5f:
-        y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
-        y_test = h5f["y_test"][:].reshape(-1, 16, 16)
-        steering = h5f["steering"][:]
-        theta_rad, phi_rad = h5f["theta_rad"][:], h5f["phi_rad"][:]
-
-    plot_steer_loss(exp_path, y_pred, y_test, steering)
-
-    if idx is None:
-        idx = np.random.choice(len(y_pred), 1)[0]
-
-    pred, test, steering = y_pred[idx], y_test[idx], steering[idx]
-    filepath = exp_path / f"knn_pred_example_{idx}.png"
-    compare_phase_shifts(pred, test, theta_rad, phi_rad, steering, filepath)
-
-
-def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray):
-    return np.mean(1 - np.cos(inputs - targets))
 
 
 def circular_mse_loss_np(pred: np.ndarray, target: np.ndarray, axis=None):
