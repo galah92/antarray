@@ -176,7 +176,7 @@ def plot_dataset_phase_shifts(
         cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label("Degrees")
         cbar.set_ticks(np.linspace(0, 1, 7))
-        cbar.set_tickexcitations(np.linspace(-180, 180, 7, dtype=np.int32))
+        cbar.set_ticklabels(np.linspace(-180, 180, 7, dtype=np.int32))
 
         im = np.zeros_like(np.angle(excitations[0]))
         cmap = "twilight_shifted"  # Cyclic colormap for phase values
@@ -255,8 +255,6 @@ def ff_from_phase_shifts(
     dx = dy = 60  # 60x60 mm spacing
     freq_hz = 2.45e9  # 2.45 GHz
 
-    check_grating_lobes(freq_hz, dx, dy)
-
     nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
 
     freq_idx = 0  # index of the frequency to plot
@@ -267,7 +265,9 @@ def ff_from_phase_shifts(
 
     ex_calc = analyze.ExcitationCalculator(xn, yn, dx, dy, freq_hz)
     af_calc = analyze.ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq_hz)
-    AF = af_calc(excitations=ex_calc(phase_shifts))
+
+    excitations = ex_calc(phase_shifts)
+    AF = af_calc(excitations=excitations)
     E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
     E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
 
