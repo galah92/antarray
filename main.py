@@ -75,7 +75,10 @@ class Hdf5Dataset(Dataset):
     def __getitem__(self, idx):
         actual_idx = self.indices[idx]
         h5f = self.get_dataset()
+
         pattern = torch.from_numpy(h5f["patterns"][actual_idx])
+        pattern = pattern[:90]  # Keep the radiation in the positive hemisphere
+
         excitation = torch.from_numpy(h5f["excitations"][actual_idx])
         phase_shift = torch.angle(excitation)
 

@@ -115,7 +115,7 @@ def generate_beamforming(
             "patterns", shape=(n_samples, theta_rad.size, phi_rad.size)
         )
         excitations_ds = h5f.create_dataset(
-            "excitations", shape=(n_samples, xn, yn), dtype=np.complex128
+            "excitations", shape=(n_samples, xn, yn), dtype=np.complex64
         )
         steering_ds = h5f.create_dataset("steering", shape=(n_samples, 2, max_n_beams))
 
@@ -141,7 +141,7 @@ def generate_beamforming(
             phi_steering[n_beams[i] :] = np.nan
 
             # Calculate the excitations for the current steering angles using superposition
-            excitations = np.zeros((xn, yn), dtype=np.complex128)
+            excitations = np.zeros((xn, yn), dtype=excitations_ds.dtype)
             for i_beam in range(n_beams[i]):
                 excitations += ex_calc(theta_steering[i_beam], phi_steering[i_beam])
 
