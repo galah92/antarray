@@ -107,7 +107,7 @@ def generate_beamforming(
     Dmax_single = nf2ff["Dmax"][freq_idx]
     Dmax_array = Dmax_single * (xn * yn)
 
-    print(f"Generating dataset with {n_samples} samples...")
+    print(f"Generating dataset with {n_samples} samples")
 
     mode = "w" if overwrite else "x"
     with h5py.File(dataset_dir / dataset_name, mode) as h5f:
@@ -120,9 +120,7 @@ def generate_beamforming(
         excitations_ds = h5f.create_dataset(
             "excitations", shape=(n_samples, xn, yn), dtype=np.complex128
         )
-        steering_info_ds = h5f.create_dataset(
-            "steering_info", shape=(n_samples, 2, max_n_beams)
-        )
+        steering_ds = h5f.create_dataset("steering", shape=(n_samples, 2, max_n_beams))
 
         # Choose a random number of beams to simulate for each sample
         n_beams_sq = np.square(np.arange(max_n_beams) + 1)
@@ -152,7 +150,7 @@ def generate_beamforming(
 
             patterns_ds[i] = E_norm
             excitations_ds[i] = excitations
-            steering_info_ds[i] = [theta_steering, phi_steering]
+            steering_ds[i] = [theta_steering, phi_steering]
 
 
 @app.command()
@@ -163,7 +161,7 @@ def plot_dataset_phase_shifts(
 ):
     with h5py.File(dataset_dir / dataset_name, "r") as h5f:
         excitations = h5f["excitations"]
-        steering_info = h5f["steering_info"]
+        steering = h5f["steering"]
 
         fig, ax = plt.subplots()
         fig.set_tight_layout(True)
@@ -193,7 +191,7 @@ def plot_dataset_phase_shifts(
             im.set_data(np.rad2deg(phase_shifts_clipped))
 
             # Update the title with steering info
-            theta_s, phi_s = steering_info[j]
+            theta_s, phi_s = steering[j]
             text = f"Phase Shifts (θ={theta_s:03.1f}°, φ={phi_s:03.1f}°) {i:04d}"
             title.set_text(text)
 
@@ -221,7 +219,7 @@ def plot_sample(
     with h5py.File(dataset_path, "r") as h5f:
         pattern = h5f["patterns"][idx]
         phase_shifts = np.angle(h5f["excitations"][idx])
-        steering_info = h5f["steering_info"][idx]
+        steering = h5f["steering"][idx]
         theta, phi = h5f["theta"][:], h5f["phi"][:]
 
     fig, axs = plt.subplots(1, 3, figsize=[18, 6])
@@ -236,7 +234,7 @@ def plot_sample(
     axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
     analyze.plot_ff_3d(theta, phi, pattern, ax=axs[2])
 
-    steering_str = steering_repr(steering_info)
+    steering_str = steering_repr(steering)
     phase_shift_title = f"Phase Shifts ({steering_str})"
     fig.suptitle(phase_shift_title)
     fig.set_tight_layout(True)
