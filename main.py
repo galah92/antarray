@@ -1109,7 +1109,8 @@ def calc_normalization_stats(dataset_path: Path, train_indices: list | np.ndarra
         pattern_count = np.prod(patterns.shape)
 
         for idx in train_indices:
-            pattern = torch.from_numpy(patterns[idx]).to(torch.float64)
+            pattern = torch.from_numpy(patterns[idx])
+            pattern = pattern[:90]
             pattern = pattern.clamp(min=0)  # Set negative values to 0
             pattern_sum += torch.sum(pattern)
             pattern_sum_sq += torch.sum(pattern**2)
@@ -1135,7 +1136,8 @@ def calc_normalization_stats(dataset_path: Path, train_indices: list | np.ndarra
         patterns = h5f["patterns"]
 
         for idx in train_indices:
-            pattern = torch.from_numpy(patterns[idx]).float()
+            pattern = torch.from_numpy(patterns[idx])
+            pattern = pattern[:90]
             pattern = pattern.clamp(min=0)  # Set negative values to 0
 
             # Standardize original pattern using stats from Pass 1
