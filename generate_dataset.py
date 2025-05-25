@@ -146,7 +146,7 @@ def generate_beamforming(
             phi_steering[n_beams[i] :] = np.nan
 
             excitations = ex_calc(theta_steering, phi_steering)
-            AF = af_calc(excitations)
+            AF = af_calc(excitations=excitations)
             E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
             E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
 
@@ -258,28 +258,21 @@ def ff_from_phase_shifts(
 
     check_grating_lobes(freq_hz, dx, dy)
 
-    nf2ff_path = sim_dir_path / single_antenna_filename
-    nf2ff = read_nf2ff(nf2ff_path)
+    nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
 
-    single_E_norm = nf2ff["E_norm"][0]
-    single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
+    freq_idx = 0  # index of the frequency to plot
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
+    E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
+    Dmax_single = nf2ff["Dmax"][freq_idx]
+    Dmax_array = Dmax_single * (xn * yn)
 
+    ex_calc = analyze.ExcitationCalculator(xn, yn, dx, dy, freq_hz)
     af_calc = analyze.ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq_hz)
-    AF = af_calc(np.exp(1j * phase_shifts))
+    AF = af_calc(excitations=ex_calc(phase_shifts))
+    E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
+    E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
 
-    # Multiply by single element pattern to get total pattern
-    total_pattern = single_E_norm[0] * AF
-
-    # Normalize
-    total_pattern = total_pattern / np.max(np.abs(total_pattern))
-
-    # Convert to dB (normalized directivity)
-    array_gain = single_Dmax * (xn * yn)  # Theoretical array gain
-    array_gain_db = 10.0 * np.log10(array_gain)
-    total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + array_gain_db
-
-    return total_pattern_db
+    return E_norm
 
 
 def steering_repr(steering_angles: np.ndarray):

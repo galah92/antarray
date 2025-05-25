@@ -389,7 +389,7 @@ def plot_sim_and_af(
             ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
             excitations = ex_calc(steering_theta_deg, steering_phi_deg, "uniform")
             af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
-            AF = af_calc(excitations)
+            AF = af_calc(excitations=excitations)
 
             E_norm = run_array_factor(E_theta_single, E_phi_single, AF)
             Dmax = Dmax_single * (xn * yn)
