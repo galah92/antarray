@@ -105,7 +105,7 @@ def generate_beamforming(
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
     E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"][freq_idx]
-    n_theta, n_phi = theta_rad.size, phi_rad.size
+    Dmax_array = Dmax_single * (xn * yn)
 
     print(f"Generating dataset with {n_samples} samples...")
 
@@ -114,9 +114,13 @@ def generate_beamforming(
         h5f.create_dataset("theta", data=theta_rad)
         h5f.create_dataset("phi", data=phi_rad)
 
-        patterns = h5f.create_dataset("patterns", shape=(n_samples, n_theta, n_phi))
-        labels = h5f.create_dataset("labels", shape=(n_samples, xn, yn))
-        steering_info = h5f.create_dataset(
+        patterns_ds = h5f.create_dataset(
+            "patterns", shape=(n_samples, theta_rad.size, phi_rad.size)
+        )
+        excitations_ds = h5f.create_dataset(
+            "excitations", shape=(n_samples, xn, yn), dtype=np.complex128
+        )
+        steering_info_ds = h5f.create_dataset(
             "steering_info", shape=(n_samples, 2, max_n_beams)
         )
 
@@ -130,7 +134,7 @@ def generate_beamforming(
         theta_steerings = np.random.uniform(theta_start, theta_end, size=steering_size)
         phi_steerings = np.random.uniform(phi_start, phi_end, size=steering_size)
 
-        phase_shift_calc = analyze.PhaseShiftCalculator(xn, yn, dx, dy, freq_hz)
+        ex_calc = analyze.ExcitationCalculator(xn, yn, dx, dy, freq_hz)
         af_calc = analyze.ArrayFactorCalculator(
             theta_rad, phi_rad, xn, yn, dx, dy, freq_hz
         )
@@ -141,15 +145,14 @@ def generate_beamforming(
             theta_steering[n_beams[i] :] = np.nan
             phi_steering[n_beams[i] :] = np.nan
 
-            phase_shifts = phase_shift_calc(theta_steering, phi_steering)
-            AF = af_calc(np.exp(1j * phase_shifts))
+            excitations = ex_calc(theta_steering, phi_steering)
+            AF = af_calc(excitations)
             E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
-            Dmax_array = Dmax_single * (xn * yn)
             E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
 
-            patterns[i] = E_norm
-            labels[i] = phase_shifts
-            steering_info[i] = [theta_steering, phi_steering]
+            patterns_ds[i] = E_norm
+            excitations_ds[i] = excitations
+            steering_info_ds[i] = [theta_steering, phi_steering]
 
 
 @app.command()
@@ -159,7 +162,7 @@ def plot_dataset_phase_shifts(
     gif_name: Path = "beamforming_phase_shifts.gif",
 ):
     with h5py.File(dataset_dir / dataset_name, "r") as h5f:
-        labels = h5f["labels"]
+        excitations = h5f["excitations"]
         steering_info = h5f["steering_info"]
 
         fig, ax = plt.subplots()
@@ -174,9 +177,9 @@ def plot_dataset_phase_shifts(
         cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label("Degrees")
         cbar.set_ticks(np.linspace(0, 1, 7))
-        cbar.set_ticklabels(np.linspace(-180, 180, 7, dtype=np.int32))
+        cbar.set_tickexcitations(np.linspace(-180, 180, 7, dtype=np.int32))
 
-        im = np.zeros_like(labels[0])
+        im = np.zeros_like(np.angle(excitations[0]))
         cmap = "twilight_shifted"  # Cyclic colormap for phase values
         im = ax.imshow(im, cmap=cmap, origin="lower", vmin=-180, vmax=180)
 
@@ -185,7 +188,8 @@ def plot_dataset_phase_shifts(
             j = i * 111
 
             # Update the data for the plot
-            phase_shifts_clipped = (labels[j] + np.pi) % (2 * np.pi) - np.pi
+            phase_shifts = np.angle(excitations[j])
+            phase_shifts_clipped = (phase_shifts + np.pi) % (2 * np.pi) - np.pi
             im.set_data(np.rad2deg(phase_shifts_clipped))
 
             # Update the title with steering info
@@ -195,7 +199,7 @@ def plot_dataset_phase_shifts(
 
             return im, title
 
-        frames = len(labels)
+        frames = len(excitations)
         frames = 111 * 2
         ani = animation.FuncAnimation(fig, animate, frames=frames, blit=True)
 
@@ -216,7 +220,7 @@ def plot_sample(
     dataset_path = dataset_dir / dataset_name
     with h5py.File(dataset_path, "r") as h5f:
         pattern = h5f["patterns"][idx]
-        phase_shifts = h5f["labels"][idx]
+        phase_shifts = np.angle(h5f["excitations"][idx])
         steering_info = h5f["steering_info"][idx]
         theta, phi = h5f["theta"][:], h5f["phi"][:]
 
