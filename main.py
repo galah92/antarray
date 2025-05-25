@@ -76,7 +76,8 @@ class Hdf5Dataset(Dataset):
         actual_idx = self.indices[idx]
         h5f = self.get_dataset()
         pattern = torch.from_numpy(h5f["patterns"][actual_idx])
-        phase_shift = torch.from_numpy(h5f["labels"][actual_idx])
+        excitation = torch.from_numpy(h5f["excitations"][actual_idx])
+        phase_shift = torch.angle(excitation)
 
         pattern = pattern.unsqueeze(0)  # Add channel dimension for CNN
         pattern = pattern.clamp(min=0)  # Set negative values to 0
@@ -1095,6 +1096,8 @@ def calc_normalization_stats(dataset_path: Path, train_indices: list | np.ndarra
             print(stats)
             return stats
 
+    print("Calculating normalization stats for patterns and FFT")
+
     pattern_sum = torch.tensor(0.0, dtype=torch.float64)
     pattern_sum_sq = torch.tensor(0.0, dtype=torch.float64)
 
@@ -1208,10 +1211,10 @@ def pred_model(
     test_indices = test_loader.dataset.indices
 
     with h5py.File(dataset_path, "r") as h5f:
-        theta = h5f["theta"][:]
-        phi = h5f["phi"][:]
-        steering_info = h5f["steering_info"][:]
-        steering_info = steering_info[test_indices]
+        theta_rad = h5f["theta_rad"][:]
+        phi_rad = h5f["phi_rad"][:]
+        steering = h5f["steering"][:]
+        steering = steering[test_indices]
 
     checkpoint = torch.load(exps_path / experiment / DEFAULT_MODEL_NAME)
     model_type = checkpoint["model_type"]
@@ -1242,14 +1245,14 @@ def pred_model(
             all_targets[j : j + k] = targets.numpy()
 
     calc_metrics(exp_path, all_preds, all_targets)
-    plot_steer_loss(exp_path, all_preds, all_targets, steering_info)
+    plot_steer_loss(exp_path, all_preds, all_targets, steering)
 
     rand_indices = np.random.choice(n_test, n_examples, replace=False)
     for idx in rand_indices:
         pred, target = all_preds[idx], all_targets[idx]
-        steering = steering_info[idx]
+        steering = steering[idx]
         filepath = exp_path / f"prediction_example_{test_indices[idx]}.png"
-        compare_phase_shifts(pred, target, theta, phi, steering, filepath)
+        compare_phase_shifts(pred, target, theta_rad, phi_rad, steering, filepath)
 
 
 def calc_metrics(exp_path: Path, preds, targets):
@@ -1449,9 +1452,10 @@ def run_knn(
     exp_path = get_experiment_path(experiment, exps_path, overwrite)
 
     with h5py.File(dataset_path, "r") as h5f:
-        patterns, labels = h5f["patterns"][:], h5f["labels"][:]
-        theta, phi = h5f["theta"][:], h5f["phi"][:]
-        steering_info = h5f["steering_info"][:]
+        patterns, excitations = h5f["patterns"][:], h5f["excitations"][:]
+        labels = np.angle(excitations)
+        theta_rad, phi_rad = h5f["theta_rad"][:], h5f["phi_rad"][:]
+        steering = h5f["steering"][:]
 
     # Flatten the features
     patterns = patterns.reshape(patterns.shape[0], -1)
@@ -1494,9 +1498,9 @@ def run_knn(
         h5f.create_dataset("y_pred", data=y_pred)
         h5f.create_dataset("y_test", data=y_test)
         h5f.create_dataset("loss", data=loss)
-        h5f.create_dataset("steering_info", data=steering_info[idx_test])
-        h5f.create_dataset("theta", data=theta)
-        h5f.create_dataset("phi", data=phi)
+        h5f.create_dataset("steering", data=steering[idx_test])
+        h5f.create_dataset("theta", data=theta_rad)
+        h5f.create_dataset("phi", data=phi_rad)
 
     mode = "wb" if overwrite else "xb"
     with (exp_path / "knn_model.pkl").open(mode) as f:
@@ -1514,17 +1518,17 @@ def pred_knn(
     with h5py.File(exp_path / "knn_pred.h5", "r") as h5f:
         y_pred = h5f["y_pred"][:].reshape(-1, 16, 16)
         y_test = h5f["y_test"][:].reshape(-1, 16, 16)
-        steering_info = h5f["steering_info"][:]
-        theta, phi = h5f["theta"][:], h5f["phi"][:]
+        steering = h5f["steering"][:]
+        theta_rad, phi_rad = h5f["theta_rad"][:], h5f["phi_rad"][:]
 
-    plot_steer_loss(exp_path, y_pred, y_test, steering_info)
+    plot_steer_loss(exp_path, y_pred, y_test, steering)
 
     if idx is None:
         idx = np.random.choice(len(y_pred), 1)[0]
 
-    pred, test, steering_info = y_pred[idx], y_test[idx], steering_info[idx]
+    pred, test, steering = y_pred[idx], y_test[idx], steering[idx]
     filepath = exp_path / f"knn_pred_example_{idx}.png"
-    compare_phase_shifts(pred, test, theta, phi, steering_info, filepath)
+    compare_phase_shifts(pred, test, theta_rad, phi_rad, steering, filepath)
 
 
 def cosine_angular_loss_np(inputs: np.ndarray, targets: np.ndarray):
