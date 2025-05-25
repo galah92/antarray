@@ -239,6 +239,15 @@ def run_array_factor(
     return E_norm_array
 
 
+def normalize_pattern(pattern: np.ndarray, Dmax: float) -> np.ndarray:
+    """
+    Normalize the radiation pattern to dBi.
+    """
+    pattern = pattern / np.max(np.abs(pattern))
+    pattern = 20 * np.log10(np.abs(pattern)) + 10.0 * np.log10(Dmax)
+    return pattern
+
+
 def extract_E_plane_cut(pattern: np.ndarray, phi_idx: int = 0) -> np.ndarray:
     """
     Extract the E-plane cut (phi = 0°) from the 3D radiation pattern.
@@ -405,15 +414,6 @@ def plot_sim_and_af(
                 f"ff_{freq_ghz:.0f}GHz_steer_t{steering_theta_deg}_p{steering_phi_deg}"
             )
         fig.savefig(figname, dpi=600)
-
-
-def normalize_pattern(pattern: np.ndarray, Dmax: float) -> np.ndarray:
-    """
-    Normalize the radiation pattern to dBi.
-    """
-    pattern = pattern / np.max(np.abs(pattern))
-    pattern = 20 * np.log10(np.abs(pattern)) + 10.0 * np.log10(Dmax)
-    return pattern
 
 
 def plot_ff_3d(

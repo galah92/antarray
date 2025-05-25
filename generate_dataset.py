@@ -99,13 +99,13 @@ def generate_beamforming(
 
     check_grating_lobes(freq_hz, dx, dy)
 
-    nf2ff_path = sim_dir_path / single_antenna_filename
-    nf2ff = read_nf2ff(nf2ff_path)
+    nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
 
-    single_E_norm = nf2ff["E_norm"][0]
-    single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
+    freq_idx = 0  # index of the frequency to plot
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
-    n_theta, n_phi = len(theta_rad), len(phi_rad)
+    E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
+    Dmax_single = nf2ff["Dmax"][freq_idx]
+    n_theta, n_phi = theta_rad.size, phi_rad.size
 
     print(f"Generating dataset with {n_samples} samples...")
 
@@ -141,27 +141,15 @@ def generate_beamforming(
             theta_steering[n_beams[i] :] = np.nan
             phi_steering[n_beams[i] :] = np.nan
 
-            # Generate phase shifts for each element
             phase_shifts = phase_shift_calc(theta_steering, phi_steering)
-            steering_info[i] = [theta_steering, phi_steering]
-
-            # Calculate array factor for all phi and theta values at once
             AF = af_calc(np.exp(1j * phase_shifts))
+            E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
+            Dmax_array = Dmax_single * (xn * yn)
+            E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
 
-            # Multiply by single element pattern to get total pattern
-            # The shape of AF is (n_phi, n_theta) after the calculation
-            total_pattern = single_E_norm * AF
-
-            # Normalize
-            total_pattern = total_pattern / np.max(np.abs(total_pattern))
-
-            # Convert to dB (normalized directivity)
-            array_gain = single_Dmax * np.sum(xn * yn)
-            array_gain_db = 10.0 * np.log10(array_gain)
-            total_pattern_db = 20 * np.log10(np.abs(total_pattern)) + array_gain_db
-
-            patterns[i] = total_pattern_db
+            patterns[i] = E_norm
             labels[i] = phase_shifts
+            steering_info[i] = [theta_steering, phi_steering]
 
 
 @app.command()
