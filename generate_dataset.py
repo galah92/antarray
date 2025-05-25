@@ -81,10 +81,7 @@ def check_grating_lobes(freq, dx, dy, verbose=False):
 @app.command()
 def generate_beamforming(
     n_samples: int = 1_000,
-    theta_start: float = -65,  # Degrees
     theta_end: float = 65,  # Degrees
-    phi_start: float = -65,  # Degrees
-    phi_end: float = 65,  # Degrees
     max_n_beams: int = 1,
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
@@ -129,8 +126,8 @@ def generate_beamforming(
 
         # Generate random steering angles within the specified range
         steering_size = (n_samples, max_n_beams)
-        theta_steerings = np.random.uniform(theta_start, theta_end, size=steering_size)
-        phi_steerings = np.random.uniform(phi_start, phi_end, size=steering_size)
+        theta_steerings = np.random.uniform(0, theta_end, size=steering_size)
+        phi_steerings = np.random.uniform(0, 360, size=steering_size)
 
         ex_calc = analyze.ExcitationCalculator(xn, yn, dx, dy, freq_hz)
         af_calc = analyze.ArrayFactorCalculator(
@@ -143,7 +140,11 @@ def generate_beamforming(
             theta_steering[n_beams[i] :] = np.nan
             phi_steering[n_beams[i] :] = np.nan
 
-            excitations = ex_calc(theta_steering, phi_steering)
+            # Calculate the excitations for the current steering angles using superposition
+            excitations = np.zeros((xn, yn), dtype=np.complex128)
+            for i_beam in range(n_beams[i]):
+                excitations += ex_calc(theta_steering[i_beam], phi_steering[i_beam])
+
             AF = af_calc(excitations=excitations)
             E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
             E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
