@@ -95,9 +95,9 @@ def generate_beamforming(
     # Fixed parameters for the 16x16 array
     xn = yn = 16  # 16x16 array
     dx = dy = 60  # 60x60 mm spacing
-    freq = 2.45e9  # 2.45 GHz
+    freq_hz = 2.45e9  # 2.45 GHz
 
-    check_grating_lobes(freq, dx, dy)
+    check_grating_lobes(freq_hz, dx, dy)
 
     nf2ff_path = sim_dir_path / single_antenna_filename
     nf2ff = read_nf2ff(nf2ff_path)
@@ -130,9 +130,9 @@ def generate_beamforming(
         theta_steerings = np.random.uniform(theta_start, theta_end, size=steering_size)
         phi_steerings = np.random.uniform(phi_start, phi_end, size=steering_size)
 
-        phase_shift_calc = analyze.PhaseShiftCalculator(xn, yn, dx, dy, freq)
+        phase_shift_calc = analyze.PhaseShiftCalculator(xn, yn, dx, dy, freq_hz)
         af_calc = analyze.ArrayFactorCalculator(
-            theta_rad, phi_rad, xn, yn, dx, dy, freq
+            theta_rad, phi_rad, xn, yn, dx, dy, freq_hz
         )
 
         for i in tqdm(range(n_samples)):
@@ -262,9 +262,9 @@ def ff_from_phase_shifts(
     # Fixed parameters for the 16x16 array
     xn = yn = 16  # 16x16 array
     dx = dy = 60  # 60x60 mm spacing
-    freq = 2.45e9  # 2.45 GHz
+    freq_hz = 2.45e9  # 2.45 GHz
 
-    check_grating_lobes(freq, dx, dy)
+    check_grating_lobes(freq_hz, dx, dy)
 
     nf2ff_path = sim_dir_path / single_antenna_filename
     nf2ff = read_nf2ff(nf2ff_path)
@@ -273,7 +273,7 @@ def ff_from_phase_shifts(
     single_Dmax = nf2ff["Dmax"][0]  # Assuming single frequency
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
 
-    af_calc = analyze.ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
+    af_calc = analyze.ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq_hz)
     AF = af_calc(np.exp(1j * phase_shifts))
 
     # Multiply by single element pattern to get total pattern

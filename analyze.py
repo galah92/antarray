@@ -147,9 +147,9 @@ class PhaseShiftCalculator:
         yn: int = 16,
         dx_mm: float = 60,
         dy_mm: float = 60,
-        freq: float = 2.45e9,
+        freq_hz: float = 2.45e9,
     ):
-        self.k = get_wavenumber(freq)
+        self.k = get_wavenumber(freq_hz)
         self.x_pos, self.y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
 
     def __call__(
