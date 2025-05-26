@@ -216,16 +216,41 @@ class ExcitationCalculator:
 
     def __call__(
         self,
-        steering_theta_deg: float = 0.0,
-        steering_phi_deg: float = 0.0,
+        steering_angles_deg: None | np.ndarray = None,
         taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
     ) -> np.ndarray:
         """
         Calculate element excitations for given steering angles and taper type.
+        Supports multiple steering angles for multi-beam patterns.
+
+        Parameters:
+        -----------
+        steering_angles_deg : float, array-like, or 2D array
+            Steering angles in degrees. Can be:
+            - Single value: applied to both theta and phi
+            - 1D array [theta, phi]: single steering direction
+            - 2D array [[theta1, phi1], [theta2, phi2], ...]: multiple steering directions
+            Default: [0, 0] (no steering)
+        taper_type : str
+            Type of amplitude taper to apply
+
+        Returns:
+        --------
+        np.ndarray
+            Complex excitation coefficients for all elements
         """
-        phase_shifts = self.phase_calc(steering_theta_deg, steering_phi_deg)
-        taper = calc_taper(self.xn, self.yn, taper_type)
-        excitations = taper * np.exp(1j * phase_shifts)
+        if steering_angles_deg is None:
+            steering_angles_deg = np.zeros(2)  # Default to no steering
+
+        steering_angles_deg = np.atleast_2d(steering_angles_deg)
+
+        # Calculate excitations for all steering angles and sum them
+        excitations = np.zeros((self.xn, self.yn), dtype=np.complex64)
+        for theta_deg, phi_deg in steering_angles_deg:
+            phase_shifts = self.phase_calc(theta_deg, phi_deg)
+            taper = calc_taper(self.xn, self.yn, taper_type)
+            excitations += taper * np.exp(1j * phase_shifts)
+
         return excitations
 
 
@@ -387,7 +412,7 @@ def plot_sim_and_af(
             plot_E_plane(E_norm=E_norm, Dmax=Dmax, label=label, ax=ax)
 
             ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
-            excitations = ex_calc(steering_theta_deg, steering_phi_deg, "uniform")
+            excitations = ex_calc([steering_theta_deg, steering_phi_deg], "uniform")
             af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
             AF = af_calc(excitations=excitations)
 
@@ -580,12 +605,7 @@ def test_plot_ff_3d():
     cpu_device = jax.devices("cpu")[0]
     with jax.default_device(cpu_device):
         ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
-
-        # Calculate the excitations for the current steering angles using superposition
-        excitations = np.zeros((xn, yn), dtype=np.complex64)
-        for theta_steering, phi_steering in steering_deg:
-            excitations += ex_calc(theta_steering, phi_steering)
-
+        excitations = ex_calc(steering_deg)
         af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
         AF = af_calc(excitations=excitations)
         E_norm = run_array_factor(E_theta_single, E_phi_single, AF)
@@ -610,4 +630,4 @@ def test_plot_ff_3d():
     print(f"Saved sample plot to {fig_path}")
 
 
-test_plot_ff_3d()
+# test_plot_ff_3d()

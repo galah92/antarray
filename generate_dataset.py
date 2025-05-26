@@ -140,10 +140,7 @@ def generate_beamforming(
             theta_steering[n_beams[i] :] = np.nan
             phi_steering[n_beams[i] :] = np.nan
 
-            # Calculate the excitations for the current steering angles using superposition
-            excitations = np.zeros((xn, yn), dtype=excitations_ds.dtype)
-            for i_beam in range(n_beams[i]):
-                excitations += ex_calc(theta_steering[i_beam], phi_steering[i_beam])
+            excitations = ex_calc(np.array([theta_steering, phi_steering]).T)
 
             AF = af_calc(excitations=excitations)
             E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
