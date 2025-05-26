@@ -235,7 +235,7 @@ def plot_sample(
     axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
     analyze.plot_ff_3d(theta, phi, pattern, ax=axs[2])
 
-    steering_str = steering_repr(steering)
+    steering_str = analyze.steering_repr(steering)
     phase_shift_title = f"Phase Shifts ({steering_str})"
     fig.suptitle(phase_shift_title)
     fig.set_tight_layout(True)
@@ -272,14 +272,6 @@ def ff_from_phase_shifts(
     E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
 
     return E_norm
-
-
-def steering_repr(steering_angles: np.ndarray):
-    thetas_s, phis_s = steering_angles
-    thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
-    thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
-    phis_s = np.array2string(phis_s, precision=2, separator=", ")
-    return f"θ={thetas_s}°, φ={phis_s}°"
 
 
 if __name__ == "__main__":

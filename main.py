@@ -17,9 +17,9 @@ from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader, Dataset
 
 import analyze
-from generate_dataset import ff_from_phase_shifts, steering_repr
+from generate_dataset import ff_from_phase_shifts
 
-DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "rand_bf_4d_160k_prop.h5"
+DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "ds_4d_160k.h5"
 DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
 DEFAULT_MODEL_NAME = "model.pth"
 
@@ -966,7 +966,7 @@ def compare_phase_shifts(
     analyze.plot_ff_3d(theta, phi, pred_ff, title=title, ax=axs[1, 2])
 
     loss = circular_mse_loss_np(pred, label)
-    steering_str = steering_repr(steering_info)
+    steering_str = analyze.steering_repr(steering_info)
     fig.suptitle(f"Prediction Example | loss {loss:.4f} | steering {steering_str}")
 
     fig.set_tight_layout(True)

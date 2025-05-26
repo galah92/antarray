@@ -450,40 +450,6 @@ def plot_ff_3d(
     ax.set_title(title)
 
 
-def test_plot_ff_3d():
-    steering_theta_deg = 15.0
-    steering_phi_deg = 15.0
-
-    freq = 2.45e9
-    sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
-    freq_idx = 0
-    xn, yn = 16, 16
-    dx, dy = 60, 60
-
-    single_antenna_filename = f"ff_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
-    nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
-    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
-    E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
-    Dmax_single = nf2ff["Dmax"]
-
-    ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
-    excitations = ex_calc(steering_theta_deg, steering_phi_deg)
-    AF = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)(excitations)
-
-    E_norm_array = run_array_factor(E_theta_single, E_phi_single, AF)
-
-    Dmax_array = Dmax_single * (xn * yn)
-    E_norm_array_db = normalize_pattern(E_norm_array, Dmax_array)
-
-    plot_ff_3d(
-        theta_rad=theta_rad,
-        phi_rad=phi_rad,
-        pattern=E_norm_array_db,
-        title=f"3D Radiation Pattern, {xn}x{yn} array, {dx}x{dy}mm, {freq / 1e9:.0f}GHz",
-    )
-    plt.show()
-
-
 def plot_ff_2d(
     theta_rad: np.ndarray,
     phi_rad: np.ndarray,
@@ -505,6 +471,39 @@ def plot_ff_2d(
 
     if colorbar:
         ax.get_figure().colorbar(im, fraction=0.046, pad=0.04, label="Normalized Dbi")
+
+
+def plot_sine_space(
+    theta_rad: np.ndarray,
+    phi_rad: np.ndarray,
+    pattern: np.ndarray,
+    *,
+    title: str = "Sine-Space Radiation Pattern",
+    colorbar: bool = True,
+    ax: plt.Axes | None = None,
+):
+    if ax is None:
+        _, ax = plt.subplots(1, 1, figsize=(8, 8))
+
+    u = np.sin(theta_rad)[:, None] * np.cos(phi_rad)[None, :]
+    v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)[None, :]
+
+    # Use pcolormesh for potentially non-uniform grids that arise from angular sampling
+    im = ax.pcolormesh(u, v, pattern, shading="auto", cmap="Spectral_r")
+
+    ax.add_patch(plt.Circle((0, 0), 1, linewidth=1, fill=False))
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim([-1.0, 1.0])
+    ax.set_ylim([-1.0, 1.0])
+    # ax.axis("off")
+    ax.set_xlabel("u = sin($\\theta$)cos($\\phi$)")
+    ax.set_ylabel("v = sin($\\theta$)sin($\\phi$)")
+    ax.set_title(title)
+
+    if colorbar:
+        ax.get_figure().colorbar(im, fraction=0.046, pad=0.04, label="Normalized Dbi")
+
+    return ax
 
 
 def plot_phase_shifts(
@@ -530,3 +529,61 @@ def plot_phase_shifts(
 
     if colorbar:
         ax.get_figure().colorbar(im, fraction=0.046, pad=0.04, label="Degrees")
+
+
+def steering_repr(steering_angles: np.ndarray):
+    thetas_s, phis_s = steering_angles
+    thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
+    thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
+    phis_s = np.array2string(phis_s, precision=2, separator=", ")
+    return f"θ={thetas_s}°, φ={phis_s}°"
+
+
+def test_plot_ff_3d():
+    steering_theta_deg = 15.0
+    steering_phi_deg = 15.0
+
+    freq = 2.45e9
+    sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
+    freq_idx = 0
+    xn, yn = 16, 16
+    dx, dy = 60, 60
+
+    single_antenna_filename = f"ff_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
+    nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
+    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
+    E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
+    Dmax_single = nf2ff["Dmax"]
+    Dmax_array = Dmax_single * (xn * yn)
+
+    cpu_device = jax.devices("cpu")[0]
+    with jax.default_device(cpu_device):
+        ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
+        excitations = ex_calc(steering_theta_deg, steering_phi_deg, "uniform")
+        af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
+        AF = af_calc(excitations=excitations)
+        print(f"{type(E_theta_single)=}, {type(E_phi_single)=}, {type(AF)=}")
+        E_norm = run_array_factor(E_theta_single, E_phi_single, AF)
+        E_norm = normalize_pattern(E_norm, Dmax_array)
+
+    fig, axs = plt.subplots(1, 3, figsize=[18, 6])
+
+    plot_ff_2d(theta_rad, phi_rad, E_norm, ax=axs[0])
+    plot_sine_space(theta_rad, phi_rad, E_norm, ax=axs[1])
+
+    axs[2].remove()
+    axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
+    plot_ff_3d(theta_rad, phi_rad, E_norm, ax=axs[2])
+
+    steering = np.array([steering_theta_deg, steering_phi_deg])
+    steering_str = steering_repr(steering)
+    phase_shift_title = f"Phase Shifts ({steering_str})"
+    fig.suptitle(phase_shift_title)
+    fig.set_tight_layout(True)
+
+    fig_path = "test.png"
+    fig.savefig(fig_path, dpi=600, bbox_inches="tight")
+    print(f"Saved sample plot to {fig_path}")
+
+
+# test_plot_ff_3d()
