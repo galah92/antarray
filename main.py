@@ -17,7 +17,7 @@ from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader, Dataset
 
 import analyze
-from generate_dataset import ff_from_phase_shifts
+from data import ff_from_phase_shifts
 
 DEFAULT_DATASET_PATH: Path = Path.cwd() / "dataset" / "ds_4d_160k.h5"
 DEFAULT_EXPERIMENTS_PATH: Path = Path.cwd() / "experiments"
