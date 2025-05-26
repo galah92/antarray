@@ -465,8 +465,8 @@ def plot_ff_2d(
     theta_deg, phi_deg = np.rad2deg(theta_rad), np.rad2deg(phi_rad)
     extent = [np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg)]
     im = ax.imshow(pattern, extent=extent, origin="lower")
-    ax.set_xlabel("Theta (degrees)")
-    ax.set_ylabel("Phi (degrees)")
+    ax.set_xlabel("θ°")
+    ax.set_ylabel("φ°")
     ax.set_title(title)
 
     if colorbar:
@@ -479,23 +479,43 @@ def plot_sine_space(
     pattern: np.ndarray,
     *,
     title: str = "Sine-Space Radiation Pattern",
+    theta_circles: bool = True,
+    phi_lines: bool = True,
     colorbar: bool = True,
     ax: plt.Axes | None = None,
 ):
     if ax is None:
         _, ax = plt.subplots(1, 1, figsize=(8, 8))
 
-    u = np.sin(theta_rad)[:, None] * np.cos(phi_rad)[None, :]
-    v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)[None, :]
+    u = np.sin(theta_rad)[:, None] * np.cos(phi_rad)
+    v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)
+    im = ax.contourf(u, v, pattern, levels=128)
 
-    # Use pcolormesh for potentially non-uniform grids that arise from angular sampling
-    im = ax.pcolormesh(u, v, pattern, shading="auto", cmap="Spectral_r")
+    axis_args = dict(color="gray", linestyle="--", linewidth=0.9)
+
+    if theta_circles:
+        for theta_deg in np.array([30, 60]):
+            theta_rad = np.radians(theta_deg)
+            radius = np.sin(theta_rad)
+            ax.add_patch(plt.Circle((0, 0), radius, fill=False, **axis_args))
+            label_offset = np.radians(45)
+            loc = radius * np.array([np.cos(label_offset), np.sin(label_offset)])
+            ax.text(*loc, f"{theta_deg}°", ha="center", va="center", color="gray")
+
+    if phi_lines:
+        for phi_deg in np.arange(0, 360, 30):
+            phi_rad = np.radians(phi_deg)
+            phi_sine = np.array([np.cos(phi_rad), np.sin(phi_rad)])
+            ax.plot(*np.vstack(([0, 0], phi_sine)).T, **axis_args)
+            if phi_deg in [0, 90]:
+                continue  # Avoid label overlap with the title and colorbar
+            ax.text(*(1.1 * phi_sine), f"{phi_deg}°", ha="center", va="center")
 
     ax.add_patch(plt.Circle((0, 0), 1, linewidth=1, fill=False))
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlim([-1.0, 1.0])
     ax.set_ylim([-1.0, 1.0])
-    # ax.axis("off")
+    ax.axis("off")
     ax.set_xlabel("u = sin($\\theta$)cos($\\phi$)")
     ax.set_ylabel("v = sin($\\theta$)sin($\\phi$)")
     ax.set_title(title)
@@ -532,16 +552,17 @@ def plot_phase_shifts(
 
 
 def steering_repr(steering_angles: np.ndarray):
-    thetas_s, phis_s = steering_angles
-    thetas_s, phis_s = thetas_s[~np.isnan(thetas_s)], phis_s[~np.isnan(phis_s)]
-    thetas_s = np.array2string(thetas_s, precision=2, separator=", ")
-    phis_s = np.array2string(phis_s, precision=2, separator=", ")
-    return f"θ={thetas_s}°, φ={phis_s}°"
+    return f"[θ°, φ°] = {steering_angles.T.tolist()}"
 
 
 def test_plot_ff_3d():
-    steering_theta_deg = 15.0
-    steering_phi_deg = 15.0
+    steering_deg = np.array(
+        [
+            [15, 15],
+            [30, 120],
+            [45, 210],
+        ]
+    )
 
     freq = 2.45e9
     sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
@@ -559,10 +580,14 @@ def test_plot_ff_3d():
     cpu_device = jax.devices("cpu")[0]
     with jax.default_device(cpu_device):
         ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
-        excitations = ex_calc(steering_theta_deg, steering_phi_deg, "uniform")
+
+        # Calculate the excitations for the current steering angles using superposition
+        excitations = np.zeros((xn, yn), dtype=np.complex64)
+        for theta_steering, phi_steering in steering_deg:
+            excitations += ex_calc(theta_steering, phi_steering)
+
         af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
         AF = af_calc(excitations=excitations)
-        print(f"{type(E_theta_single)=}, {type(E_phi_single)=}, {type(AF)=}")
         E_norm = run_array_factor(E_theta_single, E_phi_single, AF)
         E_norm = normalize_pattern(E_norm, Dmax_array)
 
@@ -575,9 +600,8 @@ def test_plot_ff_3d():
     axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
     plot_ff_3d(theta_rad, phi_rad, E_norm, ax=axs[2])
 
-    steering = np.array([steering_theta_deg, steering_phi_deg])
-    steering_str = steering_repr(steering)
-    phase_shift_title = f"Phase Shifts ({steering_str})"
+    steering_str = steering_repr(steering_deg.T)
+    phase_shift_title = f"Radiation Pattern with Phase Shifts {steering_str}"
     fig.suptitle(phase_shift_title)
     fig.set_tight_layout(True)
 
@@ -586,4 +610,4 @@ def test_plot_ff_3d():
     print(f"Saved sample plot to {fig_path}")
 
 
-# test_plot_ff_3d()
+test_plot_ff_3d()
