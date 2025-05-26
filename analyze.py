@@ -581,13 +581,7 @@ def steering_repr(steering_angles: np.ndarray):
 
 
 def test_plot_ff_3d():
-    steering_deg = np.array(
-        [
-            [15, 15],
-            [30, 120],
-            [45, 210],
-        ]
-    )
+    steering_deg = np.array([[15, 15], [30, 120], [45, 210]])
 
     freq = 2.45e9
     sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
