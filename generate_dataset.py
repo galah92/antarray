@@ -111,13 +111,10 @@ def generate_beamforming(
         h5f.create_dataset("theta", data=theta_rad)
         h5f.create_dataset("phi", data=phi_rad)
 
-        patterns_ds = h5f.create_dataset(
-            "patterns", shape=(n_samples, theta_rad.size, phi_rad.size)
-        )
-        excitations_ds = h5f.create_dataset(
-            "excitations", shape=(n_samples, xn, yn), dtype=np.complex64
-        )
-        steering_ds = h5f.create_dataset("steering", shape=(n_samples, 2, max_n_beams))
+        patterns_shape = (n_samples, theta_rad.size, phi_rad.size)
+        patterns_ds = h5f.create_dataset("patterns", shape=patterns_shape)
+        ex_shape = (n_samples, xn, yn)
+        ex_ds = h5f.create_dataset("excitations", shape=ex_shape, dtype=np.complex64)
 
         # Choose a random number of beams to simulate for each sample
         n_beams_sq = np.square(np.arange(max_n_beams) + 1)
@@ -128,6 +125,7 @@ def generate_beamforming(
         steering_size = (n_samples, max_n_beams)
         theta_steerings = np.random.uniform(0, theta_end, size=steering_size)
         phi_steerings = np.random.uniform(0, 360, size=steering_size)
+        steerings = np.dstack([theta_steerings, phi_steerings])
 
         ex_calc = analyze.ExcitationCalculator(xn, yn, dx, dy, freq_hz)
         af_calc = analyze.ArrayFactorCalculator(
@@ -135,20 +133,18 @@ def generate_beamforming(
         )
 
         for i in tqdm(range(n_samples)):
-            theta_steering, phi_steering = theta_steerings[i], phi_steerings[i]
-            # Set steering angles to NaN for unused beams
-            theta_steering[n_beams[i] :] = np.nan
-            phi_steering[n_beams[i] :] = np.nan
+            steer = steerings[i]
+            steer[n_beams[i] :] = np.nan  # Set steering angles to NaN for unused beams
 
-            excitations = ex_calc(np.array([theta_steering, phi_steering]).T)
-
+            excitations = ex_calc(steer[: n_beams[i]])
             AF = af_calc(excitations=excitations)
             E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
             E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
 
             patterns_ds[i] = E_norm
-            excitations_ds[i] = excitations
-            steering_ds[i] = [theta_steering, phi_steering]
+            ex_ds[i] = excitations
+
+        h5f.create_dataset("steering", data=steerings)
 
 
 @app.command()

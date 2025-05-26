@@ -107,6 +107,24 @@ class Hdf5Dataset(Dataset):
         return pattern, phase_shift
 
 
+class ConvBlock(nn.Module):
+    """A block consisting of two convolutions with BN and ReLU."""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
@@ -143,66 +161,7 @@ class ResidualBlock(nn.Module):
             )
 
     def forward(self, x):
-        residual = x
-        x = self.block(x)
-        x += self.shortcut(residual)
-        x = self.relu(x)
-        return x
-
-
-class ConvBlock(nn.Module):
-    """A block consisting of two convolutions with BN and ReLU."""
-
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-        )
-
-    def forward(self, x):
-        x = self.block(x)
-        return x
-
-
-class DownBlock(nn.Module):
-    """Downscaling with maxpool then ConvBlock"""
-
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.pool_conv = nn.Sequential(
-            nn.MaxPool2d(2),
-            ConvBlock(in_channels, out_channels),
-        )
-
-    def forward(self, x):
-        return self.pool_conv(x)
-
-
-class DecoderBlock(nn.Module):
-    """Upsamples then applies a ConvBlock."""
-
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-        self.conv = ConvBlock(in_channels, out_channels)
-
-    def forward(self, x):
-        x = self.up(x)
-        x = self.conv(x)
-        return x
-
-
-def final_block(in_channels, out_channels, out_shape):
-    """Final output block for the model."""
-    return nn.Sequential(
-        nn.AdaptiveAvgPool2d(out_shape),
-        nn.Conv2d(in_channels, out_channels, kernel_size=1),
-    )
+        return self.relu(self.block(x) + self.shortcut(x))
 
 
 class ConvAutoencoder(nn.Module):
@@ -211,11 +170,10 @@ class ConvAutoencoder(nn.Module):
         in_channels=1,
         out_channels=1,
         base_channels=32,
-        down_depth=4,  # Depth of the encoder
+        down_depth=4,
         bottleneck_depth=2,
-        bottleneck_type=ConvBlock,
         decoder_depth=3,
-        out_shape=(16, 16),  # Target spatial size
+        out_shape=(16, 16),
     ):
         """
         Convolutional Autoencoder-style architecture without skip connections.
@@ -226,27 +184,34 @@ class ConvAutoencoder(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-        in_ch, out_ch = in_channels, base_channels
-        self.inc = ConvBlock(in_ch, out_ch)
+        self.inc = ConvBlock(in_channels, base_channels)
 
-        self.encoder = nn.Sequential()
+        encoder_layers = []
+        channels = base_channels
         for _ in range(down_depth):
-            in_ch, out_ch = out_ch, out_ch * 2  # Double the channels
-            self.encoder.append(DownBlock(in_ch, out_ch))
+            encoder_layers.append(nn.MaxPool2d(2))
+            encoder_layers.append(ConvBlock(channels, channels * 2))
+            channels *= 2
+        self.encoder = nn.Sequential(*encoder_layers)
 
-        self.bottleneck = nn.Sequential()
-        for _ in range(bottleneck_depth):
-            in_ch, out_ch = out_ch, out_ch  # Same channels in bottleneck
-            block = bottleneck_type(out_ch, out_ch)
-            self.bottleneck.append(block)
+        self.bottleneck = nn.Sequential(
+            *[ResidualBlock(channels, channels) for _ in range(bottleneck_depth)]
+        )
 
-        self.decoder = nn.Sequential()
+        decoder_layers = []
         for _ in range(decoder_depth):
-            # Half the channels in the decoder up to a minimum of base_channels
-            in_ch, out_ch = out_ch, max(out_ch // 2, base_channels)
-            self.decoder.append(DecoderBlock(in_ch, out_ch))
+            next_channels = max(channels // 2, base_channels)
+            decoder_layers.append(
+                nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+            )
+            decoder_layers.append(ConvBlock(channels, next_channels))
+            channels = next_channels
+        self.decoder = nn.Sequential(*decoder_layers)
 
-        self.final_conv = final_block(out_ch, out_channels, out_shape)
+        self.final_conv = nn.Sequential(
+            nn.AdaptiveAvgPool2d(out_shape),
+            nn.Conv2d(channels, out_channels, kernel_size=1),
+        )
 
     def forward(self, x):
         x = self.inc(x)
@@ -925,7 +890,6 @@ def model_type_to_class(
             down_depth=down_depth,
             bottleneck_depth=bottleneck_depth,
             decoder_depth=up_depth,
-            bottleneck_type=ResidualBlock,
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
