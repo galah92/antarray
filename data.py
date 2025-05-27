@@ -94,10 +94,10 @@ def generate_beamforming(
 ):
     # Fixed parameters for the 16x16 array
     xn = yn = 16  # 16x16 array
-    dx = dy = 60  # 60x60 mm spacing
+    dx_mm = dy_mm = 60  # 60x60 mm spacing
     freq_hz = 2.45e9  # 2.45 GHz
 
-    check_grating_lobes(freq_hz, dx, dy)
+    check_grating_lobes(freq_hz, dx_mm, dy_mm)
 
     nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
 
@@ -110,13 +110,12 @@ def generate_beamforming(
     print(f"Generating dataset with {n_samples} samples")
 
     # Calculate array parameters once
-    k = analyze.get_wavenumber(freq_hz)
-    x_pos, y_pos = analyze.get_element_positions(xn, yn, dx, dy)
+    kx, ky = analyze.calc_array_params(xn, yn, dx_mm, dy_mm, freq_hz)
     taper = analyze.calc_taper(xn, yn)
-    geo_exp = analyze.calc_geo_exp(theta_rad, phi_rad, k, x_pos, y_pos)
+    geo_exp = analyze.calc_geo_exp(theta_rad, phi_rad, kx, ky)
 
     # Create a function to calculate E_norm and excitations for given steering angles
-    static_params = (k, x_pos, y_pos, taper, geo_exp, E_theta, E_phi, Dmax_array)
+    static_params = (kx, ky, taper, geo_exp, E_theta, E_phi, Dmax_array)
     static_params = jax.tree_util.tree_map(jnp.asarray, static_params)  # Convert to JAX
     rad_pattern_from_steering = partial(analyze.rad_pattern_from_geo, *static_params)
 

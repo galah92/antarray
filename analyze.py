@@ -49,6 +49,11 @@ def read_nf2ff(nf2ff_path: Path):
 
 
 def get_wavenumber(freq_hz: float) -> float:
+    """
+    Calculate the wavenumber for a given frequency in Hz.
+    The wavenumber is defined as k = 2π/λ, where λ is the wavelength.
+    The wavelength is calculated as λ = c/f, where c is the speed of light.
+    """
     c = 299792458  # Speed of light in m/s
     wavelength = c / freq_hz  # Wavelength in meters
     k = 2 * np.pi / wavelength  # Wavenumber in radians/meter
@@ -59,8 +64,8 @@ def get_wavenumber(freq_hz: float) -> float:
 def get_element_positions(
     xn: int,
     yn: int,
-    dx_mm: float = 60,
-    dy_mm: float = 60,
+    dx_mm: float,
+    dy_mm: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     # Calculate the x and y positions of the elements in the array in meters, centered around (0, 0)
     x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_mm / 1000
@@ -74,10 +79,11 @@ def calc_array_params(
     dx_mm: float = 60,
     dy_mm: float = 60,
     freq_hz: float = 2.45e9,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     k = get_wavenumber(freq_hz)
     x_pos, y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
-    return k, x_pos, y_pos
+    kx, ky = k * x_pos, k * y_pos  # Wavenumber-scaled positions
+    return kx, ky
 
 
 @lru_cache(maxsize=1)
@@ -99,9 +105,8 @@ def calc_taper(
 
 @jax.jit
 def calc_phase_shifts(
-    k: ArrayLike,
-    x_pos: ArrayLike,
-    y_pos: ArrayLike,
+    kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
+    ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
     steering_angles_deg: ArrayLike,
 ) -> Array:
     """
@@ -118,11 +123,11 @@ def calc_phase_shifts(
     ux = sin_theta * jnp.cos(phi_steering)
     uy = sin_theta * jnp.sin(phi_steering)
 
-    x_phase = jnp.einsum("i,k->ik", x_pos, ux)  # (xn,), (n_angles,) -> (xn, n_angles)
-    y_phase = jnp.einsum("j,k->jk", y_pos, uy)  # (yn,), (n_angles,) -> (yn, n_angles)
+    x_phase = kx[:, None] * ux[None, :]  # (xn,), (n_angles,) -> (xn, n_angles)
+    y_phase = ky[:, None] * uy[None, :]  # (yn,), (n_angles,) -> (yn, n_angles)
 
     # Combine phases: (xn, n_angles), (yn, n_angles) -> (xn, yn, n_angles)
-    phase_shifts = k * (x_phase[:, None, :] + y_phase[None, :, :])
+    phase_shifts = x_phase[:, None, :] + y_phase[None, :, :]
     phase_shifts = phase_shifts % (2 * jnp.pi)  # Normalize to [0, 2π)
 
     return phase_shifts
@@ -130,9 +135,8 @@ def calc_phase_shifts(
 
 @jax.jit
 def calc_excitations_from_steering(
-    k: ArrayLike,
-    x_pos: ArrayLike,
-    y_pos: ArrayLike,
+    kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
+    ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
     taper: ArrayLike,
     steering_angles_deg: ArrayLike,
 ) -> Array:
@@ -141,7 +145,7 @@ def calc_excitations_from_steering(
     Computes the phase shifts for each element based on the steering angles
     and applies the tapering to compute the excitations.
     """
-    phase_shifts = calc_phase_shifts(k, x_pos, y_pos, steering_angles_deg)
+    phase_shifts = calc_phase_shifts(kx, ky, steering_angles_deg)
 
     # Calculate excitations: (xn, yn), (xn, yn, n_angles) -> (xn, yn)
     excitations = jnp.einsum("ij,ijk->ij", taper, jnp.exp(1j * phase_shifts))
@@ -164,27 +168,27 @@ def calc_excitations_from_phase_shifts(
     return excitations
 
 
+@jax.jit
 def calc_geo_exp(
     theta_rad: ArrayLike,
     phi_rad: ArrayLike,
-    k: ArrayLike,
-    x_pos: ArrayLike,
-    y_pos: ArrayLike,
+    kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
+    ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
 ) -> Array:
     """
     Calculate the geometric phase terms for the array factor calculation.
     """
     # x and y components of the geometric phase: (len(theta_rad), len(phi_rad))
     sin_theta = jnp.sin(theta_rad)[:, None]
-    ux = k * sin_theta * jnp.cos(phi_rad)
-    uy = k * sin_theta * jnp.sin(phi_rad)
+    ux = sin_theta * jnp.cos(phi_rad)
+    uy = sin_theta * jnp.sin(phi_rad)
 
     # Geometric phase terms for each element and angle: (xn, yn, len(theta), len(phi))
-    x_geo_phase = x_pos[:, None, None, None] * ux[None, None, :, :]
-    y_geo_phase = y_pos[None, :, None, None] * uy[None, None, :, :]
+    x_geo_phase = kx[:, None, None, None] * ux[None, None, :, :]
+    y_geo_phase = ky[None, :, None, None] * uy[None, None, :, :]
 
-    geo_phase = x_geo_phase + y_geo_phase  # Geometric phase terms for all elements
-    geo_exp = jnp.exp(1j * geo_phase)  # Complex exponential of the geometric phase
+    geo_phase = x_geo_phase + y_geo_phase  # Geometric phase terms
+    geo_exp = jnp.exp(1j * geo_phase)  # Complex exponential of the geometric phases
 
     geo_exp = jnp.asarray(geo_exp)  # Convert to JAX array for JIT compilation
 
@@ -257,15 +261,14 @@ def rad_pattern_from_single_elem(
 ) -> tuple[np.ndarray, np.ndarray]:
     theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
 
-    k, x_pos, y_pos = calc_array_params(xn, yn, dx_mm, dy_mm, freq_hz)
+    kx, ky = calc_array_params(xn, yn, dx_mm, dy_mm, freq_hz)
     taper = calc_taper(xn, yn, taper_type)
-    geo_exp = calc_geo_exp(theta_rad, phi_rad, k, x_pos, y_pos)
+    geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
     Dmax_array = Dmax * (xn * yn)
 
     E_norm, excitations = rad_pattern_from_geo(
-        k,
-        x_pos,
-        y_pos,
+        kx,
+        ky,
         taper,
         geo_exp,
         E_theta,
@@ -289,9 +292,9 @@ def rad_pattern_from_single_elem_and_phase_shifts(
 ) -> tuple[np.ndarray, np.ndarray]:
     theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
 
-    k, x_pos, y_pos = calc_array_params(xn, yn, dx_mm, dy_mm, freq_hz)
+    kx, ky = calc_array_params(xn, yn, dx_mm, dy_mm, freq_hz)
     taper = calc_taper(xn, yn)
-    geo_exp = calc_geo_exp(theta_rad, phi_rad, k, x_pos, y_pos)
+    geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
     Dmax_array = Dmax * (xn * yn)
 
     E_norm, excitations = rad_pattern_from_geo_and_phase_shifts(
@@ -337,9 +340,8 @@ def rad_pattern_from_geo_and_phase_shifts(
 
 @jax.jit
 def rad_pattern_from_geo(
-    k: ArrayLike,
-    x_pos: ArrayLike,
-    y_pos: ArrayLike,
+    kx: ArrayLike,
+    ky: ArrayLike,
     taper: ArrayLike,
     geo_exp: ArrayLike,
     E_theta: ArrayLike,
@@ -350,9 +352,7 @@ def rad_pattern_from_geo(
     """
     Compute radiation pattern for given steering angles.
     """
-    excitations = calc_excitations_from_steering(
-        k, x_pos, y_pos, taper, steering_angles
-    )
+    excitations = calc_excitations_from_steering(kx, ky, taper, steering_angles)
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
         geo_exp, E_theta, E_phi, Dmax_array, excitations
     )
