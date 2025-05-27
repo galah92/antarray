@@ -250,26 +250,23 @@ def ff_from_phase_shifts(
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
-    # Fixed parameters for the 16x16 array
-    xn = yn = 16  # 16x16 array
-    dx = dy = 60  # 60x60 mm spacing
-    freq_hz = 2.45e9  # 2.45 GHz
-
     nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
 
     freq_idx = 0  # index of the frequency to plot
-    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
-    E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
+    E_theta, E_phi = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"][freq_idx]
-    Dmax_array = Dmax_single * (xn * yn)
 
-    ex_calc = analyze.ExcitationCalculator(xn, yn, dx, dy, freq_hz)
-    af_calc = analyze.ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq_hz)
-
-    excitations = ex_calc(phase_shifts)
-    AF = af_calc(excitations=excitations)
-    E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
-    E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
+    E_norm, _ = analyze.rad_pattern_from_single_elem_and_phase_shifts(
+        E_theta,
+        E_phi,
+        Dmax_single,
+        freq_hz=2.45e9,
+        xn=16,
+        yn=16,
+        dx_mm=60,
+        dy_mm=60,
+        phase_shifts=phase_shifts,
+    )
 
     return E_norm
 

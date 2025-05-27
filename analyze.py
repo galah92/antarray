@@ -129,7 +129,7 @@ def calc_phase_shifts(
 
 
 @jax.jit
-def calc_excitations(
+def calc_excitations_from_steering(
     k: ArrayLike,
     x_pos: ArrayLike,
     y_pos: ArrayLike,
@@ -143,6 +143,21 @@ def calc_excitations(
     """
     phase_shifts = calc_phase_shifts(k, x_pos, y_pos, steering_angles_deg)
 
+    # Calculate excitations: (xn, yn), (xn, yn, n_angles) -> (xn, yn)
+    excitations = jnp.einsum("ij,ijk->ij", taper, jnp.exp(1j * phase_shifts))
+
+    return excitations
+
+
+@jax.jit
+def calc_excitations_from_phase_shifts(
+    taper: ArrayLike,
+    phase_shifts: ArrayLike,
+) -> Array:
+    """
+    Computes the excitations for each element based on the provided phase shifts
+    and applies the tapering.
+    """
     # Calculate excitations: (xn, yn), (xn, yn, n_angles) -> (xn, yn)
     excitations = jnp.einsum("ij,ijk->ij", taper, jnp.exp(1j * phase_shifts))
 
@@ -243,7 +258,9 @@ def rad_pattern_from_geo(
     """
     Compute radiation pattern for given steering angles.
     """
-    excitations = calc_excitations(k, x_pos, y_pos, taper, steering_angles)
+    excitations = calc_excitations_from_steering(
+        k, x_pos, y_pos, taper, steering_angles
+    )
     AF = calc_array_factor(geo_exp, excitations)
     E_norm = run_array_factor(E_theta, E_phi, AF)
     E_norm = normalize_rad_pattern(E_norm, Dmax_array)
@@ -280,6 +297,46 @@ def rad_pattern_from_single_elem(
         Dmax_array,
         steering_deg,
     )
+    return E_norm, excitations
+
+
+def rad_pattern_from_single_elem_and_phase_shifts(
+    E_theta: np.ndarray,
+    E_phi: np.ndarray,
+    Dmax: float,
+    freq_hz: float = 2.45e9,
+    xn: int = 16,
+    yn: int = 16,
+    dx_mm: float = 60,
+    dy_mm: float = 60,
+    phase_shifts: np.ndarray = np.array([[0]]),
+) -> tuple[np.ndarray, np.ndarray]:
+    theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
+
+    k, x_pos, y_pos = calc_array_params(xn, yn, dx_mm, dy_mm, freq_hz)
+    taper = calc_taper(xn, yn)
+    geo_exp = calc_geo_exp(theta_rad, phi_rad, k, x_pos, y_pos)
+    Dmax_array = Dmax * (xn * yn)
+
+    excitations = calc_excitations_from_phase_shifts(taper, phase_shifts)
+    AF = calc_array_factor(geo_exp, excitations)
+    E_norm = run_array_factor(E_theta, E_phi, AF)
+    E_norm = normalize_rad_pattern(E_norm, Dmax_array)
+    return E_norm, excitations
+
+
+def rad_pattern_from_geo_and_phase_shifts(
+    taper: jnp.ndarray,
+    geo_exp: jnp.ndarray,
+    E_theta: jnp.ndarray,
+    E_phi: jnp.ndarray,
+    Dmax_array: float,
+    phase_shifts: np.ndarray = np.array([[0]]),
+) -> tuple[np.ndarray, np.ndarray]:
+    excitations = calc_excitations_from_phase_shifts(taper, phase_shifts)
+    AF = calc_array_factor(geo_exp, excitations)
+    E_norm = run_array_factor(E_theta, E_phi, AF)
+    E_norm = normalize_rad_pattern(E_norm, Dmax_array)
     return E_norm, excitations
 
 
