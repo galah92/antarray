@@ -107,16 +107,14 @@ def calc_taper(
 def calc_phase_shifts(
     kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
     ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
-    steering_angles_deg: ArrayLike,
+    steering_rad: ArrayLike,
 ) -> Array:
     """
     Calculate phase shifts for each element in the array based on steering angles.
     Computes the phase shifts for each element based on the steering angles
     and the positions of the elements in the array.
     """
-    # Convert to radians
-    steering_angles_rad = jnp.radians(steering_angles_deg)
-    theta_steering, phi_steering = steering_angles_rad.T  # (n_angles, 2)
+    theta_steering, phi_steering = steering_rad.T  # (n_angles, 2)
 
     # Calculate steering vector components
     sin_theta = jnp.sin(theta_steering)
@@ -138,18 +136,15 @@ def calc_excitations_from_steering(
     kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
     ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
     taper: ArrayLike,
-    steering_angles_deg: ArrayLike,
+    steering_rad: ArrayLike,
 ) -> Array:
     """
     Calculate element excitations for a given array configuration and steering angles.
     Computes the phase shifts for each element based on the steering angles
     and applies the tapering to compute the excitations.
     """
-    phase_shifts = calc_phase_shifts(kx, ky, steering_angles_deg)
-
-    # Calculate excitations: (xn, yn), (xn, yn, n_angles) -> (xn, yn)
+    phase_shifts = calc_phase_shifts(kx, ky, steering_rad)
     excitations = jnp.einsum("ij,ijk->ij", taper, jnp.exp(1j * phase_shifts))
-
     return excitations
 
 
@@ -266,6 +261,7 @@ def rad_pattern_from_single_elem(
     geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
     Dmax_array = Dmax * (xn * yn)
 
+    steering_rad = np.radians(steering_deg)
     E_norm, excitations = rad_pattern_from_geo(
         kx,
         ky,
@@ -274,7 +270,7 @@ def rad_pattern_from_single_elem(
         E_theta,
         E_phi,
         Dmax_array,
-        steering_deg,
+        steering_rad,
     )
     return E_norm, excitations
 
@@ -347,12 +343,12 @@ def rad_pattern_from_geo(
     E_theta: ArrayLike,
     E_phi: ArrayLike,
     Dmax_array: ArrayLike,
-    steering_angles: ArrayLike,
+    steering_rad: ArrayLike,
 ) -> tuple[Array, Array]:
     """
     Compute radiation pattern for given steering angles.
     """
-    excitations = calc_excitations_from_steering(kx, ky, taper, steering_angles)
+    excitations = calc_excitations_from_steering(kx, ky, taper, steering_rad)
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
         geo_exp, E_theta, E_phi, Dmax_array, excitations
     )
