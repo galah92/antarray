@@ -118,7 +118,7 @@ def generate_beamforming(
     # Create a function to calculate E_norm and excitations for given steering angles
     static_params = (k, x_pos, y_pos, taper, geo_exp, E_theta, E_phi, Dmax_array)
     static_params = jax.tree_util.tree_map(jnp.asarray, static_params)  # Convert to JAX
-    calc_array_E_norm = partial(analyze.calc_E_norm, *static_params)
+    rad_pattern_from_steering = partial(analyze.rad_pattern_from_geo, *static_params)
 
     # Choose a random number of beams to simulate for each sample
     n_beams_sq = np.square(np.arange(max_n_beams) + 1)
@@ -146,7 +146,7 @@ def generate_beamforming(
             steer[n_beams[i] :] = np.nan  # Set steering angles to NaN for unused beams
 
             valid_steer = steer[~np.isnan(steer).any(axis=1)]
-            E_norm, excitations = calc_array_E_norm(jnp.asarray(valid_steer))
+            E_norm, excitations = rad_pattern_from_steering(jnp.asarray(valid_steer))
 
             patterns_ds[i] = E_norm
             ex_ds[i] = excitations
