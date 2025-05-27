@@ -243,30 +243,6 @@ def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> Array:
     return pattern
 
 
-@jax.jit
-def rad_pattern_from_geo(
-    k: jnp.ndarray,
-    x_pos: jnp.ndarray,
-    y_pos: jnp.ndarray,
-    taper: jnp.ndarray,
-    geo_exp: jnp.ndarray,
-    E_theta: jnp.ndarray,
-    E_phi: jnp.ndarray,
-    Dmax_array: jnp.ndarray,
-    steering_angles: jnp.ndarray,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """
-    Compute radiation pattern for given steering angles.
-    """
-    excitations = calc_excitations_from_steering(
-        k, x_pos, y_pos, taper, steering_angles
-    )
-    AF = calc_array_factor(geo_exp, excitations)
-    E_norm = run_array_factor(E_theta, E_phi, AF)
-    E_norm = normalize_rad_pattern(E_norm, Dmax_array)
-    return E_norm, excitations
-
-
 def rad_pattern_from_single_elem(
     E_theta: np.ndarray,
     E_phi: np.ndarray,
@@ -318,25 +294,68 @@ def rad_pattern_from_single_elem_and_phase_shifts(
     geo_exp = calc_geo_exp(theta_rad, phi_rad, k, x_pos, y_pos)
     Dmax_array = Dmax * (xn * yn)
 
-    excitations = calc_excitations_from_phase_shifts(taper, phase_shifts)
-    AF = calc_array_factor(geo_exp, excitations)
-    E_norm = run_array_factor(E_theta, E_phi, AF)
+    E_norm, excitations = rad_pattern_from_geo_and_phase_shifts(
+        taper,
+        geo_exp,
+        E_theta,
+        E_phi,
+        Dmax_array,
+        phase_shifts,
+    )
+    return E_norm, excitations
+
+
+@jax.jit
+def rad_pattern_from_geo_and_excitations(
+    geo_exp: ArrayLike,
+    E_theta: ArrayLike,
+    E_phi: ArrayLike,
+    Dmax_array: float,
+    excitations: ArrayLike,
+) -> tuple[Array, Array]:
+    array_factor = calc_array_factor(geo_exp, excitations)
+    E_norm = run_array_factor(E_theta, E_phi, array_factor)
     E_norm = normalize_rad_pattern(E_norm, Dmax_array)
     return E_norm, excitations
 
 
+@jax.jit
 def rad_pattern_from_geo_and_phase_shifts(
-    taper: jnp.ndarray,
-    geo_exp: jnp.ndarray,
-    E_theta: jnp.ndarray,
-    E_phi: jnp.ndarray,
+    taper: ArrayLike,
+    geo_exp: ArrayLike,
+    E_theta: ArrayLike,
+    E_phi: ArrayLike,
     Dmax_array: float,
-    phase_shifts: np.ndarray = np.array([[0]]),
-) -> tuple[np.ndarray, np.ndarray]:
+    phase_shifts: ArrayLike = np.array([[0]]),
+) -> tuple[Array, Array]:
     excitations = calc_excitations_from_phase_shifts(taper, phase_shifts)
-    AF = calc_array_factor(geo_exp, excitations)
-    E_norm = run_array_factor(E_theta, E_phi, AF)
-    E_norm = normalize_rad_pattern(E_norm, Dmax_array)
+    E_norm, excitations = rad_pattern_from_geo_and_excitations(
+        geo_exp, E_theta, E_phi, Dmax_array, excitations
+    )
+    return E_norm, excitations
+
+
+@jax.jit
+def rad_pattern_from_geo(
+    k: ArrayLike,
+    x_pos: ArrayLike,
+    y_pos: ArrayLike,
+    taper: ArrayLike,
+    geo_exp: ArrayLike,
+    E_theta: ArrayLike,
+    E_phi: ArrayLike,
+    Dmax_array: ArrayLike,
+    steering_angles: ArrayLike,
+) -> tuple[Array, Array]:
+    """
+    Compute radiation pattern for given steering angles.
+    """
+    excitations = calc_excitations_from_steering(
+        k, x_pos, y_pos, taper, steering_angles
+    )
+    E_norm, excitations = rad_pattern_from_geo_and_excitations(
+        geo_exp, E_theta, E_phi, Dmax_array, excitations
+    )
     return E_norm, excitations
 
 
