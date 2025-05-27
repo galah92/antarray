@@ -53,6 +53,7 @@ def get_wavenumber(freq_hz: float) -> float:
     return k
 
 
+@lru_cache(maxsize=1)
 def get_element_positions(
     xn: int,
     yn: int,
@@ -63,120 +64,6 @@ def get_element_positions(
     x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_mm / 1000
     y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_mm / 1000
     return x_positions, y_positions
-
-
-@jax.jit
-def _af_calc(geo_exp, excitations):
-    """
-    Calculates the array factor given the element excitations.
-    Excitations should be an (xn, yn) complex NumPy array.
-    If excitations is None, all elements are assumed to have 1 + 0j excitation.
-    """
-    xn, yn = geo_exp.shape[:2]
-    if excitations is None:
-        excitations = np.ones((xn, yn), dtype=complex)
-
-    # The array factor sum term for each element is Excitation * exp(j * GeometricPhase)
-    # However, if the Excitation is defined as A_n * exp(j * alpha_n), and the array
-    # factor includes a *subtraction* of this phase, like A_n * exp(j * (G_n - alpha_n)),
-    # then this is equivalent to A_n * exp(j G_n) * exp(-j alpha_n) = Excitation.conjugate() * exp(j G_n).
-    weighted_exp_terms = excitations[:, :, None, None].conjugate() * geo_exp
-
-    # Sum contributions from all elements along the element dimensions (xn, yn).
-    # Shape: (len(theta), len(phi))
-    AF = np.sum(weighted_exp_terms, axis=(0, 1))
-
-    # Normalize by the total number of elements.
-    AF = AF / (xn * yn)
-
-    return AF
-
-
-class ArrayFactorCalculator:
-    """
-    Calculate the array factor for a given array configuration.
-    Pre-calculate terms dependent on geometry and observation angles
-    to efficiently compute the array factor for different excitations.
-    """
-
-    def __init__(
-        self,
-        theta_rad: np.ndarray,  # Array of observation theta angles
-        phi_rad: np.ndarray,  # Array of observation phi angles
-        xn: int = 16,  # Number of elements in the x-direction
-        yn: int = 16,  # Number of elements in the y-direction
-        dx_mm: float = 60,
-        dy_mm: float = 60,
-        freq_hz: float = 2.45e9,
-    ):
-        k = get_wavenumber(freq_hz)
-        x_pos, y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
-
-        # Terms for x and y components of the geometric phase.
-        # Shape: (len(theta_rad), len(phi_rad))
-        sin_theta = np.sin(theta_rad)[:, None]
-        ux = k * sin_theta * np.cos(phi_rad)
-        uy = k * sin_theta * np.sin(phi_rad)
-
-        # Precompute the geometric phase terms for each element and angle.
-        # Shape: (xn, yn, len(theta), len(phi)).
-        x_geo_phase = x_pos[:, None, None, None] * ux[None, None, :, :]
-        y_geo_phase = y_pos[None, :, None, None] * uy[None, None, :, :]
-
-        # Combine the geometric phase terms for all elements.
-        geo_phase = x_geo_phase + y_geo_phase
-        # Complex exponential of the geometric phase terms.
-        self.geo_exp = np.exp(1j * geo_phase)
-        # Convert to JAX array for JIT compilation
-        self.geo_exp = jnp.asarray(self.geo_exp)
-
-    def __call__(self, excitations: np.ndarray | None = None) -> np.ndarray:
-        return _af_calc(self.geo_exp, excitations)
-
-
-class PhaseShiftCalculator:
-    """
-    Calculate phase shifts for beam steering with a given array configuration.
-    Pre-calculate terms dependent on geometry to efficiently compute phase shifts
-    for different steering angles.
-    """
-
-    def __init__(
-        self,
-        xn: int = 16,
-        yn: int = 16,
-        dx_mm: float = 60,
-        dy_mm: float = 60,
-        freq_hz: float = 2.45e9,
-    ):
-        self.k = get_wavenumber(freq_hz)
-        self.x_pos, self.y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
-
-    def __call__(
-        self,
-        theta_steering_deg: float = 0.0,
-        phi_steering_deg: float = 0.0,
-    ) -> np.ndarray:
-        """
-        Calculate phase shifts for given steering angles.
-        """
-        # Convert degrees to radians
-        theta_steering_rad = np.radians(theta_steering_deg)
-        phi_steering_rad = np.radians(phi_steering_deg)
-
-        # Steering components of a unit vector pointing in the steered direction
-        sin_theta_steering = np.sin(theta_steering_rad)
-        ux = sin_theta_steering * np.cos(phi_steering_rad)
-        uy = sin_theta_steering * np.sin(phi_steering_rad)
-
-        # Path difference = (r_element_vector) dot (unit_steering_vector)
-        # Simplified as: x_element * ux + y_element * uy
-        path_difference = (self.x_pos * ux)[:, None] + (self.y_pos * uy)
-
-        phase_shifts = self.k * path_difference
-        phase_shifts = phase_shifts % (2 * np.pi)  # Normalize to [0, 2π)
-
-        return phase_shifts
 
 
 @lru_cache(maxsize=1)
@@ -196,62 +83,140 @@ def calc_taper(
     return np.outer(window_x, window_y)  # Create 2D taper by multiplying the 1D windows
 
 
-class ExcitationCalculator:
+@jax.jit
+def calc_excitations(
+    k: np.ndarray,
+    x_pos: np.ndarray,
+    y_pos: np.ndarray,
+    taper: np.ndarray,
+    steering_angles_deg: np.ndarray,
+) -> jnp.ndarray:
     """
-    Calculate element excitations for a given array configuration.
-    Pre-calculate terms dependent on geometry to efficiently compute excitations
-    for different steering angles and taper types.
+    Calculate element excitations for a given array configuration and steering angles.
+    Computes the phase shifts for each element based on the steering angles
+    and applies the tapering to compute the excitations.
     """
+    # Convert to radians
+    steering_angles_rad = jnp.radians(steering_angles_deg)
+    theta_steering, phi_steering = steering_angles_rad.T  # (n_angles, 2)
 
-    def __init__(
-        self,
-        xn: int = 16,
-        yn: int = 16,
-        dx_mm: float = 60,
-        dy_mm: float = 60,
-        freq: float = 2.45e9,
-    ):
-        self.xn, self.yn = xn, yn
-        self.phase_calc = PhaseShiftCalculator(xn, yn, dx_mm, dy_mm, freq)
+    # Calculate steering vector components
+    sin_theta = jnp.sin(theta_steering)
+    ux = sin_theta * jnp.cos(phi_steering)
+    uy = sin_theta * jnp.sin(phi_steering)
 
-    def __call__(
-        self,
-        steering_angles_deg: None | np.ndarray = None,
-        taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
-    ) -> np.ndarray:
-        """
-        Calculate element excitations for given steering angles and taper type.
-        Supports multiple steering angles for multi-beam patterns.
+    x_phase = jnp.einsum("i,k->ik", x_pos, ux)  # (xn,), (n_angles,) -> (xn, n_angles)
+    y_phase = jnp.einsum("j,k->jk", y_pos, uy)  # (yn,), (n_angles,) -> (yn, n_angles)
 
-        Parameters:
-        -----------
-        steering_angles_deg : float, array-like, or 2D array
-            Steering angles in degrees. Can be:
-            - Single value: applied to both theta and phi
-            - 1D array [theta, phi]: single steering direction
-            - 2D array [[theta1, phi1], [theta2, phi2], ...]: multiple steering directions
-            Default: [0, 0] (no steering)
-        taper_type : str
-            Type of amplitude taper to apply
+    # Combine phases: (xn, n_angles), (yn, n_angles) -> (xn, yn, n_angles)
+    phase_shifts = k * (x_phase[:, None, :] + y_phase[None, :, :])
+    phase_shifts = phase_shifts % (2 * jnp.pi)  # Normalize to [0, 2π)
 
-        Returns:
-        --------
-        np.ndarray
-            Complex excitation coefficients for all elements
-        """
-        if steering_angles_deg is None:
-            steering_angles_deg = np.zeros(2)  # Default to no steering
+    # Calculate excitations: (xn, yn), (xn, yn, n_angles) -> (xn, yn)
+    excitations = jnp.einsum("ij,ijk->ij", taper, jnp.exp(1j * phase_shifts))
 
-        steering_angles_deg = np.atleast_2d(steering_angles_deg)
+    return excitations
 
-        # Calculate excitations for all steering angles and sum them
-        excitations = np.zeros((self.xn, self.yn), dtype=np.complex64)
-        for theta_deg, phi_deg in steering_angles_deg:
-            phase_shifts = self.phase_calc(theta_deg, phi_deg)
-            taper = calc_taper(self.xn, self.yn, taper_type)
-            excitations += taper * np.exp(1j * phase_shifts)
 
-        return excitations
+def calc_geo_exp(
+    theta_rad: np.ndarray,
+    phi_rad: np.ndarray,
+    k: np.ndarray,
+    x_pos: np.ndarray,
+    y_pos: np.ndarray,
+) -> jnp.ndarray:
+    """
+    Calculate the geometric phase terms for the array factor calculation.
+    """
+    # x and y components of the geometric phase: (len(theta_rad), len(phi_rad))
+    sin_theta = np.sin(theta_rad)[:, None]
+    ux = k * sin_theta * np.cos(phi_rad)
+    uy = k * sin_theta * np.sin(phi_rad)
+
+    # Geometric phase terms for each element and angle: (xn, yn, len(theta), len(phi))
+    x_geo_phase = x_pos[:, None, None, None] * ux[None, None, :, :]
+    y_geo_phase = y_pos[None, :, None, None] * uy[None, None, :, :]
+
+    geo_phase = x_geo_phase + y_geo_phase  # Geometric phase terms for all elements
+    geo_exp = np.exp(1j * geo_phase)  # Complex exponential of the geometric phase terms
+
+    geo_exp = jnp.asarray(geo_exp)  # Convert to JAX array for JIT compilation
+
+    return geo_exp
+
+
+@jax.jit
+def calc_array_factor(geo_exp, excitations):
+    """
+    Calculates the array factor given the element excitations.
+    Excitations should be an (xn, yn) complex NumPy array.
+    If excitations is None, all elements are assumed to have 1 + 0j excitation.
+    """
+    xn, yn = geo_exp.shape[:2]
+    if excitations is None:
+        excitations = np.ones((xn, yn), dtype=np.complex64)
+
+    # The array factor sum term for each element is Excitation * exp(j * GeometricPhase)
+    # However, if the Excitation is defined as A_n * exp(j * alpha_n), and the array
+    # factor includes a *subtraction* of this phase, like A_n * exp(j * (G_n - alpha_n)),
+    # then this is equivalent to A_n * exp(j G_n) * exp(-j alpha_n) = Excitation.conjugate() * exp(j G_n).
+    weighted_exp_terms = excitations[:, :, None, None].conjugate() * geo_exp
+
+    # Sum contributions from all elements along the element dimensions (xn, yn).
+    # Shape: (len(theta), len(phi))
+    AF = np.sum(weighted_exp_terms, axis=(0, 1))
+
+    # Normalize by the total number of elements.
+    AF = AF / (xn * yn)
+
+    return AF
+
+
+def array_factor_from_array_params(
+    xn: int,
+    yn: int,
+    dx_mm: float = 60,
+    dy_mm: float = 60,
+    freq_hz: float = 2.45e9,
+    steering_deg: np.ndarray = np.array([[0, 0]]),
+    taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
+) -> np.ndarray:
+    theta_rad = np.radians(np.linspace(0, 180, 180))
+    phi_rad = np.radians(np.linspace(0, 360, 360))
+
+    k = get_wavenumber(freq_hz)
+    x_pos, y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
+    taper = calc_taper(xn, yn, taper_type)
+
+    excitations = calc_excitations(k, x_pos, y_pos, taper, steering_deg)
+    geo_exp = calc_geo_exp(theta_rad, phi_rad, k, x_pos, y_pos)
+
+    array_factor = calc_array_factor(geo_exp, excitations)
+    return array_factor
+
+
+@jax.jit
+def calc_E_norm(
+    k: jnp.ndarray,
+    x_pos: jnp.ndarray,
+    y_pos: jnp.ndarray,
+    taper: jnp.ndarray,
+    geo_exp: jnp.ndarray,
+    E_theta: jnp.ndarray,
+    E_phi: jnp.ndarray,
+    Dmax_array: jnp.ndarray,
+    steering_angles: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Compute radiation pattern for given steering angles.
+    """
+    excitations = calc_excitations(k, x_pos, y_pos, taper, steering_angles)
+    AF = calc_array_factor(geo_exp, excitations)
+    E_theta_array, E_phi_array = AF * E_theta, AF * E_phi
+    E_norm = jnp.sqrt(jnp.abs(E_theta_array) ** 2 + jnp.abs(E_phi_array) ** 2)
+    E_norm = E_norm / jnp.max(jnp.abs(E_norm))
+    E_norm = 20 * jnp.log10(jnp.abs(E_norm)) + 10.0 * jnp.log10(Dmax_array)
+    return E_norm, excitations
 
 
 def run_array_factor(
@@ -380,7 +345,6 @@ def plot_sim_and_af(
     # Load the single antenna pattern (for array factor calculation)
     single_antenna_filename = f"ff_1x1_60x60_{freq / 1e6:n}_steer_t0_p0.h5"
     nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
-    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
     E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"]
 
@@ -411,10 +375,8 @@ def plot_sim_and_af(
             label = "OpenEMS Simulation"
             plot_E_plane(E_norm=E_norm, Dmax=Dmax, label=label, ax=ax)
 
-            ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
-            excitations = ex_calc([steering_theta_deg, steering_phi_deg], "uniform")
-            af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
-            AF = af_calc(excitations=excitations)
+            steer = [steering_theta_deg, steering_phi_deg]
+            AF = array_factor_from_array_params(xn, yn, dx, dy, freq, steer)
 
             E_norm = run_array_factor(E_theta_single, E_phi_single, AF)
             Dmax = Dmax_single * (xn * yn)
@@ -596,14 +558,9 @@ def test_plot_ff_3d():
     Dmax_single = nf2ff["Dmax"]
     Dmax_array = Dmax_single * (xn * yn)
 
-    cpu_device = jax.devices("cpu")[0]
-    with jax.default_device(cpu_device):
-        ex_calc = ExcitationCalculator(xn, yn, dx, dy, freq)
-        excitations = ex_calc(steering_deg)
-        af_calc = ArrayFactorCalculator(theta_rad, phi_rad, xn, yn, dx, dy, freq)
-        AF = af_calc(excitations=excitations)
-        E_norm = run_array_factor(E_theta_single, E_phi_single, AF)
-        E_norm = normalize_pattern(E_norm, Dmax_array)
+    array_factor = array_factor_from_array_params(xn, yn, dx, dy, freq, steering_deg)
+    E_norm = run_array_factor(E_theta_single, E_phi_single, array_factor)
+    E_norm = normalize_pattern(E_norm, Dmax_array)
 
     fig, axs = plt.subplots(1, 3, figsize=[18, 6])
 

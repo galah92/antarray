@@ -1,7 +1,10 @@
 import subprocess as sp
+from functools import partial
 from pathlib import Path
 
 import h5py
+import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import typer
@@ -100,11 +103,33 @@ def generate_beamforming(
 
     freq_idx = 0  # index of the frequency to plot
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
-    E_theta_single, E_phi_single = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
+    E_theta, E_phi = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"][freq_idx]
     Dmax_array = Dmax_single * (xn * yn)
 
     print(f"Generating dataset with {n_samples} samples")
+
+    # Calculate array parameters once
+    k = analyze.get_wavenumber(freq_hz)
+    x_pos, y_pos = analyze.get_element_positions(xn, yn, dx, dy)
+    taper = analyze.calc_taper(xn, yn)
+    geo_exp = analyze.calc_geo_exp(theta_rad, phi_rad, k, x_pos, y_pos)
+
+    # Create a function to calculate E_norm and excitations for given steering angles
+    static_params = (k, x_pos, y_pos, taper, geo_exp, E_theta, E_phi, Dmax_array)
+    static_params = jax.tree_util.tree_map(jnp.asarray, static_params)  # Convert to JAX
+    calc_array_E_norm = partial(analyze.calc_E_norm, *static_params)
+
+    # Choose a random number of beams to simulate for each sample
+    n_beams_sq = np.square(np.arange(max_n_beams) + 1)
+    n_beams_prob = n_beams_sq / np.sum(n_beams_sq)  # consider softmax instead
+    n_beams = np.random.choice(max_n_beams, size=n_samples, p=n_beams_prob) + 1
+
+    # Generate random steering angles within the specified range
+    steering_size = (n_samples, max_n_beams)
+    theta_steerings = np.random.uniform(0, theta_end, size=steering_size)
+    phi_steerings = np.random.uniform(0, 360, size=steering_size)
+    steerings = np.dstack([theta_steerings, phi_steerings])
 
     mode = "w" if overwrite else "x"
     with h5py.File(dataset_dir / dataset_name, mode) as h5f:
@@ -116,30 +141,12 @@ def generate_beamforming(
         ex_shape = (n_samples, xn, yn)
         ex_ds = h5f.create_dataset("excitations", shape=ex_shape, dtype=np.complex64)
 
-        # Choose a random number of beams to simulate for each sample
-        n_beams_sq = np.square(np.arange(max_n_beams) + 1)
-        n_beams_prob = n_beams_sq / np.sum(n_beams_sq)  # consider softmax instead
-        n_beams = np.random.choice(max_n_beams, size=n_samples, p=n_beams_prob) + 1
-
-        # Generate random steering angles within the specified range
-        steering_size = (n_samples, max_n_beams)
-        theta_steerings = np.random.uniform(0, theta_end, size=steering_size)
-        phi_steerings = np.random.uniform(0, 360, size=steering_size)
-        steerings = np.dstack([theta_steerings, phi_steerings])
-
-        ex_calc = analyze.ExcitationCalculator(xn, yn, dx, dy, freq_hz)
-        af_calc = analyze.ArrayFactorCalculator(
-            theta_rad, phi_rad, xn, yn, dx, dy, freq_hz
-        )
-
         for i in tqdm(range(n_samples)):
             steer = steerings[i]
             steer[n_beams[i] :] = np.nan  # Set steering angles to NaN for unused beams
 
-            excitations = ex_calc(steer[: n_beams[i]])
-            AF = af_calc(excitations=excitations)
-            E_norm = analyze.run_array_factor(E_theta_single, E_phi_single, AF)
-            E_norm = analyze.normalize_pattern(E_norm, Dmax_array)
+            valid_steer = steer[~np.isnan(steer).any(axis=1)]
+            E_norm, excitations = calc_array_E_norm(jnp.asarray(valid_steer))
 
             patterns_ds[i] = E_norm
             ex_ds[i] = excitations
