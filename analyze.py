@@ -698,24 +698,11 @@ def steering_repr(steering_angles: np.ndarray):
 def test_plot_ff_3d():
     steering_deg = np.array([[15, 15], [30, 120], [45, 210]])
 
-    sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
-    freq_hz = 2.45e9
-
-    single_antenna_filename = f"ff_1x1_60x60_{freq_hz / 1e6:n}_steer_t0_p0.h5"
-    nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
-    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
-    E_field, Dmax = nf2ff["E_field"], nf2ff["Dmax"]
-
-    E_norm, _ = rad_pattern_from_single_elem(
-        E_field,
-        Dmax,
-        freq_hz,
-        array_size=(16, 16),
-        spacing_mm=(60, 60),
-        steering_deg=steering_deg,
-    )
+    array_params = calc_array_params2(array_size=(16, 16), spacing_mm=(60, 60))
+    E_norm, _ = rad_pattern_from_geo(*array_params, np.radians(steering_deg))
     E_norm = np.asarray(E_norm)
 
+    theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
     fig, axs = plt.subplots(1, 3, figsize=[18, 6])
 
     plot_ff_2d(theta_rad, phi_rad, E_norm, ax=axs[0])
