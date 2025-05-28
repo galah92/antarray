@@ -50,13 +50,14 @@ def generate_beamforming(
     overwrite: bool = False,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
+    array_size = (16, 16)
     theta_rad = np.radians(np.arange(180))
     phi_rad = np.radians(np.arange(360))
 
     print(f"Generating dataset with {n_samples} samples")
 
-    kx, ky, taper, geo_exp, E_field, Dmax_array = analyze.calc_array_params2(
-        array_size=(16, 16),
+    array_params = analyze.calc_array_params2(
+        array_size=array_size,
         spacing_mm=(60, 60),
         theta_rad=theta_rad,
         phi_rad=phi_rad,
@@ -64,8 +65,7 @@ def generate_beamforming(
     )
 
     # Create a function to calculate E_norm and excitations for given steering angles
-    static_params = (kx, ky, taper, geo_exp, E_field, Dmax_array)
-    static_params = jax.tree_util.tree_map(jnp.asarray, static_params)  # Convert to JAX
+    static_params = jax.tree_util.tree_map(jnp.asarray, array_params)  # Convert to JAX
     rad_pattern_from_steering = partial(analyze.rad_pattern_from_geo, *static_params)
 
     # Choose a random number of beams to simulate for each sample
@@ -86,7 +86,7 @@ def generate_beamforming(
 
         patterns_shape = (n_samples, theta_rad.size, phi_rad.size)
         patterns_ds = h5f.create_dataset("patterns", shape=patterns_shape)
-        ex_shape = (n_samples, *taper.shape)
+        ex_shape = (n_samples, *array_size)
         ex_ds = h5f.create_dataset("excitations", shape=ex_shape, dtype=np.complex64)
 
         for i in tqdm(range(n_samples)):
