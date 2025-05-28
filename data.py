@@ -12,7 +12,6 @@ from matplotlib import animation
 from tqdm import tqdm
 
 import analyze
-from analyze import read_nf2ff
 
 DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
 DEFAULT_DATASET_DIR = Path.cwd() / "dataset"
@@ -199,16 +198,18 @@ def ff_from_phase_shifts(
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
-    nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
-    E_field, Dmax_single = nf2ff["E_field"], nf2ff["Dmax"]
-
-    E_norm, _ = analyze.rad_pattern_from_single_elem_and_phase_shifts(
-        E_field,
-        Dmax_single,
-        freq_hz=2.45e9,
+    _, _, taper, geo_exp, E_field, Dmax_array = analyze.calc_array_params2(
         array_size=(16, 16),
         spacing_mm=(60, 60),
-        phase_shifts=phase_shifts,
+        sim_path=sim_dir_path / single_antenna_filename,
+    )
+
+    E_norm, _ = analyze.rad_pattern_from_geo_and_phase_shifts(
+        taper,
+        geo_exp,
+        E_field,
+        Dmax_array,
+        phase_shifts,
     )
 
     return E_norm

@@ -341,31 +341,6 @@ def rad_pattern_from_single_elem(
     return E_norm, excitations
 
 
-def rad_pattern_from_single_elem_and_phase_shifts(
-    E_field: np.ndarray,
-    Dmax: float,
-    freq_hz: float = 2.45e9,
-    array_size: tuple[int, int] = (16, 16),
-    spacing_mm: tuple[float, float] = (60, 60),
-    phase_shifts: np.ndarray = np.array([[0]]),
-) -> tuple[np.ndarray, np.ndarray]:
-    theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
-
-    kx, ky = calc_array_params(array_size, spacing_mm, freq_hz)
-    taper = calc_taper(array_size)
-    geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
-    Dmax_array = Dmax * np.prod(array_size)
-
-    E_norm, excitations = rad_pattern_from_geo_and_phase_shifts(
-        taper,
-        geo_exp,
-        E_field,
-        Dmax_array,
-        phase_shifts,
-    )
-    return E_norm, excitations
-
-
 @jax.jit
 def rad_pattern_from_geo_and_excitations(
     geo_exp: ArrayLike,
