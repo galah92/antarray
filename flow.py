@@ -17,24 +17,6 @@ DEFAULT_ARRAY_SIZE = (16, 16)
 DEFAULT_SPACING_MM = (60, 60)
 DEFAULT_THETA_END = 65.0
 DEFAULT_MAX_N_BEAMS = 3
-DEFAULT_BATCH_SIZE = 32
-DEFAULT_LEARNING_RATE = 1e-3
-DEFAULT_NUM_EPOCHS = 100
-DEFAULT_CHECKPOINT_DIR = Path("checkpoints")
-
-
-class TrainingConfig(NamedTuple):
-    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE
-    spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM
-    theta_end: float = DEFAULT_THETA_END
-    max_n_beams: int = DEFAULT_MAX_N_BEAMS
-    batch_size: int = DEFAULT_BATCH_SIZE
-    learning_rate: float = DEFAULT_LEARNING_RATE
-    num_epochs: int = DEFAULT_NUM_EPOCHS
-    checkpoint_dir: Path = DEFAULT_CHECKPOINT_DIR
-    eval_every: int = 1000
-    checkpoint_every: int = 5000
-    seed: int = 42
 
 
 class DataSample(NamedTuple):
@@ -45,15 +27,20 @@ class DataSample(NamedTuple):
 
 class DataGenerator:
     def __init__(
-        self, config: TrainingConfig, sim_dir_path: Path = data.DEFAULT_SIM_DIR
+        self,
+        array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
+        spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
+        theta_end: float = DEFAULT_THETA_END,
+        max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+        sim_dir_path: Path = data.DEFAULT_SIM_DIR,
     ):
-        self.theta_end = config.theta_end
+        self.theta_end = theta_end
         self.sim_dir_path = sim_dir_path
 
         # Load and prepare array parameters
         array_params = analyze.calc_array_params2(
-            array_size=config.array_size,
-            spacing_mm=config.spacing_mm,
+            array_size=array_size,
+            spacing_mm=spacing_mm,
             theta_rad=jnp.radians(jnp.arange(180)),
             phi_rad=jnp.radians(jnp.arange(360)),
             sim_path=sim_dir_path / data.DEFAULT_SINGLE_ANT_FILENAME,
@@ -63,7 +50,7 @@ class DataGenerator:
         self.array_params = [jnp.asarray(param) for param in array_params]
 
         # Beam probability distribution
-        self.n_beams_prob = data.get_beams_prob(config.max_n_beams)
+        self.n_beams_prob = data.get_beams_prob(max_n_beams)
 
     def generate_sample(self, key: jax.random.PRNGKey) -> DataSample:
         key1, key2 = jax.random.split(key, 2)
@@ -103,8 +90,11 @@ class PhaseShiftPredictor(nnx.Module):
 
         # Calculate the actual output size after conv layers
         dummy_input = jnp.ones((1, 180, 360, 1))
+        print("Dummy input shape:", dummy_input.shape)
         h1 = self.conv1(dummy_input)
+        print("After conv1 shape:", h1.shape)
         h2 = self.conv2(h1)
+        print("After conv2 shape:", h2.shape)
         conv_output_size = h2.shape[1] * h2.shape[2] * h2.shape[3]
 
         self.compress1 = nnx.Linear(conv_output_size, 64, rngs=rngs)
@@ -146,18 +136,34 @@ def train_step(
 
 
 @app.command()
-def dev():
-    config = TrainingConfig()
+def dev(
+    array_size_x: int = DEFAULT_ARRAY_SIZE[0],
+    array_size_y: int = DEFAULT_ARRAY_SIZE[1],
+    spacing_mm_x: float = DEFAULT_SPACING_MM[0],
+    spacing_mm_y: float = DEFAULT_SPACING_MM[1],
+    theta_end: float = DEFAULT_THETA_END,
+    max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+    batch_size: int = 32,
+    learning_rate: float = 1e-3,
+    seed: int = 42,
+):
+    array_size = (array_size_x, array_size_y)
+    spacing_mm = (spacing_mm_x, spacing_mm_y)
+
     key = jax.random.PRNGKey(0)
-    generator = DataGenerator(config)
+    generator = DataGenerator(
+        array_size=array_size,
+        spacing_mm=spacing_mm,
+        theta_end=theta_end,
+        max_n_beams=max_n_beams,
+    )
 
-    rngs = nnx.Rngs(config.seed)
-    model = PhaseShiftPredictor(array_size=config.array_size, rngs=rngs)
-    optimizer = nnx.Optimizer(model, optax.adam(config.learning_rate))
+    rngs = nnx.Rngs(seed)
+    model = PhaseShiftPredictor(array_size=array_size, rngs=rngs)
+    optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
 
-    print("Starting development run")
     for i in range(10):
-        batch = generator.generate_batch(key, batch_size=1)
+        batch = generator.generate_batch(key, batch_size=batch_size)
         print(f"Generated batch {i}")
         optimizer, train_metrics = train_step(model, optimizer, batch)
         print(f"Step {i}, Loss: {train_metrics['loss']:.4f}")
