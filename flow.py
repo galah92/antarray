@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -240,15 +241,14 @@ class PhaseShiftPredictor(nnx.Module):
         return predictions
 
 
+@nnx.jit
 def train_step(
-    model: nnx.Module,
     optimizer: nnx.Optimizer,
     batch: dict[str, jnp.ndarray],
 ) -> tuple[nnx.Optimizer, dict[str, float]]:
     def loss_fn(model: nnx.Module):
         radiation_patterns = batch["radiation_patterns"]
         phase_shifts = batch["phase_shifts"]
-
         predictions = model(radiation_patterns, training=True)
 
         # Phase-aware loss: account for phase wrapping
@@ -256,11 +256,10 @@ def train_step(
         phase_diff_wrapped = jnp.arctan2(jnp.sin(phase_diff), jnp.cos(phase_diff))
         loss = jnp.mean(phase_diff_wrapped**2)
 
-        return loss, {
-            "loss": loss,
-            "phase_rmse": jnp.sqrt(jnp.mean(phase_diff_wrapped**2)),
-        }
+        phase_rmse = jnp.sqrt(jnp.mean(phase_diff_wrapped**2))
+        return loss, {"loss": loss, "phase_rmse": phase_rmse}
 
+    model = optimizer.model
     (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model)
     optimizer.update(grads)
 
@@ -285,10 +284,14 @@ def dev(
     model = PhaseShiftPredictor(array_size, rngs=rngs)
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
 
-    for i in range(100):
+    for step in range(100):
+        step_start_time = time.time()
         batch = dataset.generate_batch(key, batch_size=batch_size)
-        optimizer, train_metrics = train_step(model, optimizer, batch)
-        print(f"Step {i:02}, Loss: {train_metrics['loss']:.4f}")
+        optimizer, train_metrics = train_step(optimizer, batch)
+
+        loss = train_metrics["loss"]
+        duration = time.time() - step_start_time
+        print(f"{step=:02}, {duration=:.2f}s, {loss=:.3f}")
 
     print("Development run completed successfully")
 
