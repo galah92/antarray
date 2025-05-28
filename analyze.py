@@ -34,7 +34,11 @@ def read_nf2ff(nf2ff_path: Path):
         # Transpose to (freq, theta, phi)
         E_theta, E_phi = E_theta.transpose(0, 2, 1), E_phi.transpose(0, 2, 1)
 
-        E_norm = np.sqrt(np.abs(E_phi) ** 2 + np.abs(E_theta) ** 2)
+        if freqs.size == 1:  # Squeeze the frequency dimension
+            E_theta, E_phi = np.squeeze(E_theta), np.squeeze(E_phi)
+
+        E_field = np.stack([E_theta, E_phi], axis=0)  # (2, freq, theta, phi)
+        E_norm = np.sqrt(np.abs(E_theta) ** 2 + np.abs(E_phi) ** 2)
 
     return {
         "theta_rad": theta_rad,
@@ -42,8 +46,7 @@ def read_nf2ff(nf2ff_path: Path):
         "r": r,
         "Dmax": Dmax,
         "freq": freqs,
-        "E_theta": E_theta,
-        "E_phi": E_phi,
+        "E_field": E_field,
         "E_norm": E_norm,
     }
 
@@ -219,14 +222,11 @@ def calc_array_factor(
     return AF
 
 
-def run_array_factor(
-    E_theta: ArrayLike,
-    E_phi: ArrayLike,
-    array_factor: ArrayLike,
-) -> Array:
+def run_array_factor(E_field: ArrayLike, array_factor: ArrayLike) -> Array:
     """
     Calculate the electric field norm from the array factor and single element fields.
     """
+    E_theta, E_phi = E_field[0], E_field[1]
     E_theta_array, E_phi_array = array_factor * E_theta, array_factor * E_phi
     E_norm_array = jnp.sqrt(jnp.abs(E_theta_array) ** 2 + jnp.abs(E_phi_array) ** 2)
     return E_norm_array
@@ -242,8 +242,7 @@ def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> Array:
 
 
 def rad_pattern_from_single_elem(
-    E_theta: np.ndarray,
-    E_phi: np.ndarray,
+    E_field: np.ndarray,
     Dmax: float,
     freq_hz: float = 2.45e9,
     array_size: tuple[int, int] = (16, 16),
@@ -264,8 +263,7 @@ def rad_pattern_from_single_elem(
         ky,
         taper,
         geo_exp,
-        E_theta,
-        E_phi,
+        E_field,
         Dmax_array,
         steering_rad,
     )
@@ -273,8 +271,7 @@ def rad_pattern_from_single_elem(
 
 
 def rad_pattern_from_single_elem_and_phase_shifts(
-    E_theta: np.ndarray,
-    E_phi: np.ndarray,
+    E_field: np.ndarray,
     Dmax: float,
     freq_hz: float = 2.45e9,
     array_size: tuple[int, int] = (16, 16),
@@ -291,8 +288,7 @@ def rad_pattern_from_single_elem_and_phase_shifts(
     E_norm, excitations = rad_pattern_from_geo_and_phase_shifts(
         taper,
         geo_exp,
-        E_theta,
-        E_phi,
+        E_field,
         Dmax_array,
         phase_shifts,
     )
@@ -302,13 +298,12 @@ def rad_pattern_from_single_elem_and_phase_shifts(
 @jax.jit
 def rad_pattern_from_geo_and_excitations(
     geo_exp: ArrayLike,
-    E_theta: ArrayLike,
-    E_phi: ArrayLike,
+    E_field: ArrayLike,
     Dmax_array: float,
     excitations: ArrayLike,
 ) -> tuple[Array, Array]:
     array_factor = calc_array_factor(geo_exp, excitations)
-    E_norm = run_array_factor(E_theta, E_phi, array_factor)
+    E_norm = run_array_factor(E_field, array_factor)
     E_norm = normalize_rad_pattern(E_norm, Dmax_array)
     return E_norm, excitations
 
@@ -317,14 +312,13 @@ def rad_pattern_from_geo_and_excitations(
 def rad_pattern_from_geo_and_phase_shifts(
     taper: ArrayLike,
     geo_exp: ArrayLike,
-    E_theta: ArrayLike,
-    E_phi: ArrayLike,
+    E_field: ArrayLike,
     Dmax_array: float,
     phase_shifts: ArrayLike = np.array([[0]]),
 ) -> tuple[Array, Array]:
     excitations = calc_excitations_from_phase_shifts(taper, phase_shifts)
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
-        geo_exp, E_theta, E_phi, Dmax_array, excitations
+        geo_exp, E_field, Dmax_array, excitations
     )
     return E_norm, excitations
 
@@ -335,8 +329,7 @@ def rad_pattern_from_geo(
     ky: ArrayLike,
     taper: ArrayLike,
     geo_exp: ArrayLike,
-    E_theta: ArrayLike,
-    E_phi: ArrayLike,
+    E_field: ArrayLike,
     Dmax_array: ArrayLike,
     steering_rad: ArrayLike,
 ) -> tuple[Array, Array]:
@@ -345,7 +338,7 @@ def rad_pattern_from_geo(
     """
     excitations = calc_excitations_from_steering(kx, ky, taper, steering_rad)
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
-        geo_exp, E_theta, E_phi, Dmax_array, excitations
+        geo_exp, E_field, Dmax_array, excitations
     )
     return E_norm, excitations
 
@@ -419,7 +412,6 @@ def plot_sim_and_af(
     array_size,
     spacing_mm,
     *,
-    freq_idx=0,
     steering_theta_deg=0,
     steering_phi_deg=0,
     figname: bool | str = True,
@@ -454,10 +446,9 @@ def plot_sim_and_af(
     # Load the single antenna pattern (for array factor calculation)
     single_antenna_filename = f"ff_1x1_60x60_{freq_hz / 1e6:n}_steer_t0_p0.h5"
     nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
-    E_theta, E_phi = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
-    Dmax_single = nf2ff["Dmax"]
+    E_field, Dmax_single = nf2ff["E_field"], nf2ff["Dmax"]
 
-    elem_params = E_theta, E_phi, Dmax_single, freq_hz
+    elem_params = E_field, Dmax_single, freq_hz
     rad_pattern_from_array_params = partial(rad_pattern_from_single_elem, *elem_params)
 
     # Create a figure with polar subplots
@@ -487,7 +478,7 @@ def plot_sim_and_af(
             except (FileNotFoundError, KeyError):  # Could not load simulation data
                 pass
 
-            E_norm = nf2ff["E_norm"][freq_idx]
+            E_norm = nf2ff["E_norm"]
             Dmax = nf2ff["Dmax"]
             label = "OpenEMS Simulation"
             plot_E_plane(E_norm=E_norm, Dmax=Dmax, normalize=True, label=label, ax=ax)
@@ -663,17 +654,14 @@ def test_plot_ff_3d():
 
     sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
     freq_hz = 2.45e9
-    freq_idx = 0
 
     single_antenna_filename = f"ff_1x1_60x60_{freq_hz / 1e6:n}_steer_t0_p0.h5"
     nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
-    E_theta, E_phi = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
-    Dmax = nf2ff["Dmax"]
+    E_field, Dmax = nf2ff["E_field"], nf2ff["Dmax"]
 
     E_norm, _ = rad_pattern_from_single_elem(
-        E_theta,
-        E_phi,
+        E_field,
         Dmax,
         freq_hz,
         array_size=(16, 16),

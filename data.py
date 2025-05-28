@@ -102,10 +102,8 @@ def generate_beamforming(
 
     nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
 
-    freq_idx = 0  # index of the frequency to plot
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
-    E_theta, E_phi = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
-    Dmax_single = nf2ff["Dmax"][freq_idx]
+    E_field, Dmax_single = nf2ff["E_field"], nf2ff["Dmax"]
     Dmax_array = Dmax_single * (np.prod(array_size))
 
     print(f"Generating dataset with {n_samples} samples")
@@ -116,7 +114,7 @@ def generate_beamforming(
     geo_exp = analyze.calc_geo_exp(theta_rad, phi_rad, kx, ky)
 
     # Create a function to calculate E_norm and excitations for given steering angles
-    static_params = (kx, ky, taper, geo_exp, E_theta, E_phi, Dmax_array)
+    static_params = (kx, ky, taper, geo_exp, E_field, Dmax_array)
     static_params = jax.tree_util.tree_map(jnp.asarray, static_params)  # Convert to JAX
     rad_pattern_from_steering = partial(analyze.rad_pattern_from_geo, *static_params)
 
@@ -251,14 +249,10 @@ def ff_from_phase_shifts(
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
     nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
-
-    freq_idx = 0  # index of the frequency to plot
-    E_theta, E_phi = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
-    Dmax_single = nf2ff["Dmax"][freq_idx]
+    E_field, Dmax_single = nf2ff["E_field"], nf2ff["Dmax"]
 
     E_norm, _ = analyze.rad_pattern_from_single_elem_and_phase_shifts(
-        E_theta,
-        E_phi,
+        E_field,
         Dmax_single,
         freq_hz=2.45e9,
         array_size=(16, 16),
