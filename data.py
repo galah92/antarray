@@ -39,6 +39,16 @@ def simulate(sim_path: str = "antenna_array.py"):
     sp.run(cmd, shell=True)
 
 
+def get_beams_prob(max_n_beams: int = 1):
+    """
+    Calculate the probability distribution for the number of beams.
+    The probability is proportional to the square of the number of beams.
+    """
+    n_beams_sq = np.square(np.arange(max_n_beams) + 1)
+    n_beams_prob = n_beams_sq / np.sum(n_beams_sq)  # Normalize to sum to 1
+    return n_beams_prob
+
+
 @app.command()
 def generate_beamforming(
     n_samples: int = 1_000,
@@ -69,8 +79,7 @@ def generate_beamforming(
     rad_pattern_from_steering = partial(analyze.rad_pattern_from_geo, *static_params)
 
     # Choose a random number of beams to simulate for each sample
-    n_beams_sq = np.square(np.arange(max_n_beams) + 1)
-    n_beams_prob = n_beams_sq / np.sum(n_beams_sq)  # consider softmax instead
+    n_beams_prob = get_beams_prob(max_n_beams)
     n_beams = np.random.choice(max_n_beams, size=n_samples, p=n_beams_prob) + 1
 
     # Generate random steering angles within the specified range
