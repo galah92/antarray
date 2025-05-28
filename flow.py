@@ -3,7 +3,6 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 import typer
 from flax import nnx
@@ -25,7 +24,7 @@ class DataSample(NamedTuple):
     steering_angles: jnp.ndarray  # Shape: (n_beams, 2) - theta, phi in radians
 
 
-class DataGenerator:
+class Dataset:
     def __init__(
         self,
         array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
@@ -57,9 +56,10 @@ class DataGenerator:
 
         # For now, let's simplify to single beam to avoid vmap issues
         # Generate random steering angles for a single beam
-        theta_steering = jax.random.uniform(key1) * jnp.radians(self.theta_end)
-        phi_steering = jax.random.uniform(key2) * (2 * jnp.pi)
-        steering_angles = jnp.array([[theta_steering, phi_steering]])
+        n_beams = 4
+        theta_steering = jax.random.uniform(key1, n_beams) * jnp.radians(self.theta_end)
+        phi_steering = jax.random.uniform(key2, n_beams) * (2 * jnp.pi)
+        steering_angles = jnp.stack((theta_steering, phi_steering), axis=-1)
 
         radiation_pattern, excitations = analyze.rad_pattern_from_geo(
             *self.array_params,
@@ -81,37 +81,162 @@ class DataGenerator:
         }
 
 
+class AttentionBlock(nnx.Module):
+    def __init__(self, channels: int, *, rngs: nnx.Rngs):
+        self.channels = channels
+        self.query = nnx.Conv(channels, channels // 8, kernel_size=(1, 1), rngs=rngs)
+        self.key = nnx.Conv(channels, channels // 8, kernel_size=(1, 1), rngs=rngs)
+        self.value = nnx.Conv(channels, channels, kernel_size=(1, 1), rngs=rngs)
+        self.gamma = nnx.Param(jnp.zeros(1))
+
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        batch_size, height, width, channels = x.shape
+
+        # Compute attention
+        q = self.query(x).reshape(batch_size, -1, channels // 8)
+        k = self.key(x).reshape(batch_size, -1, channels // 8)
+        v = self.value(x).reshape(batch_size, -1, channels)
+
+        # Attention weights
+        attention = jax.nn.softmax(q @ jnp.transpose(k, (0, 2, 1)), axis=-1)
+
+        # Apply attention
+        out = (attention @ v).reshape(batch_size, height, width, channels)
+
+        # Residual connection with learnable weight
+        return self.gamma * out + x
+
+
+class ResidualBlock(nnx.Module):
+    def __init__(self, channels: int, *, rngs: nnx.Rngs):
+        self.conv1 = nnx.Conv(
+            channels, channels, kernel_size=(3, 3), padding="SAME", rngs=rngs
+        )
+        self.conv2 = nnx.Conv(
+            channels, channels, kernel_size=(3, 3), padding="SAME", rngs=rngs
+        )
+        self.norm1 = nnx.BatchNorm(channels, rngs=rngs)
+        self.norm2 = nnx.BatchNorm(channels, rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        residual = x
+
+        out = nnx.relu(self.norm1(self.conv1(x)))
+        out = self.norm2(self.conv2(out))
+
+        return nnx.relu(out + residual)
+
+
 class PhaseShiftPredictor(nnx.Module):
     def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
         self.array_size = array_size
 
-        self.conv1 = nnx.Conv(1, 4, kernel_size=(5, 5), strides=(8, 8), rngs=rngs)
-        self.conv2 = nnx.Conv(4, 8, kernel_size=(3, 3), strides=(4, 4), rngs=rngs)
+        # Feature extraction backbone
+        self.conv1 = nnx.Conv(
+            1, 32, kernel_size=(7, 7), strides=(2, 2), padding="SAME", rngs=rngs
+        )
+        self.norm1 = nnx.BatchNorm(32, rngs=rngs)
 
-        # Calculate the actual output size after conv layers
-        dummy_input = jnp.ones((1, 180, 360, 1))
-        print("Dummy input shape:", dummy_input.shape)
-        h1 = self.conv1(dummy_input)
-        print("After conv1 shape:", h1.shape)
-        h2 = self.conv2(h1)
-        print("After conv2 shape:", h2.shape)
-        conv_output_size = h2.shape[1] * h2.shape[2] * h2.shape[3]
+        self.conv2 = nnx.Conv(
+            32, 64, kernel_size=(5, 5), strides=(2, 2), padding="SAME", rngs=rngs
+        )
+        self.norm2 = nnx.BatchNorm(64, rngs=rngs)
 
-        self.compress1 = nnx.Linear(conv_output_size, 64, rngs=rngs)
-        self.output_layer = nnx.Linear(64, np.prod(array_size), rngs=rngs)
+        self.conv3 = nnx.Conv(
+            64, 128, kernel_size=(3, 3), strides=(2, 2), padding="SAME", rngs=rngs
+        )
+        self.norm3 = nnx.BatchNorm(128, rngs=rngs)
 
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        x_reshaped = x.reshape(x.shape[0], 180, 360, 1)
+        # Residual blocks for better feature learning
+        self.res_block1 = ResidualBlock(128, rngs=rngs)
+        self.res_block2 = ResidualBlock(128, rngs=rngs)
 
-        h1 = nnx.relu(self.conv1(x_reshaped))
-        h2 = nnx.relu(self.conv2(h1))
+        # Attention mechanism to focus on beam peaks
+        self.attention = AttentionBlock(128, rngs=rngs)
 
-        h_flat = h2.reshape(h2.shape[0], -1)
+        # Spatial upsampling to match array dimensions - avoiding checkerboard artifacts
+        # Using resize + conv instead of transposed convolutions
+        self.upsample_conv1 = nnx.Conv(
+            128, 64, kernel_size=(3, 3), padding="SAME", rngs=rngs
+        )
+        self.norm_up1 = nnx.BatchNorm(64, rngs=rngs)
 
-        h3 = nnx.relu(self.compress1(h_flat))
-        predictions_flat = self.output_layer(h3)
+        self.upsample_conv2 = nnx.Conv(
+            64, 32, kernel_size=(3, 3), padding="SAME", rngs=rngs
+        )
+        self.norm_up2 = nnx.BatchNorm(32, rngs=rngs)
 
-        predictions = predictions_flat.reshape(x.shape[0], *self.array_size)
+        # Adaptive pooling to exact array size
+        self.spatial_adapt = nnx.Conv(
+            32, 16, kernel_size=(3, 3), padding="SAME", rngs=rngs
+        )
+        self.norm_adapt = nnx.BatchNorm(16, rngs=rngs)
+
+        # Final phase prediction layer - outputs 1 phase per array element
+        self.phase_conv = nnx.Conv(16, 1, kernel_size=(1, 1), rngs=rngs)
+
+        # Phase normalization parameters
+        self.phase_scale = nnx.Param(jnp.ones(1))
+        self.phase_bias = nnx.Param(jnp.zeros(1))
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        # Input shape: (batch_size, 180, 360)
+        x = x.reshape(x.shape[0], 180, 360, 1)
+
+        # Feature extraction with progressive downsampling
+        x = nnx.relu(self.norm1(self.conv1(x)))  # -> (batch, 90, 180, 32)
+        x = nnx.relu(self.norm2(self.conv2(x)))  # -> (batch, 45, 90, 64)
+        x = nnx.relu(self.norm3(self.conv3(x)))  # -> (batch, 23, 45, 128)
+
+        # Residual blocks for deeper feature learning
+        x = self.res_block1(x)
+        x = self.res_block2(x)
+
+        # Attention mechanism to focus on important regions
+        x = self.attention(x)
+
+        # Spatial upsampling using resize + conv to avoid checkerboard artifacts
+        # Upsample 1: (23, 45) -> (46, 90)
+        x = jax.image.resize(x, (x.shape[0], 46, 90, x.shape[3]), method="bilinear")
+        x = nnx.relu(self.norm_up1(self.upsample_conv1(x)))  # -> (batch, 46, 90, 64)
+
+        # Upsample 2: (46, 90) -> (92, 180)
+        x = jax.image.resize(x, (x.shape[0], 92, 180, x.shape[3]), method="bilinear")
+        x = nnx.relu(self.norm_up2(self.upsample_conv2(x)))  # -> (batch, 92, 180, 32)
+
+        # Adaptive spatial processing
+        x = nnx.relu(self.norm_adapt(self.spatial_adapt(x)))  # -> (batch, 92, 180, 16)
+
+        # Resize to exact array dimensions using adaptive average pooling
+        # This preserves spatial structure while matching target size
+        target_h, target_w = self.array_size
+        current_h, current_w = x.shape[1], x.shape[2]
+
+        # Use stride and kernel size to downsample to target size
+        stride_h = current_h // target_h
+        stride_w = current_w // target_w
+        kernel_h = current_h - (target_h - 1) * stride_h
+        kernel_w = current_w - (target_w - 1) * stride_w
+
+        x = nnx.avg_pool(
+            x, window_shape=(kernel_h, kernel_w), strides=(stride_h, stride_w)
+        )
+
+        # Ensure exact target dimensions (crop or pad if needed)
+        if x.shape[1] != target_h or x.shape[2] != target_w:
+            x = jax.image.resize(
+                x, (x.shape[0], target_h, target_w, x.shape[3]), method="bilinear"
+            )
+
+        # Final phase prediction
+        x = self.phase_conv(x)  # -> (batch, array_x, array_y, 1)
+
+        # Apply phase normalization and wrap to [-π, π]
+        x = self.phase_scale * x + self.phase_bias
+        x = jnp.arctan2(jnp.sin(x), jnp.cos(x))  # Wrap phases to [-π, π]
+
+        # Remove channel dimension: (batch, array_x, array_y, 1) -> (batch, array_x, array_y)
+        predictions = x.squeeze(-1)
         return predictions
 
 
@@ -124,10 +249,17 @@ def train_step(
         radiation_patterns = batch["radiation_patterns"]
         phase_shifts = batch["phase_shifts"]
 
-        predictions = model(radiation_patterns)
-        loss = jnp.mean((predictions - phase_shifts) ** 2)
+        predictions = model(radiation_patterns, training=True)
 
-        return loss, {"loss": loss}
+        # Phase-aware loss: account for phase wrapping
+        phase_diff = predictions - phase_shifts
+        phase_diff_wrapped = jnp.arctan2(jnp.sin(phase_diff), jnp.cos(phase_diff))
+        loss = jnp.mean(phase_diff_wrapped**2)
+
+        return loss, {
+            "loss": loss,
+            "phase_rmse": jnp.sqrt(jnp.mean(phase_diff_wrapped**2)),
+        }
 
     (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model)
     optimizer.update(grads)
@@ -137,36 +269,26 @@ def train_step(
 
 @app.command()
 def dev(
-    array_size_x: int = DEFAULT_ARRAY_SIZE[0],
-    array_size_y: int = DEFAULT_ARRAY_SIZE[1],
-    spacing_mm_x: float = DEFAULT_SPACING_MM[0],
-    spacing_mm_y: float = DEFAULT_SPACING_MM[1],
+    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
+    spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
     theta_end: float = DEFAULT_THETA_END,
     max_n_beams: int = DEFAULT_MAX_N_BEAMS,
-    batch_size: int = 32,
+    batch_size: int = 64,
     learning_rate: float = 1e-3,
     seed: int = 42,
 ):
-    array_size = (array_size_x, array_size_y)
-    spacing_mm = (spacing_mm_x, spacing_mm_y)
-
     key = jax.random.PRNGKey(0)
-    generator = DataGenerator(
-        array_size=array_size,
-        spacing_mm=spacing_mm,
-        theta_end=theta_end,
-        max_n_beams=max_n_beams,
-    )
+
+    dataset = Dataset(array_size, spacing_mm, theta_end, max_n_beams)
 
     rngs = nnx.Rngs(seed)
-    model = PhaseShiftPredictor(array_size=array_size, rngs=rngs)
+    model = PhaseShiftPredictor(array_size, rngs=rngs)
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
 
-    for i in range(10):
-        batch = generator.generate_batch(key, batch_size=batch_size)
-        print(f"Generated batch {i}")
+    for i in range(100):
+        batch = dataset.generate_batch(key, batch_size=batch_size)
         optimizer, train_metrics = train_step(model, optimizer, batch)
-        print(f"Step {i}, Loss: {train_metrics['loss']:.4f}")
+        print(f"Step {i:02}, Loss: {train_metrics['loss']:.4f}")
 
     print("Development run completed successfully")
 
