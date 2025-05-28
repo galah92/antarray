@@ -93,10 +93,11 @@ def generate_beamforming(
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
     # Fixed parameters for the 16x16 array
-    xn = yn = 16  # 16x16 array
-    dx_mm = dy_mm = 60  # 60x60 mm spacing
+    array_size = (16, 16)  # 16x16 array
+    spacing_mm = (60, 60)  # 60x60 mm spacing
     freq_hz = 2.45e9  # 2.45 GHz
 
+    dx_mm, dy_mm = spacing_mm
     check_grating_lobes(freq_hz, dx_mm, dy_mm)
 
     nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
@@ -105,13 +106,13 @@ def generate_beamforming(
     theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
     E_theta, E_phi = nf2ff["E_theta"][freq_idx], nf2ff["E_phi"][freq_idx]
     Dmax_single = nf2ff["Dmax"][freq_idx]
-    Dmax_array = Dmax_single * (xn * yn)
+    Dmax_array = Dmax_single * (np.prod(array_size))
 
     print(f"Generating dataset with {n_samples} samples")
 
     # Calculate array parameters once
-    kx, ky = analyze.calc_array_params(xn, yn, dx_mm, dy_mm, freq_hz)
-    taper = analyze.calc_taper(xn, yn)
+    kx, ky = analyze.calc_array_params(array_size, spacing_mm, freq_hz)
+    taper = analyze.calc_taper(array_size)
     geo_exp = analyze.calc_geo_exp(theta_rad, phi_rad, kx, ky)
 
     # Create a function to calculate E_norm and excitations for given steering angles
@@ -137,7 +138,7 @@ def generate_beamforming(
 
         patterns_shape = (n_samples, theta_rad.size, phi_rad.size)
         patterns_ds = h5f.create_dataset("patterns", shape=patterns_shape)
-        ex_shape = (n_samples, xn, yn)
+        ex_shape = (n_samples, *array_size)
         ex_ds = h5f.create_dataset("excitations", shape=ex_shape, dtype=np.complex64)
 
         for i in tqdm(range(n_samples)):
@@ -260,10 +261,8 @@ def ff_from_phase_shifts(
         E_phi,
         Dmax_single,
         freq_hz=2.45e9,
-        xn=16,
-        yn=16,
-        dx_mm=60,
-        dy_mm=60,
+        array_size=(16, 16),
+        spacing_mm=(60, 60),
         phase_shifts=phase_shifts,
     )
 

@@ -62,11 +62,11 @@ def get_wavenumber(freq_hz: float) -> float:
 
 @lru_cache(maxsize=1)
 def get_element_positions(
-    xn: int,
-    yn: int,
-    dx_mm: float,
-    dy_mm: float,
+    array_size: tuple[int, int],
+    spacing_mm: tuple[float, float],
 ) -> tuple[np.ndarray, np.ndarray]:
+    xn, yn = array_size
+    dx_mm, dy_mm = spacing_mm
     # Calculate the x and y positions of the elements in the array in meters, centered around (0, 0)
     x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_mm / 1000
     y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_mm / 1000
@@ -74,33 +74,32 @@ def get_element_positions(
 
 
 def calc_array_params(
-    xn: int = 16,
-    yn: int = 16,
-    dx_mm: float = 60,
-    dy_mm: float = 60,
+    array_size: tuple[int, int] = (16, 16),
+    spacing_mm: tuple[float, float] = (60, 60),
     freq_hz: float = 2.45e9,
 ) -> tuple[np.ndarray, np.ndarray]:
     k = get_wavenumber(freq_hz)
-    x_pos, y_pos = get_element_positions(xn, yn, dx_mm, dy_mm)
+    x_pos, y_pos = get_element_positions(array_size, spacing_mm)
     kx, ky = k * x_pos, k * y_pos  # Wavenumber-scaled positions
     return kx, ky
 
 
 @lru_cache(maxsize=1)
 def calc_taper(
-    xn: int = 16,
-    yn: int = 16,
+    array_size: tuple[int, int] = (16, 16),
     taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
 ) -> np.ndarray:
     if taper_type == "hamming":
-        window_x, window_y = np.hamming(xn), np.hamming(yn)
+        window_func = np.hamming
     elif taper_type == "taylor":
         # Simple approximation of Taylor window using Kaiser
-        window_x, window_y = np.kaiser(xn, 3), np.kaiser(yn, 3)
+        window_func = partial(np.kaiser, beta=3)
     else:
-        window_x, window_y = np.ones(xn), np.ones(yn)
+        window_func = np.ones  # Uniform taper
 
-    return np.outer(window_x, window_y)  # Create 2D taper by multiplying the 1D windows
+    window_x, window_y = window_func(array_size[0]), window_func(array_size[1])
+    taper = np.outer(window_x, window_y)  # Multiply the 1D windows
+    return taper.astype(np.complex64)
 
 
 @jax.jit
@@ -247,19 +246,17 @@ def rad_pattern_from_single_elem(
     E_phi: np.ndarray,
     Dmax: float,
     freq_hz: float = 2.45e9,
-    xn: int = 16,
-    yn: int = 16,
-    dx_mm: float = 60,
-    dy_mm: float = 60,
+    array_size: tuple[int, int] = (16, 16),
+    spacing_mm: tuple[float, float] = (60, 60),
     steering_deg: np.ndarray = np.array([[0, 0]]),
     taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
 ) -> tuple[np.ndarray, np.ndarray]:
     theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
 
-    kx, ky = calc_array_params(xn, yn, dx_mm, dy_mm, freq_hz)
-    taper = calc_taper(xn, yn, taper_type)
+    kx, ky = calc_array_params(array_size, spacing_mm, freq_hz)
+    taper = calc_taper(array_size, taper_type)
     geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
-    Dmax_array = Dmax * (xn * yn)
+    Dmax_array = Dmax * np.prod(array_size)
 
     steering_rad = np.radians(steering_deg)
     E_norm, excitations = rad_pattern_from_geo(
@@ -280,18 +277,16 @@ def rad_pattern_from_single_elem_and_phase_shifts(
     E_phi: np.ndarray,
     Dmax: float,
     freq_hz: float = 2.45e9,
-    xn: int = 16,
-    yn: int = 16,
-    dx_mm: float = 60,
-    dy_mm: float = 60,
+    array_size: tuple[int, int] = (16, 16),
+    spacing_mm: tuple[float, float] = (60, 60),
     phase_shifts: np.ndarray = np.array([[0]]),
 ) -> tuple[np.ndarray, np.ndarray]:
     theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
 
-    kx, ky = calc_array_params(xn, yn, dx_mm, dy_mm, freq_hz)
-    taper = calc_taper(xn, yn)
+    kx, ky = calc_array_params(array_size, spacing_mm, freq_hz)
+    taper = calc_taper(array_size)
     geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
-    Dmax_array = Dmax * (xn * yn)
+    Dmax_array = Dmax * np.prod(array_size)
 
     E_norm, excitations = rad_pattern_from_geo_and_phase_shifts(
         taper,
@@ -421,11 +416,10 @@ def extend_pattern_to_360_theta(pattern: np.ndarray) -> np.ndarray:
 def plot_sim_and_af(
     sim_dir,
     freq_hz,
-    xns,
-    yn,
-    dxs,
+    array_size,
+    spacing_mm,
     *,
-    freq_idx=0,  # index of the frequency to plot
+    freq_idx=0,
     steering_theta_deg=0,
     steering_phi_deg=0,
     figname: bool | str = True,
@@ -440,12 +434,10 @@ def plot_sim_and_af(
         Directory containing OpenEMS simulation results
     freq : float
         Operating frequency in Hz
-    xns : list or numpy.ndarray
-        Number of elements in the x-direction to plot
-    yn : int
-        Number of elements in the y-direction
-    dxs : list or numpy.ndarray
-        Element spacings to plot in millimeters
+    array_size : list or numpy.ndarray
+        Array sizes as (xn, yn) tuples to plot
+    spacing_mm : list or numpy.ndarray
+        Element spacings as (dx_mm, dy_mm) tuples to plot in millimeters
     figname : str, optional
         Filename to save the figure, if None the figure is not saved
     steering_theta : float, optional
@@ -456,8 +448,8 @@ def plot_sim_and_af(
     if not sim_dir:
         sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
 
-    xns = np.array(xns)  # number of antennas in x direction
-    dxs = np.array(dxs)  # distance between antennas in mm
+    array_size = np.array(array_size)
+    spacing_mm = np.array(spacing_mm)
 
     # Load the single antenna pattern (for array factor calculation)
     single_antenna_filename = f"ff_1x1_60x60_{freq_hz / 1e6:n}_steer_t0_p0.h5"
@@ -470,18 +462,23 @@ def plot_sim_and_af(
 
     # Create a figure with polar subplots
     fig, axs = plt.subplots(
-        nrows=len(xns),
-        ncols=len(dxs),
-        figsize=4 * np.array([len(dxs), len(xns)]),
+        nrows=len(array_size),
+        ncols=len(spacing_mm),
+        figsize=4 * np.array([len(spacing_mm), len(array_size)]),
         subplot_kw={"projection": "polar"},
     )
-    axs = np.array([axs]).flatten() if min(len(xns), len(dxs)) == 1 else axs.flatten()
+    axs = (
+        np.array([axs]).flatten()
+        if min(len(array_size), len(spacing_mm)) == 1
+        else axs.flatten()
+    )
 
     # Loop through combinations and create combined plots
-    for i, xn in enumerate(xns):
-        for j, dx_mm in enumerate(dxs):
-            ax = axs[i * len(dxs) + j]
-            dy_mm = dx_mm
+    for i, array_size in enumerate(array_size):
+        for j, spacing_mm in enumerate(spacing_mm):
+            ax = axs[i * len(spacing_mm) + j]
+            xn, yn = array_size
+            dx_mm, dy_mm = spacing_mm
 
             # Plot OpenEMS full simulation
             filename = f"ff_{xn}x{yn}_{dx_mm}x{dy_mm}_{freq_hz / 1e6:n}_steer_t{steering_theta_deg}_p{steering_phi_deg}.h5"
@@ -497,7 +494,7 @@ def plot_sim_and_af(
 
             steering_deg = np.array([[steering_theta_deg, steering_phi_deg]])
             E_norm, _ = rad_pattern_from_array_params(
-                xn, yn, dx_mm, dy_mm, steering_deg
+                array_size, spacing_mm, steering_deg
             )
             label = "Array Factor"
             plot_E_plane(E_norm=E_norm, Dmax=Dmax, fmt="g--", label=label, ax=ax)
@@ -679,10 +676,8 @@ def test_plot_ff_3d():
         E_phi,
         Dmax,
         freq_hz,
-        xn=16,
-        yn=16,
-        dx_mm=60,
-        dy_mm=60,
+        array_size=(16, 16),
+        spacing_mm=(60, 60),
         steering_deg=steering_deg,
     )
     E_norm = np.asarray(E_norm)
@@ -706,4 +701,4 @@ def test_plot_ff_3d():
     print(f"Saved sample plot to {fig_path}")
 
 
-# test_plot_ff_3d()
+test_plot_ff_3d()
