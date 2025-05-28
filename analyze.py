@@ -36,6 +36,7 @@ def read_nf2ff(nf2ff_path: Path):
 
         if freqs.size == 1:  # Squeeze the frequency dimension
             E_theta, E_phi = np.squeeze(E_theta), np.squeeze(E_phi)
+            freqs = np.squeeze(freqs)
 
         E_field = np.stack([E_theta, E_phi], axis=0)  # (2, freq, theta, phi)
         E_norm = np.sqrt(np.abs(E_theta) ** 2 + np.abs(E_phi) ** 2)
@@ -85,6 +86,76 @@ def calc_array_params(
     x_pos, y_pos = get_element_positions(array_size, spacing_mm)
     kx, ky = k * x_pos, k * y_pos  # Wavenumber-scaled positions
     return kx, ky
+
+
+DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
+DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
+DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
+
+
+def check_grating_lobes(freq, dx, dy, verbose=False):
+    """Check for potential grating lobes in an antenna array based on element spacing."""
+
+    # Calculate wavelength
+    c = 299792458  # Speed of light in m/s
+    wavelength = c / freq  # Wavelength in meters
+    wavelength_mm = wavelength * 1000  # Wavelength in mm
+
+    # Check spacing in terms of wavelength
+    dx_lambda = dx / wavelength_mm
+    dy_lambda = dy / wavelength_mm
+
+    # Calculate critical angles where grating lobes start to appear
+    # For visible grating lobes: d/λ > 1/(1+|sin(θ)|)
+    if dx_lambda <= 0.5:
+        dx_critical = 90  # No grating lobes for spacing <= λ/2
+    else:
+        dx_critical = np.rad2deg(np.arcsin(1 / dx_lambda - 1))
+
+    if dy_lambda <= 0.5:
+        dy_critical = 90  # No grating lobes for spacing <= λ/2
+    else:
+        dy_critical = np.rad2deg(np.arcsin(1 / dy_lambda - 1))
+
+    dx_critical_angle = dx_critical if dx_lambda > 0.5 else None
+    dy_critical_angle = dy_critical if dy_lambda > 0.5 else None
+    has_grating_lobes = dx_lambda > 0.5 or dy_lambda > 0.5
+
+    if verbose:
+        print("Array spacing check:")
+        print(f"Wavelength: {'wavelength_mm':.2f} mm")
+        print(f"Element spacing: {'dx_lambda':.1f}λ x {'dy_lambda':.1f}λ")
+
+    if has_grating_lobes:
+        print("WARNING: Grating lobes will be visible when steering beyond:")
+        if dx_critical_angle is not None:
+            print(f"  - {'dx_critical_angle':.1f}° in the X direction")
+        if dy_critical_angle is not None:
+            print(f"  - {'dy_critical_angle':.1f}° in the Y direction")
+
+
+def calc_array_params2(
+    array_size: tuple[int, int] = (16, 16),
+    spacing_mm: tuple[float, float] = (60, 60),
+    *,
+    theta_rad: np.ndarray = np.radians(np.arange(180)),
+    phi_rad: np.ndarray = np.radians(np.arange(360)),
+    sim_path: Path = DEFAULT_SIM_PATH,
+) -> tuple[np.ndarray, np.ndarray]:
+    nf2ff = read_nf2ff(sim_path)
+    E_field, Dmax, freq_hz = nf2ff["E_field"], nf2ff["Dmax"], nf2ff["freq"]
+    Dmax_array = Dmax * np.prod(array_size)  # Scale Dmax for the array size
+
+    check_grating_lobes(freq_hz, *spacing_mm)
+
+    k = get_wavenumber(freq_hz)
+    x_pos, y_pos = get_element_positions(array_size, spacing_mm)
+    kx, ky = k * x_pos, k * y_pos  # Wavenumber-scaled positions
+
+    taper = calc_taper(array_size)
+    geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
+
+    return kx, ky, taper, geo_exp, E_field, Dmax_array
 
 
 @lru_cache(maxsize=1)

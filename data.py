@@ -40,47 +40,6 @@ def simulate(sim_path: str = "antenna_array.py"):
     sp.run(cmd, shell=True)
 
 
-def check_grating_lobes(freq, dx, dy, verbose=False):
-    """Check for potential grating lobes in an antenna array based on element spacing."""
-
-    # Calculate wavelength
-    c = 299792458  # Speed of light in m/s
-    wavelength = c / freq  # Wavelength in meters
-    wavelength_mm = wavelength * 1000  # Wavelength in mm
-
-    # Check spacing in terms of wavelength
-    dx_lambda = dx / wavelength_mm
-    dy_lambda = dy / wavelength_mm
-
-    # Calculate critical angles where grating lobes start to appear
-    # For visible grating lobes: d/λ > 1/(1+|sin(θ)|)
-    if dx_lambda <= 0.5:
-        dx_critical = 90  # No grating lobes for spacing <= λ/2
-    else:
-        dx_critical = np.rad2deg(np.arcsin(1 / dx_lambda - 1))
-
-    if dy_lambda <= 0.5:
-        dy_critical = 90  # No grating lobes for spacing <= λ/2
-    else:
-        dy_critical = np.rad2deg(np.arcsin(1 / dy_lambda - 1))
-
-    dx_critical_angle = dx_critical if dx_lambda > 0.5 else None
-    dy_critical_angle = dy_critical if dy_lambda > 0.5 else None
-    has_grating_lobes = dx_lambda > 0.5 or dy_lambda > 0.5
-
-    if verbose:
-        print("Array spacing check:")
-        print(f"Wavelength: {'wavelength_mm':.2f} mm")
-        print(f"Element spacing: {'dx_lambda':.1f}λ x {'dy_lambda':.1f}λ")
-
-    if has_grating_lobes:
-        print("WARNING: Grating lobes will be visible when steering beyond:")
-        if dx_critical_angle is not None:
-            print(f"  - {'dx_critical_angle':.1f}° in the X direction")
-        if dy_critical_angle is not None:
-            print(f"  - {'dy_critical_angle':.1f}° in the Y direction")
-
-
 @app.command()
 def generate_beamforming(
     n_samples: int = 1_000,
@@ -92,26 +51,18 @@ def generate_beamforming(
     overwrite: bool = False,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
-    # Fixed parameters for the 16x16 array
-    array_size = (16, 16)  # 16x16 array
-    spacing_mm = (60, 60)  # 60x60 mm spacing
-    freq_hz = 2.45e9  # 2.45 GHz
-
-    dx_mm, dy_mm = spacing_mm
-    check_grating_lobes(freq_hz, dx_mm, dy_mm)
-
-    nf2ff = read_nf2ff(sim_dir_path / single_antenna_filename)
-
-    theta_rad, phi_rad = nf2ff["theta_rad"], nf2ff["phi_rad"]
-    E_field, Dmax_single = nf2ff["E_field"], nf2ff["Dmax"]
-    Dmax_array = Dmax_single * (np.prod(array_size))
+    theta_rad = np.radians(np.arange(180))
+    phi_rad = np.radians(np.arange(360))
 
     print(f"Generating dataset with {n_samples} samples")
 
-    # Calculate array parameters once
-    kx, ky = analyze.calc_array_params(array_size, spacing_mm, freq_hz)
-    taper = analyze.calc_taper(array_size)
-    geo_exp = analyze.calc_geo_exp(theta_rad, phi_rad, kx, ky)
+    kx, ky, taper, geo_exp, E_field, Dmax_array = analyze.calc_array_params2(
+        array_size=(16, 16),
+        spacing_mm=(60, 60),
+        theta_rad=theta_rad,
+        phi_rad=phi_rad,
+        sim_path=sim_dir_path / single_antenna_filename,
+    )
 
     # Create a function to calculate E_norm and excitations for given steering angles
     static_params = (kx, ky, taper, geo_exp, E_field, Dmax_array)
@@ -136,7 +87,7 @@ def generate_beamforming(
 
         patterns_shape = (n_samples, theta_rad.size, phi_rad.size)
         patterns_ds = h5f.create_dataset("patterns", shape=patterns_shape)
-        ex_shape = (n_samples, *array_size)
+        ex_shape = (n_samples, *taper.shape)
         ex_ds = h5f.create_dataset("excitations", shape=ex_shape, dtype=np.complex64)
 
         for i in tqdm(range(n_samples)):
