@@ -722,4 +722,4 @@ def test_plot_ff_3d():
     print(f"Saved sample plot to {fig_path}")
 
 
-test_plot_ff_3d()
+# test_plot_ff_3d()
