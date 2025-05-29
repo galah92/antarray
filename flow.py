@@ -1,5 +1,6 @@
 import logging
 import time
+from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
@@ -289,6 +290,133 @@ class SimplePhaseShiftPredictor(nnx.Module):
         return jnp.arctan2(jnp.sin(x.squeeze(-1)), jnp.cos(x.squeeze(-1)))
 
 
+class ConvBlock(nnx.Module):
+    """Basic convolutional block with conv + batchnorm + activation"""
+
+    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
+        self.conv = nnx.Conv(
+            in_channels, out_channels, kernel_size=(3, 3), padding="SAME", rngs=rngs
+        )
+        self.norm = nnx.BatchNorm(out_channels, rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        x = self.conv(x)
+        x = self.norm(x, use_running_average=not training)
+        return nnx.relu(x)
+
+
+class DoubleConv(nnx.Module):
+    """Two consecutive conv blocks (like in U-Net)"""
+
+    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
+        self.conv1 = ConvBlock(in_channels, out_channels, rngs=rngs)
+        self.conv2 = ConvBlock(out_channels, out_channels, rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        x = self.conv1(x, training=training)
+        x = self.conv2(x, training=training)
+        return x
+
+
+class Down(nnx.Module):
+    """Downsampling block: maxpool + double conv"""
+
+    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
+        self.maxpool = partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2))
+        self.conv = DoubleConv(in_channels, out_channels, rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        x = self.maxpool(x)
+        return self.conv(x, training=training)
+
+
+class Up(nnx.Module):
+    """Upsampling block: upsample + double conv"""
+
+    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
+        self.conv = DoubleConv(in_channels, out_channels, rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        # Upsample by 2x using bilinear interpolation
+        h, w = x.shape[1] * 2, x.shape[2] * 2
+        x = jax.image.resize(x, (x.shape[0], h, w, x.shape[3]), method="bilinear")
+        return self.conv(x, training=training)
+
+
+class ConvAutoencoder(nnx.Module):
+    def __init__(
+        self,
+        array_size: tuple[int, int],
+        base_channels: int = 16,
+        down_depth: int = 4,
+        up_depth: int = 2,
+        bottleneck_depth: int = 2,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.array_size = array_size
+
+        # Initial convolution (like 'inc' in PyTorch version)
+        self.inc = DoubleConv(1, base_channels, rngs=rngs)
+
+        # Encoder (downsampling path)
+        self.encoder = []
+        in_ch = base_channels
+        for i in range(down_depth):
+            out_ch = base_channels * (2 ** (i + 1))
+            self.encoder.append(Down(in_ch, out_ch, rngs=rngs))
+            in_ch = out_ch
+
+        # Bottleneck
+        self.bottleneck = []
+        for _ in range(bottleneck_depth):
+            self.bottleneck.append(DoubleConv(in_ch, in_ch, rngs=rngs))
+
+        # Decoder (upsampling path)
+        self.decoder = []
+        for i in range(up_depth):
+            out_ch = in_ch // 2
+            self.decoder.append(Up(in_ch, out_ch, rngs=rngs))
+            in_ch = out_ch
+
+        # Final output layer
+        self.final_conv = nnx.Conv(in_ch, 1, kernel_size=(1, 1), rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        # Input shape: (batch_size, 180, 360) -> (batch_size, 180, 360, 1)
+        x = x.reshape(x.shape[0], 180, 360, 1)
+
+        # Initial convolution
+        x = self.inc(x, training=training)
+
+        # Encoder
+        for down_block in self.encoder:
+            x = down_block(x, training=training)
+
+        # Bottleneck
+        for bottleneck_block in self.bottleneck:
+            x = bottleneck_block(x, training=training)
+
+        # Decoder
+        for up_block in self.decoder:
+            x = up_block(x, training=training)
+
+        # Final convolution
+        logits = self.final_conv(x)
+
+        # Resize to exact array dimensions
+        target_h, target_w = self.array_size
+        if x.shape[1] != target_h or x.shape[2] != target_w:
+            logits = jax.image.resize(
+                logits, (logits.shape[0], target_h, target_w, 1), method="bilinear"
+            )
+
+        # Remove channel dimension
+        predictions = logits.squeeze(-1)
+
+        return predictions
+
+
 @nnx.jit
 def train_step(
     optimizer: nnx.Optimizer,
@@ -327,7 +455,7 @@ def dev(
     spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
     theta_end: float = DEFAULT_THETA_END,
     max_n_beams: int = DEFAULT_MAX_N_BEAMS,
-    n_steps: int = 50,
+    n_steps: int = 10_000,
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     seed: int = 42,
@@ -347,7 +475,8 @@ def dev(
     )
 
     logger.info("Initializing model and optimizer")
-    model = PhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
+    model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
+    # model = PhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
     # model = SimplePhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
 
@@ -366,7 +495,7 @@ def dev(
 
             loss = train_metrics["loss"]
             logger.info(
-                f"step {step + 1:02d}, "
+                f"step {step + 1:04d}, "
                 f"avg={avg_time:.3f}s/step, "
                 f"total={elapsed:.1f}s, "
                 f"loss={loss:.3f}"
