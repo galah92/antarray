@@ -244,6 +244,26 @@ class PhaseShiftPredictor(nnx.Module):
         return predictions
 
 
+class SimplePhaseShiftPredictor(nnx.Module):
+    def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
+        self.array_size = array_size
+
+        self.conv1 = nnx.Conv(1, 32, kernel_size=(7, 7), strides=(2, 2), rngs=rngs)
+        self.conv2 = nnx.Conv(32, 64, kernel_size=(5, 5), strides=(2, 2), rngs=rngs)
+        self.conv3 = nnx.Conv(64, 1, kernel_size=(3, 3), rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        x = x.reshape(x.shape[0], 180, 360, 1)
+        x = jax.nn.relu(self.conv1(x))
+        x = jax.nn.relu(self.conv2(x))
+        x = self.conv3(x)
+
+        target_h, target_w = self.array_size
+        x = jax.image.resize(x, (x.shape[0], target_h, target_w, 1), method="bilinear")
+
+        return jnp.arctan2(jnp.sin(x.squeeze(-1)), jnp.cos(x.squeeze(-1)))
+
+
 @nnx.jit
 def train_step(
     optimizer: nnx.Optimizer,
@@ -286,12 +306,22 @@ def dev(
     logger.info("Initializing model and optimizer")
     rngs = nnx.Rngs(seed)
     model = PhaseShiftPredictor(array_size, rngs=rngs)
+    # model = SimplePhaseShiftPredictor(array_size, rngs=rngs)
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
+
+    logger.info("Warming up GPU kernels")
+    key, warmup_key = jax.random.split(key)
+    warmup_batch = dataset.generate_batch(warmup_key, batch_size)
+    warmup_start = time.time()
+    _ = train_step(optimizer, warmup_batch)
+    logger.info(f"Warmup completed in {time.time() - warmup_start:.2f}s")
 
     logger.info("Starting development run")
     for step in range(10):
         step_start_time = time.time()
-        batch = dataset.generate_batch(key, batch_size=batch_size)
+
+        key, batch_key = jax.random.split(key)
+        batch = dataset.generate_batch(batch_key, batch_size)
         optimizer, train_metrics = train_step(optimizer, batch)
 
         loss = train_metrics["loss"]
