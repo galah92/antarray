@@ -283,11 +283,13 @@ def dev(
 
     dataset = Dataset(array_size, spacing_mm, theta_end, max_n_beams)
 
+    logger.info("Initializing model and optimizer")
     rngs = nnx.Rngs(seed)
     model = PhaseShiftPredictor(array_size, rngs=rngs)
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
 
-    for step in range(100):
+    logger.info("Starting development run")
+    for step in range(10):
         step_start_time = time.time()
         batch = dataset.generate_batch(key, batch_size=batch_size)
         optimizer, train_metrics = train_step(optimizer, batch)
@@ -305,9 +307,7 @@ if __name__ == "__main__":
         format="{asctime} {levelname} {filename}:{lineno} {message}",
         style="{",
         handlers=[
-            logging.FileHandler(
-                Path("app.log"), mode="w+"
-            ),  # Overwrite log on each run
+            logging.FileHandler(Path("app.log"), mode="w+"),  # Overwrite log
             logging.StreamHandler(),
         ],
     )
