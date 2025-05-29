@@ -38,10 +38,12 @@ class Dataset:
         batch_size: int = 64,
         sim_dir_path: Path = data.DEFAULT_SIM_DIR,
         key: jax.Array = None,
+        prefetch: bool = True,
     ):
         self.theta_end = jnp.radians(theta_end)
         self.sim_dir_path = sim_dir_path
         self.batch_size = batch_size
+        self.prefetch = prefetch
 
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -62,7 +64,11 @@ class Dataset:
         # Beam probability distribution
         self.n_beams_prob = data.get_beams_prob(max_n_beams)
 
-        self._generate_batch_fn = jax.vmap(self.generate_sample)
+        self.vmapped_generate_sample = jax.vmap(self.generate_sample)
+
+        self._prefetched_batch = None
+        if self.prefetch:
+            self._prefetched_batch = self.generate_batch()
 
     def generate_sample(self, key: jax.Array) -> DataSample:
         key1, key2 = jax.random.split(key)
@@ -81,16 +87,24 @@ class Dataset:
 
         return DataSample(radiation_pattern, phase_shifts, steering_angles)
 
-    def __next__(self) -> dict[str, jax.Array]:
+    def generate_batch(self) -> dict[str, jax.Array]:
         self.key, batch_key = jax.random.split(self.key)
         sample_keys = jax.random.split(batch_key, self.batch_size)
-        samples = self._generate_batch_fn(sample_keys)
+        samples = self.vmapped_generate_sample(sample_keys)
 
         return {
             "radiation_patterns": samples.radiation_pattern,
             "phase_shifts": samples.phase_shifts,
             "steering_angles": samples.steering_angles,
         }
+
+    def __next__(self) -> dict[str, jax.Array]:
+        if self.prefetch:
+            current_batch = self._prefetched_batch
+            self._prefetched_batch = self.generate_batch()
+            return current_batch
+        else:
+            return self.generate_batch()
 
     def __iter__(self):
         return self
@@ -313,9 +327,11 @@ def dev(
     spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
     theta_end: float = DEFAULT_THETA_END,
     max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+    n_steps: int = 50,
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     seed: int = 42,
+    prefetch: bool = True,
 ):
     key = jax.random.key(seed)
 
@@ -327,6 +343,7 @@ def dev(
         max_n_beams,
         batch_size=batch_size,
         key=dataset_key,
+        prefetch=prefetch,
     )
 
     logger.info("Initializing model and optimizer")
@@ -337,17 +354,23 @@ def dev(
     warmup_step(dataset, optimizer)
 
     logger.info("Starting development run")
-    for step in range(10):
-        step_start_time = time.time()
+    start_time = time.perf_counter()
 
+    for step in range(n_steps):
         batch = next(dataset)
         optimizer, train_metrics = train_step(optimizer, batch)
 
-        loss = train_metrics["loss"]
-        duration = time.time() - step_start_time
-        logger.info(f"{step=:02}, {duration=:.2f}s, {loss=:.3f}")
+        if (step + 1) % 10 == 0:
+            elapsed = time.perf_counter() - start_time
+            avg_time = elapsed / (step + 1)
 
-    logger.info("Development run completed successfully")
+            loss = train_metrics["loss"]
+            logger.info(
+                f"step {step + 1:02d}, "
+                f"avg={avg_time:.3f}s/step, "
+                f"total={elapsed:.1f}s, "
+                f"loss={loss:.3f}"
+            )
 
 
 if __name__ == "__main__":
