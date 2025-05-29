@@ -27,9 +27,9 @@ DEFAULT_MAX_N_BEAMS = 3
 
 
 class DataSample(NamedTuple):
-    radiation_pattern: jnp.ndarray  # Shape: (n_theta, n_phi)
-    phase_shifts: jnp.ndarray  # Shape: (array_x, array_y)
-    steering_angles: jnp.ndarray  # Shape: (n_beams, 2) - theta, phi in radians
+    radiation_pattern: jax.Array  # (n_theta, n_phi)
+    phase_shifts: jax.Array  # (array_x, array_y)
+    steering_angles: jax.Array  # (n_beams, 2) - theta, phi in radians
 
 
 class Dataset:
@@ -91,6 +91,7 @@ class Dataset:
             *self.array_params,
             steering_angles,
         )
+        radiation_pattern = radiation_pattern[:90]  # Clip to front hemisphere
         phase_shifts = jnp.angle(excitations)
 
         # Add clamping to set negative values to 0 (equivalent to main.py)
@@ -135,7 +136,7 @@ class SimplePhaseShiftPredictor(nnx.Module):
         self.conv3 = nnx.Conv(64, 1, kernel_size=(3, 3), rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = x.reshape(x.shape[0], 180, 360, 1)
+        x = x.reshape(x.shape[0], 90, 360, 1)
 
         x = self.conv1(x)
         x = self.norm1(x, use_running_average=not training)
@@ -174,7 +175,7 @@ class CircularConv(nnx.Module):
         self.kernel_size = kernel_size
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        # x shape: (batch, theta, phi, channels)
+        # x shape: (B, theta, phi, channels)
         pad_size = self.kernel_size // 2
 
         # Circular padding in phi dimension (axis=2, width)
@@ -278,84 +279,126 @@ class Down(nnx.Module):
 
 
 class Up(nnx.Module):
-    """Standard upsampling with circular phi convolutions"""
+    """Standard upsampling with transposed convolution and circular phi convolutions"""
 
     def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
-        self.conv = CircularDoubleConv(in_channels, out_channels, rngs=rngs)  # Changed!
+        # Use transposed convolution for proper upsampling
+        self.upsample = nnx.ConvTranspose(
+            in_channels, in_channels, kernel_size=(2, 2), strides=(2, 2), rngs=rngs
+        )
+        self.conv = CircularDoubleConv(in_channels, out_channels, rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        h, w = x.shape[1] * 2, x.shape[2] * 2
-        x = jax.image.resize(x, (x.shape[0], h, w, x.shape[3]), method="bilinear")
+        x = self.upsample(x)
         return self.conv(x, training=training)
 
 
 class ConvAutoencoder(nnx.Module):
-    """Aspect-ratio aware autoencoder with circular phi convolutions"""
-
     def __init__(
         self,
         array_size: tuple[int, int],
         base_channels: int = 16,
-        use_circular: bool = True,  # New parameter
+        unet_depth: int = 4,
         *,
         rngs: nnx.Rngs,
     ):
         self.array_size = array_size
-        self.use_circular = use_circular
+        self.unet_depth = unet_depth
 
-        # Choose conv type based on use_circular
-        ConvType = CircularDoubleConv if use_circular else DoubleConv
+        # Calculate padding needed for exact divisibility to target array size
+        H, W = 90, 360  # Input radiation pattern size
+        target_h, target_w = array_size  # (16, 16)
 
-        # Initial convolution
-        self.inc = ConvType(1, base_channels, rngs=rngs)
+        # We want final output to be exactly divisible by target size
+        # After 2 up layers from bottleneck, we multiply by 4
+        # So we need input dimensions such that after processing we get multiples of target size
 
-        # Encoder - same structure, but with circular convs
-        self.down1 = AsymmetricDown(base_channels, base_channels * 2, rngs=rngs)
-        self.down2 = Down(base_channels * 2, base_channels * 4, rngs=rngs)
-        self.down3 = Down(base_channels * 4, base_channels * 8, rngs=rngs)
-        self.down4 = Down(base_channels * 8, base_channels * 16, rngs=rngs)
+        # Working backwards: 96 comes from 24 after 2 up layers (each 2x)
+        # 24 comes from 96 after 2 down layers (each 2x)
+        # 96 comes from 96 after 2 asymmetric down layers (1x2 each)
+        # So we need input to be (96, 384) to get (96, 96) final output
+
+        target_H = 96
+        target_W = 384
+
+        pad_height = target_H - H  # 96 - 90 = 6
+        pad_width = target_W - W  # 384 - 360 = 24
+        pad_top = pad_height // 2
+        pad_bottom = pad_height - pad_top
+        pad_left = pad_width // 2
+        pad_right = pad_width - pad_left
+
+        # Store padding values
+        self.input_padding = (
+            (0, 0),
+            (pad_top, pad_bottom),
+            (pad_left, pad_right),
+            (0, 0),
+        )
+
+        # Debug: print the padding calculation
+        print(f"Input: ({H}, {W})")
+        print(f"Target: ({target_H}, {target_W})")
+        print(f"Padding: {self.input_padding}")
+
+        ch = base_channels
+
+        self.inc = DoubleConv(1, ch, rngs=rngs)
+
+        # Encoder
+        self.down1 = AsymmetricDown(ch, ch * 2, rngs=rngs)  # (96,384) → (96,192)
+        self.down2 = AsymmetricDown(ch * 2, ch * 4, rngs=rngs)  # (96,192) → (96,96)
+        self.down3 = Down(ch * 4, ch * 8, rngs=rngs)  # (96,96) → (48,48)
+        self.down4 = Down(ch * 8, ch * 16, rngs=rngs)  # (48,48) → (24,24)
 
         # Bottleneck
-        self.bottleneck1 = ConvType(base_channels * 16, base_channels * 16, rngs=rngs)
-        self.bottleneck2 = ConvType(base_channels * 16, base_channels * 16, rngs=rngs)
+        self.bottleneck1 = DoubleConv(ch * 16, ch * 16, rngs=rngs)
+        self.bottleneck2 = DoubleConv(ch * 16, ch * 16, rngs=rngs)
 
         # Decoder
-        self.up1 = Up(base_channels * 16, base_channels * 8, rngs=rngs)
-        self.up2 = Up(base_channels * 8, base_channels * 4, rngs=rngs)
+        self.up1 = Up(ch * 16, ch * 8, rngs=rngs)  # (24,24) → (48,48)
+        self.up2 = Up(ch * 8, ch * 4, rngs=rngs)  # (48,48) → (96,96)
 
-        # Final output layer - use regular conv since we're at low resolution
-        self.final_conv = nnx.Conv(base_channels * 4, 1, kernel_size=(1, 1), rngs=rngs)
+        self.final_conv = nnx.Conv(ch * 4, 1, kernel_size=(1, 1), rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        # Same forward pass as before
-        x = x.reshape(x.shape[0], 180, 360, 1)
+        x = x.reshape(x.shape[0], 90, 360, 1)
 
+        # Pad input to make it divisible by 2^unet_depth
+        x = jnp.pad(x, self.input_padding, mode="reflect")
+
+        # Encoder
         x = self.inc(x, training=training)
         x = self.down1(x, training=training)
         x = self.down2(x, training=training)
         x = self.down3(x, training=training)
         x = self.down4(x, training=training)
 
+        # Bottleneck
         x = self.bottleneck1(x, training=training)
         x = self.bottleneck2(x, training=training)
 
+        # Decoder
         x = self.up1(x, training=training)
         x = self.up2(x, training=training)
 
-        logits = self.final_conv(x)
+        target_h, target_w = self.array_size  # (16, 16)
+        _, current_h, current_w = x.shape  # (96, 96)
 
-        target_h, target_w = self.array_size
-        logits = jax.image.resize(
-            logits, (logits.shape[0], target_h, target_w, 1), method="bilinear"
-        )
+        # (B, 96, 96, ch*4) -> (B, 16, 16, ch*4)
+        strides = current_h // target_h, current_w // target_w
 
-        return logits.squeeze(-1)
+        x = nnx.avg_pool(x, window_shape=strides, strides=strides)  # (B, 16, 16, ch*4)
+
+        x = self.final_conv(x)  # (B, 16, 16, 1)
+
+        return x.squeeze(-1)  # (B, 16, 16)
 
 
 @nnx.jit
 def train_step(
     optimizer: nnx.Optimizer,
-    batch: dict[str, jnp.ndarray],
+    batch: dict[str, jax.Array],
 ) -> tuple[nnx.Optimizer, dict[str, float]]:
     def loss_fn(model: nnx.Module):
         radiation_patterns = batch["radiation_patterns"]
@@ -459,7 +502,7 @@ def visualize_dataset(
     patterns, phase_shifts = batch["radiation_patterns"], batch["phase_shifts"]
     steering_angles = batch["steering_angles"]
 
-    theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
+    theta_rad, phi_rad = np.radians(np.arange(90)), np.radians(np.arange(360))
 
     fig, axes = plt.subplots(batch_size, 2, figsize=(12, 3 * batch_size))
     if batch_size == 1:
