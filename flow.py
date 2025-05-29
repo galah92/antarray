@@ -35,10 +35,17 @@ class Dataset:
         spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
         theta_end: float = DEFAULT_THETA_END,
         max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+        batch_size: int = 64,
         sim_dir_path: Path = data.DEFAULT_SIM_DIR,
+        key: jax.Array = None,
     ):
-        self.theta_end = theta_end
+        self.theta_end = jnp.radians(theta_end)
         self.sim_dir_path = sim_dir_path
+        self.batch_size = batch_size
+
+        if key is None:
+            key = jax.random.PRNGKey(0)
+        self.key = key
 
         # Load and prepare array parameters
         array_params = analyze.calc_array_params2(
@@ -55,14 +62,15 @@ class Dataset:
         # Beam probability distribution
         self.n_beams_prob = data.get_beams_prob(max_n_beams)
 
+        self._generate_batch_fn = jax.vmap(self.generate_sample)
+
     def generate_sample(self, key: jax.Array) -> DataSample:
         key1, key2 = jax.random.split(key)
 
-        # For now, let's simplify to single beam to avoid vmap issues
-        # Generate random steering angles for a single beam
+        # Generate random steering angles for multiple beams
         n_beams = 4
-        theta_steering = jax.random.uniform(key1, n_beams) * jnp.radians(self.theta_end)
-        phi_steering = jax.random.uniform(key2, n_beams) * (2 * jnp.pi)
+        theta_steering = jax.random.uniform(key1, (n_beams,)) * self.theta_end
+        phi_steering = jax.random.uniform(key2, (n_beams,)) * (2 * jnp.pi)
         steering_angles = jnp.stack((theta_steering, phi_steering), axis=-1)
 
         radiation_pattern, excitations = analyze.rad_pattern_from_geo(
@@ -73,14 +81,19 @@ class Dataset:
 
         return DataSample(radiation_pattern, phase_shifts, steering_angles)
 
-    def generate_batch(self, key: jax.Array, batch_size: int) -> dict[str, jax.Array]:
-        keys = jax.random.split(key, batch_size)
-        samples = jax.vmap(self.generate_sample)(keys)
+    def __next__(self) -> dict[str, jax.Array]:
+        self.key, batch_key = jax.random.split(self.key)
+        sample_keys = jax.random.split(batch_key, self.batch_size)
+        samples = self._generate_batch_fn(sample_keys)
+
         return {
             "radiation_patterns": samples.radiation_pattern,
             "phase_shifts": samples.phase_shifts,
             "steering_angles": samples.steering_angles,
         }
+
+    def __iter__(self):
+        return self
 
 
 class AttentionBlock(nnx.Module):
@@ -287,15 +300,9 @@ def train_step(
     return optimizer, metrics
 
 
-def warmup_step(
-    dataset: Dataset,
-    optimizer: nnx.Optimizer,
-    batch_size: int,
-    key: jax.Array,
-):
+def warmup_step(dataset: Dataset, optimizer: nnx.Optimizer):
     logger.info("Warming up GPU kernels")
-    key, warmup_key = jax.random.split(key)
-    warmup_batch = dataset.generate_batch(warmup_key, batch_size)
+    warmup_batch = next(dataset)
     _ = train_step(optimizer, warmup_batch)
     logger.info("Warmup completed")
 
@@ -312,22 +319,28 @@ def dev(
 ):
     key = jax.random.key(seed)
 
-    dataset = Dataset(array_size, spacing_mm, theta_end, max_n_beams)
+    key, dataset_key, model_key = jax.random.split(key, num=3)
+    dataset = Dataset(
+        array_size,
+        spacing_mm,
+        theta_end,
+        max_n_beams,
+        batch_size=batch_size,
+        key=dataset_key,
+    )
 
     logger.info("Initializing model and optimizer")
-    key, rngs = jax.random.split(key)
-    model = PhaseShiftPredictor(array_size, rngs=rngs)
-    # model = SimplePhaseShiftPredictor(array_size, rngs=rngs)
+    model = PhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
+    # model = SimplePhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
 
-    warmup_step(dataset, optimizer, batch_size, key)
+    warmup_step(dataset, optimizer)
 
     logger.info("Starting development run")
     for step in range(10):
         step_start_time = time.time()
 
-        key, batch_key = jax.random.split(key)
-        batch = dataset.generate_batch(batch_key, batch_size)
+        batch = next(dataset)
         optimizer, train_metrics = train_step(optimizer, batch)
 
         loss = train_metrics["loss"]
