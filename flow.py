@@ -44,14 +44,14 @@ class Dataset:
         key: jax.Array = None,
         prefetch: bool = True,
         normalize: bool = True,
-        db_range: float = 60.0,
+        radiation_pattern_max=30,  # Maximum radiation pattern value in dB observed
     ):
         self.theta_end = jnp.radians(theta_end)
         self.sim_dir_path = sim_dir_path
         self.batch_size = batch_size
         self.prefetch = prefetch
         self.normalize = normalize
-        self.db_range = db_range
+        self.radiation_pattern_max = radiation_pattern_max
 
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -96,10 +96,8 @@ class Dataset:
         # Add clamping to set negative values to 0 (equivalent to main.py)
         radiation_pattern = jnp.clip(radiation_pattern, a_min=0.0)
 
-        if self.normalize:  # Clip and normalize dB values to [0, 1]
-            rp_max = jnp.max(radiation_pattern)
-            rp_clipped = jnp.clip(radiation_pattern, rp_max - self.db_range, rp_max)
-            radiation_pattern = (rp_clipped - (rp_max - self.db_range)) / self.db_range
+        if self.normalize:
+            radiation_pattern = radiation_pattern / self.radiation_pattern_max
 
         return DataSample(radiation_pattern, phase_shifts, steering_angles)
 
@@ -480,6 +478,39 @@ def visualize_dataset(
     plot_path = "batch_overview.png"
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
     logger.info(f"Saved batch overview {plot_path}")
+
+
+@app.command()
+def inspect_data(
+    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
+    spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
+    theta_end: float = DEFAULT_THETA_END,
+    max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+    seed: int = 42,
+):
+    key = jax.random.key(seed)
+
+    dataset_args = array_size, spacing_mm, theta_end, max_n_beams
+    dataset = Dataset(*dataset_args, key=key, batch_size=8, normalize=False)
+    for i in range(3):
+        batch = next(dataset)
+        rp = batch["radiation_patterns"]
+        ps = batch["phase_shifts"]
+
+        logger.info(f"Batch {i + 1}:")
+        for x, label in zip(
+            [rp, ps],
+            ["Radiation Patterns", "Phase Shifts"],
+        ):
+            logger.info(
+                f"{label} statistics:, "
+                f"Min: {jnp.min(x):.6f}, "
+                f"Max: {jnp.max(x):.6f}, "
+                f"Mean: {jnp.mean(x):.6f}, "
+                f"Std: {jnp.std(x):.6f}, "
+                f"Has NaN: {jnp.any(jnp.isnan(x))}, "
+                f"Has Inf: {jnp.any(jnp.isinf(x))}, "
+            )
 
 
 if __name__ == "__main__":
