@@ -121,183 +121,104 @@ class Dataset:
         return self
 
 
-class AttentionBlock(nnx.Module):
-    def __init__(self, channels: int, *, rngs: nnx.Rngs):
-        self.channels = channels
-        self.query = nnx.Conv(channels, channels // 8, kernel_size=(1, 1), rngs=rngs)
-        self.key = nnx.Conv(channels, channels // 8, kernel_size=(1, 1), rngs=rngs)
-        self.value = nnx.Conv(channels, channels, kernel_size=(1, 1), rngs=rngs)
-        self.gamma = nnx.Param(jnp.zeros(1))
-
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        batch_size, height, width, channels = x.shape
-
-        # Compute attention
-        q = self.query(x).reshape(batch_size, -1, channels // 8)
-        k = self.key(x).reshape(batch_size, -1, channels // 8)
-        v = self.value(x).reshape(batch_size, -1, channels)
-
-        # Attention weights
-        attention = jax.nn.softmax(q @ jnp.transpose(k, (0, 2, 1)), axis=-1)
-
-        # Apply attention
-        out = (attention @ v).reshape(batch_size, height, width, channels)
-
-        # Residual connection with learnable weight
-        return self.gamma * out + x
-
-
-class ResidualBlock(nnx.Module):
-    def __init__(self, channels: int, *, rngs: nnx.Rngs):
-        self.conv1 = nnx.Conv(
-            channels, channels, kernel_size=(3, 3), padding="SAME", rngs=rngs
-        )
-        self.conv2 = nnx.Conv(
-            channels, channels, kernel_size=(3, 3), padding="SAME", rngs=rngs
-        )
-        self.norm1 = nnx.BatchNorm(channels, rngs=rngs)
-        self.norm2 = nnx.BatchNorm(channels, rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        residual = x
-
-        out = nnx.relu(self.norm1(self.conv1(x)))
-        out = self.norm2(self.conv2(out))
-
-        return nnx.relu(out + residual)
-
-
-class PhaseShiftPredictor(nnx.Module):
-    def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
-        self.array_size = array_size
-
-        # Feature extraction backbone
-        self.conv1 = nnx.Conv(
-            1, 32, kernel_size=(7, 7), strides=(2, 2), padding="SAME", rngs=rngs
-        )
-        self.norm1 = nnx.BatchNorm(32, rngs=rngs)
-
-        self.conv2 = nnx.Conv(
-            32, 64, kernel_size=(5, 5), strides=(2, 2), padding="SAME", rngs=rngs
-        )
-        self.norm2 = nnx.BatchNorm(64, rngs=rngs)
-
-        self.conv3 = nnx.Conv(
-            64, 128, kernel_size=(3, 3), strides=(2, 2), padding="SAME", rngs=rngs
-        )
-        self.norm3 = nnx.BatchNorm(128, rngs=rngs)
-
-        # Residual blocks for better feature learning
-        self.res_block1 = ResidualBlock(128, rngs=rngs)
-        self.res_block2 = ResidualBlock(128, rngs=rngs)
-
-        # Attention mechanism to focus on beam peaks
-        self.attention = AttentionBlock(128, rngs=rngs)
-
-        # Spatial upsampling to match array dimensions - avoiding checkerboard artifacts
-        # Using resize + conv instead of transposed convolutions
-        self.upsample_conv1 = nnx.Conv(
-            128, 64, kernel_size=(3, 3), padding="SAME", rngs=rngs
-        )
-        self.norm_up1 = nnx.BatchNorm(64, rngs=rngs)
-
-        self.upsample_conv2 = nnx.Conv(
-            64, 32, kernel_size=(3, 3), padding="SAME", rngs=rngs
-        )
-        self.norm_up2 = nnx.BatchNorm(32, rngs=rngs)
-
-        # Adaptive pooling to exact array size
-        self.spatial_adapt = nnx.Conv(
-            32, 16, kernel_size=(3, 3), padding="SAME", rngs=rngs
-        )
-        self.norm_adapt = nnx.BatchNorm(16, rngs=rngs)
-
-        # Final phase prediction layer - outputs 1 phase per array element
-        self.phase_conv = nnx.Conv(16, 1, kernel_size=(1, 1), rngs=rngs)
-
-        # Phase normalization parameters
-        self.phase_scale = nnx.Param(jnp.ones(1))
-        self.phase_bias = nnx.Param(jnp.zeros(1))
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        # Input shape: (batch_size, 180, 360)
-        x = x.reshape(x.shape[0], 180, 360, 1)
-
-        # Feature extraction with progressive downsampling
-        x = nnx.relu(self.norm1(self.conv1(x)))  # -> (batch, 90, 180, 32)
-        x = nnx.relu(self.norm2(self.conv2(x)))  # -> (batch, 45, 90, 64)
-        x = nnx.relu(self.norm3(self.conv3(x)))  # -> (batch, 23, 45, 128)
-
-        # Residual blocks for deeper feature learning
-        x = self.res_block1(x)
-        x = self.res_block2(x)
-
-        # Attention mechanism to focus on important regions
-        x = self.attention(x)
-
-        # Spatial upsampling using resize + conv to avoid checkerboard artifacts
-        # Upsample 1: (23, 45) -> (46, 90)
-        x = jax.image.resize(x, (x.shape[0], 46, 90, x.shape[3]), method="bilinear")
-        x = nnx.relu(self.norm_up1(self.upsample_conv1(x)))  # -> (batch, 46, 90, 64)
-
-        # Upsample 2: (46, 90) -> (92, 180)
-        x = jax.image.resize(x, (x.shape[0], 92, 180, x.shape[3]), method="bilinear")
-        x = nnx.relu(self.norm_up2(self.upsample_conv2(x)))  # -> (batch, 92, 180, 32)
-
-        # Adaptive spatial processing
-        x = nnx.relu(self.norm_adapt(self.spatial_adapt(x)))  # -> (batch, 92, 180, 16)
-
-        # Resize to exact array dimensions using adaptive average pooling
-        # This preserves spatial structure while matching target size
-        target_h, target_w = self.array_size
-        current_h, current_w = x.shape[1], x.shape[2]
-
-        # Use stride and kernel size to downsample to target size
-        stride_h = current_h // target_h
-        stride_w = current_w // target_w
-        kernel_h = current_h - (target_h - 1) * stride_h
-        kernel_w = current_w - (target_w - 1) * stride_w
-
-        x = nnx.avg_pool(
-            x, window_shape=(kernel_h, kernel_w), strides=(stride_h, stride_w)
-        )
-
-        # Ensure exact target dimensions (crop or pad if needed)
-        if x.shape[1] != target_h or x.shape[2] != target_w:
-            x = jax.image.resize(
-                x, (x.shape[0], target_h, target_w, x.shape[3]), method="bilinear"
-            )
-
-        # Final phase prediction
-        x = self.phase_conv(x)  # -> (batch, array_x, array_y, 1)
-
-        # Apply phase normalization and wrap to [-π, π]
-        x = self.phase_scale * x + self.phase_bias
-        x = jnp.arctan2(jnp.sin(x), jnp.cos(x))  # Wrap phases to [-π, π]
-
-        # Remove channel dimension: (batch, array_x, array_y, 1) -> (batch, array_x, array_y)
-        predictions = x.squeeze(-1)
-        return predictions
-
-
 class SimplePhaseShiftPredictor(nnx.Module):
     def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
         self.array_size = array_size
 
-        self.conv1 = nnx.Conv(1, 32, kernel_size=(7, 7), strides=(2, 2), rngs=rngs)
+        self.conv1 = nnx.Conv(1, 32, kernel_size=(7, 7), strides=(2, 4), rngs=rngs)
+        self.norm1 = nnx.BatchNorm(32, rngs=rngs)
         self.conv2 = nnx.Conv(32, 64, kernel_size=(5, 5), strides=(2, 2), rngs=rngs)
+        self.norm2 = nnx.BatchNorm(64, rngs=rngs)
         self.conv3 = nnx.Conv(64, 1, kernel_size=(3, 3), rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         x = x.reshape(x.shape[0], 180, 360, 1)
-        x = jax.nn.relu(self.conv1(x))
-        x = jax.nn.relu(self.conv2(x))
+
+        x = self.conv1(x)
+        x = self.norm1(x, use_running_average=not training)
+        x = jax.nn.relu(x)
+
+        x = self.conv2(x)
+        x = self.norm2(x, use_running_average=not training)
+        x = jax.nn.relu(x)
+
         x = self.conv3(x)
 
         target_h, target_w = self.array_size
         x = jax.image.resize(x, (x.shape[0], target_h, target_w, 1), method="bilinear")
 
-        return jnp.arctan2(jnp.sin(x.squeeze(-1)), jnp.cos(x.squeeze(-1)))
+        return x.squeeze(-1)
+
+
+class CircularConv(nnx.Module):
+    """Convolution with circular padding in phi dimension (width)"""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 3,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.conv = nnx.Conv(
+            in_channels,
+            out_channels,
+            kernel_size=(kernel_size, kernel_size),
+            padding="VALID",  # We handle padding manually
+            rngs=rngs,
+        )
+        self.kernel_size = kernel_size
+
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        # x shape: (batch, theta, phi, channels)
+        pad_size = self.kernel_size // 2
+
+        # Circular padding in phi dimension (axis=2, width)
+        phi_padded = jnp.concatenate(
+            [
+                x[:, :, -pad_size:, :],  # Wrap φ=359° to beginning
+                x,
+                x[:, :, :pad_size, :],  # Wrap φ=0° to end
+            ],
+            axis=2,
+        )
+
+        # Regular zero-padding in theta dimension (axis=1, height)
+        theta_phi_padded = jnp.pad(
+            phi_padded,
+            ((0, 0), (pad_size, pad_size), (0, 0), (0, 0)),
+            mode="constant",
+            constant_values=0,
+        )
+
+        return self.conv(theta_phi_padded)
+
+
+class CircularConvBlock(nnx.Module):
+    """ConvBlock using CircularConv for phi wrapping"""
+
+    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
+        self.conv = CircularConv(in_channels, out_channels, 3, rngs=rngs)
+        self.norm = nnx.BatchNorm(out_channels, rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        x = self.conv(x)
+        x = self.norm(x, use_running_average=not training)
+        return nnx.relu(x)
+
+
+class CircularDoubleConv(nnx.Module):
+    """DoubleConv using CircularConv for phi wrapping"""
+
+    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
+        self.conv1 = CircularConvBlock(in_channels, out_channels, rngs=rngs)
+        self.conv2 = CircularConvBlock(out_channels, out_channels, rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        x = self.conv1(x, training=training)
+        x = self.conv2(x, training=training)
+        return x
 
 
 class ConvBlock(nnx.Module):
@@ -328,12 +249,25 @@ class DoubleConv(nnx.Module):
         return x
 
 
+class AsymmetricDown(nnx.Module):
+    """Asymmetric downsampling with circular phi convolutions"""
+
+    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
+        # 1x2 pooling: keeps theta, halves phi
+        self.maxpool = partial(nnx.max_pool, window_shape=(1, 2), strides=(1, 2))
+        self.conv = CircularDoubleConv(in_channels, out_channels, rngs=rngs)  # Changed!
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        x = self.maxpool(x)
+        return self.conv(x, training=training)
+
+
 class Down(nnx.Module):
-    """Downsampling block: maxpool + double conv"""
+    """Standard downsampling with circular phi convolutions"""
 
     def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
         self.maxpool = partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2))
-        self.conv = DoubleConv(in_channels, out_channels, rngs=rngs)
+        self.conv = CircularDoubleConv(in_channels, out_channels, rngs=rngs)  # Changed!
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         x = self.maxpool(x)
@@ -341,90 +275,78 @@ class Down(nnx.Module):
 
 
 class Up(nnx.Module):
-    """Upsampling block: upsample + double conv"""
+    """Standard upsampling with circular phi convolutions"""
 
     def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
-        self.conv = DoubleConv(in_channels, out_channels, rngs=rngs)
+        self.conv = CircularDoubleConv(in_channels, out_channels, rngs=rngs)  # Changed!
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        # Upsample by 2x using bilinear interpolation
         h, w = x.shape[1] * 2, x.shape[2] * 2
         x = jax.image.resize(x, (x.shape[0], h, w, x.shape[3]), method="bilinear")
         return self.conv(x, training=training)
 
 
 class ConvAutoencoder(nnx.Module):
+    """Aspect-ratio aware autoencoder with circular phi convolutions"""
+
     def __init__(
         self,
         array_size: tuple[int, int],
         base_channels: int = 16,
-        down_depth: int = 4,
-        up_depth: int = 2,
-        bottleneck_depth: int = 2,
+        use_circular: bool = True,  # New parameter
         *,
         rngs: nnx.Rngs,
     ):
         self.array_size = array_size
+        self.use_circular = use_circular
 
-        # Initial convolution (like 'inc' in PyTorch version)
-        self.inc = DoubleConv(1, base_channels, rngs=rngs)
-
-        # Encoder (downsampling path)
-        self.encoder = []
-        in_ch = base_channels
-        for i in range(down_depth):
-            out_ch = base_channels * (2 ** (i + 1))
-            self.encoder.append(Down(in_ch, out_ch, rngs=rngs))
-            in_ch = out_ch
-
-        # Bottleneck
-        self.bottleneck = []
-        for _ in range(bottleneck_depth):
-            self.bottleneck.append(DoubleConv(in_ch, in_ch, rngs=rngs))
-
-        # Decoder (upsampling path)
-        self.decoder = []
-        for i in range(up_depth):
-            out_ch = in_ch // 2
-            self.decoder.append(Up(in_ch, out_ch, rngs=rngs))
-            in_ch = out_ch
-
-        # Final output layer
-        self.final_conv = nnx.Conv(in_ch, 1, kernel_size=(1, 1), rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        # Input shape: (batch_size, 180, 360) -> (batch_size, 180, 360, 1)
-        x = x.reshape(x.shape[0], 180, 360, 1)
+        # Choose conv type based on use_circular
+        ConvType = CircularDoubleConv if use_circular else DoubleConv
 
         # Initial convolution
-        x = self.inc(x, training=training)
+        self.inc = ConvType(1, base_channels, rngs=rngs)
 
-        # Encoder
-        for down_block in self.encoder:
-            x = down_block(x, training=training)
+        # Encoder - same structure, but with circular convs
+        self.down1 = AsymmetricDown(base_channels, base_channels * 2, rngs=rngs)
+        self.down2 = Down(base_channels * 2, base_channels * 4, rngs=rngs)
+        self.down3 = Down(base_channels * 4, base_channels * 8, rngs=rngs)
+        self.down4 = Down(base_channels * 8, base_channels * 16, rngs=rngs)
 
         # Bottleneck
-        for bottleneck_block in self.bottleneck:
-            x = bottleneck_block(x, training=training)
+        self.bottleneck1 = ConvType(base_channels * 16, base_channels * 16, rngs=rngs)
+        self.bottleneck2 = ConvType(base_channels * 16, base_channels * 16, rngs=rngs)
 
         # Decoder
-        for up_block in self.decoder:
-            x = up_block(x, training=training)
+        self.up1 = Up(base_channels * 16, base_channels * 8, rngs=rngs)
+        self.up2 = Up(base_channels * 8, base_channels * 4, rngs=rngs)
 
-        # Final convolution
+        # Final output layer - use regular conv since we're at low resolution
+        self.final_conv = nnx.Conv(base_channels * 4, 1, kernel_size=(1, 1), rngs=rngs)
+
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        # Same forward pass as before
+        x = x.reshape(x.shape[0], 180, 360, 1)
+
+        x = self.inc(x, training=training)
+        x = self.down1(x, training=training)
+        x = self.down2(x, training=training)
+        x = self.down3(x, training=training)
+        x = self.down4(x, training=training)
+
+        x = self.bottleneck1(x, training=training)
+        x = self.bottleneck2(x, training=training)
+
+        x = self.up1(x, training=training)
+        x = self.up2(x, training=training)
+
         logits = self.final_conv(x)
 
-        # Resize to exact array dimensions
         target_h, target_w = self.array_size
-        if x.shape[1] != target_h or x.shape[2] != target_w:
-            logits = jax.image.resize(
-                logits, (logits.shape[0], target_h, target_w, 1), method="bilinear"
-            )
+        logits = jax.image.resize(
+            logits, (logits.shape[0], target_h, target_w, 1), method="bilinear"
+        )
 
-        # Remove channel dimension
-        predictions = logits.squeeze(-1)
-
-        return predictions
+        return logits.squeeze(-1)
 
 
 @nnx.jit
@@ -485,9 +407,8 @@ def dev(
     )
 
     logger.info("Initializing model and optimizer")
-    model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
-    # model = PhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
-    # model = SimplePhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
+    # model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
+    model = SimplePhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
 
     warmup_step(dataset, optimizer)
@@ -513,31 +434,8 @@ def dev(
 
 
 @app.command()
-def inspect_data(
-    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
-    seed: int = 42,
-):
-    key = jax.random.PRNGKey(seed)
-    dataset = Dataset(array_size, batch_size=8, key=key)
-    for i in range(3):
-        batch = next(dataset)
-        rp = batch["radiation_patterns"]
-        ps = batch["phase_shifts"]
-
-        logger.info(f"Batch {i + 1}:")
-        for x, label in zip(
-            [rp, ps],
-            ["Radiation Patterns", "Phase Shifts"],
-        ):
-            logger.info(
-                f"{label} statistics:, "
-                f"Min: {jnp.min(x):.6f}, "
-                f"Max: {jnp.max(x):.6f}, "
-                f"Mean: {jnp.mean(x):.6f}, "
-                f"Std: {jnp.std(x):.6f}, "
-                f"Has NaN: {jnp.any(jnp.isnan(x))}, "
-                f"Has Inf: {jnp.any(jnp.isinf(x))}, "
-            )
+def pred():
+    pass
 
 
 if __name__ == "__main__":
@@ -550,5 +448,5 @@ if __name__ == "__main__":
             logging.StreamHandler(),
         ],
     )
-    logger.info(f"uv run {' '.join(sys.argv)}")
+    logger.info(f"uv run {' '.join(sys.argv)}")  # Log command line args
     app()
