@@ -391,7 +391,7 @@ def dev(
     max_n_beams: int = DEFAULT_MAX_N_BEAMS,
     n_steps: int = 10_000,
     batch_size: int = 64,
-    learning_rate: float = 1e-3,
+    lr: float = 2e-3,
     seed: int = 42,
     prefetch: bool = True,
 ):
@@ -409,9 +409,10 @@ def dev(
     )
 
     logger.info("Initializing model and optimizer")
-    # model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
-    model = SimplePhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
-    optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
+    model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
+    # model = SimplePhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
+    schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
+    optimizer = nnx.Optimizer(model, optax.adam(schedule))
 
     warmup_step(dataset, optimizer)
 
