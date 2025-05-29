@@ -1,6 +1,7 @@
 import logging
 import sys
 import time
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import NamedTuple
@@ -336,11 +337,6 @@ class ConvAutoencoder(nnx.Module):
             (0, 0),
         )
 
-        # Debug: print the padding calculation
-        print(f"Input: ({H}, {W})")
-        print(f"Target: ({target_H}, {target_W})")
-        print(f"Padding: {self.input_padding}")
-
         ch = base_channels
 
         self.inc = DoubleConv(1, ch, rngs=rngs)
@@ -383,7 +379,7 @@ class ConvAutoencoder(nnx.Module):
         x = self.up2(x, training=training)
 
         target_h, target_w = self.array_size  # (16, 16)
-        _, current_h, current_w = x.shape  # (96, 96)
+        _, current_h, current_w, _ = x.shape  # (96, 96)
 
         # (B, 96, 96, ch*4) -> (B, 16, 16, ch*4)
         strides = current_h // target_h, current_w // target_w
@@ -440,16 +436,16 @@ def train(
     prefetch: bool = True,
 ):
     key = jax.random.key(seed)
-
     key, dataset_key, model_key = jax.random.split(key, num=3)
+
     dataset = Dataset(
-        array_size,
-        spacing_mm,
-        theta_end,
-        max_n_beams,
+        array_size=array_size,
+        spacing_mm=spacing_mm,
+        theta_end=theta_end,
+        max_n_beams=max_n_beams,
         batch_size=batch_size,
-        key=dataset_key,
         prefetch=prefetch,
+        key=dataset_key,
     )
 
     logger.info("Initializing model and optimizer")
@@ -471,12 +467,11 @@ def train(
             elapsed = time.perf_counter() - start_time
             avg_time = elapsed / (step + 1)
 
-            loss = train_metrics["loss"]
+            elapsed = datetime.min + timedelta(seconds=elapsed)
             logger.info(
-                f"step {step + 1:04d}, "
-                f"avg={avg_time:.3f}s/step, "
-                f"total={elapsed:.1f}s, "
-                f"loss={loss:.3f}"
+                f"Step: {step + 1:04d} ({elapsed.strftime('%H:%M:%S')}) | "
+                f"Time: {avg_time * 1000:.1f}ms/step | "
+                f"Loss: {train_metrics['loss']:.3f}"
             )
 
 
