@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
+import orbax.checkpoint as ocp
 import typer
 from flax import nnx
 
@@ -391,6 +392,36 @@ class ConvAutoencoder(nnx.Module):
         return x.squeeze(-1)  # (B, 16, 16)
 
 
+def save_checkpoint(
+    mngr: ocp.CheckpointManager,
+    optimizer: nnx.Optimizer,
+    step: int,
+    overwrite: bool = False,
+):
+    if not overwrite:
+        return
+    state = nnx.state(optimizer)
+    mngr.save(step, args=ocp.args.Composite(state=ocp.args.StandardSave(state)))
+
+
+def restore_checkpoint(
+    mngr: ocp.CheckpointManager,
+    optimizer: nnx.Optimizer,
+    step: int | None,
+) -> int:
+    if step is None:
+        step = mngr.latest_step()
+
+    state = nnx.state(optimizer)
+    restored = mngr.restore(
+        step,
+        args=ocp.args.Composite(state=ocp.args.StandardRestore(item=state)),
+    )
+    logger.info(f"Restored checkpoint at step {step}")
+    nnx.update(optimizer, restored.state)
+    return step
+
+
 @nnx.jit
 def train_step(
     optimizer: nnx.Optimizer,
@@ -434,6 +465,8 @@ def train(
     lr: float = 2e-3,
     seed: int = 42,
     prefetch: bool = True,
+    restore: bool = True,
+    overwrite: bool = False,
 ):
     key = jax.random.key(seed)
     key, dataset_key, model_key = jax.random.split(key, num=3)
@@ -448,20 +481,29 @@ def train(
         key=dataset_key,
     )
 
+    ckpt_path = Path.cwd() / "checkpoints"
+    ckpt_options = ocp.CheckpointManagerOptions(max_to_keep=1, save_interval_steps=10)
+    ckpt_mngr = ocp.CheckpointManager(ckpt_path, options=ckpt_options)
+
     logger.info("Initializing model and optimizer")
     model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
     # model = SimplePhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
     schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
     optimizer = nnx.Optimizer(model, optax.adam(schedule))
 
+    start_step = 0
+    if restore:
+        start_step = restore_checkpoint(ckpt_mngr, optimizer, step=None)
+
     warmup_step(dataset, optimizer)
 
     logger.info("Starting development run")
     start_time = time.perf_counter()
 
-    for step in range(n_steps):
+    for step in range(start_step, n_steps):
         batch = next(dataset)
         optimizer, train_metrics = train_step(optimizer, batch)
+        save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
 
         if (step + 1) % 10 == 0:
             elapsed = time.perf_counter() - start_time
@@ -473,6 +515,8 @@ def train(
                 f"Time: {avg_time * 1000:.1f}ms/step | "
                 f"Loss: {train_metrics['loss']:.3f}"
             )
+
+    ckpt_mngr.wait_until_finished()
 
 
 @app.command()
@@ -554,12 +598,15 @@ def inspect_data(
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
-        format="{asctime} {levelname} {filename}:{lineno} {message}",
+        format="{asctime} {name} {levelname} {filename}:{lineno} {message}",
         style="{",
         handlers=[
             logging.FileHandler(Path("app.log"), mode="w+"),  # Overwrite log
             logging.StreamHandler(),
         ],
+        force=True,  # https://github.com/google/orbax/issues/1248
     )
+    logging.getLogger("absl").setLevel(logging.CRITICAL)  # Suppress absl logging
+
     logger.info(f"uv run {' '.join(sys.argv)}")  # Log command line args
     app()

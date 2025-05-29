@@ -179,3 +179,4 @@ cython_debug/
 *.pt
 dataset
 experiments
+checkpoints

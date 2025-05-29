@@ -860,6 +860,7 @@ dependencies = [
 jax = [
     { name = "flax" },
     { name = "jax", extra = ["cuda12"] },
+    { name = "orbax-checkpoint" },
 ]
 
 [package.metadata]
@@ -870,6 +871,7 @@ requires-dist = [
     { name = "jax", extras = ["cuda12"], marker = "extra == 'jax'", specifier = "==0.6.1" },
     { name = "matplotlib", specifier = ">=3.10.0" },
     { name = "numpy", specifier = ">=2.2.2" },
+    { name = "orbax-checkpoint", marker = "extra == 'jax'", specifier = ">=0.11.13" },
     { name = "ruff", specifier = ">=0.9.5" },
     { name = "scipy", specifier = ">=1.15.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
