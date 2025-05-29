@@ -460,7 +460,7 @@ def train(
     spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
     theta_end: float = DEFAULT_THETA_END,
     max_n_beams: int = DEFAULT_MAX_N_BEAMS,
-    n_steps: int = 10_000,
+    n_steps: int = 100_000,
     batch_size: int = 128,
     lr: float = 2e-3,
     seed: int = 42,
@@ -598,7 +598,7 @@ def inspect_data(
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
-        format="{asctime} {name} {levelname} {filename}:{lineno} {message}",
+        format="{asctime} {levelname} {filename}:{lineno} {message}",
         style="{",
         handlers=[
             logging.FileHandler(Path("app.log"), mode="w+"),  # Overwrite log
