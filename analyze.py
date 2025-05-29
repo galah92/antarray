@@ -695,7 +695,13 @@ def plot_phase_shifts(
 
 
 def steering_repr(steering_angles: np.ndarray):
-    return f"[θ°, φ°] = {steering_angles.T.tolist()}"
+    arr = steering_angles.T.tolist()
+    formatted = (
+        "["
+        + ", ".join("[" + ", ".join(f"{x:.1f}" for x in row) + "]" for row in arr)
+        + "]"
+    )
+    return f"[θ°, φ°] = {formatted}"
 
 
 def test_plot_ff_3d():

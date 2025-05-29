@@ -82,7 +82,7 @@ class Dataset:
         key1, key2 = jax.random.split(key)
 
         # Generate random steering angles for multiple beams
-        n_beams = 4
+        n_beams = 2
         theta_steering = jax.random.uniform(key1, (n_beams,)) * self.theta_end
         phi_steering = jax.random.uniform(key2, (n_beams,)) * (2 * jnp.pi)
         steering_angles = jnp.stack((theta_steering, phi_steering), axis=-1)
@@ -92,6 +92,9 @@ class Dataset:
             steering_angles,
         )
         phase_shifts = jnp.angle(excitations)
+
+        # Add clamping to set negative values to 0 (equivalent to main.py)
+        radiation_pattern = jnp.clip(radiation_pattern, a_min=0.0)
 
         if self.normalize:  # Clip and normalize dB values to [0, 1]
             rp_max = jnp.max(radiation_pattern)
@@ -456,6 +459,7 @@ def visualize_dataset(
     dataset = Dataset(*dataset_args, key=key, normalize=True)
     batch = next(dataset)
     patterns, phase_shifts = batch["radiation_patterns"], batch["phase_shifts"]
+    steering_angles = batch["steering_angles"]
 
     theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
 
@@ -464,9 +468,10 @@ def visualize_dataset(
         axes = axes.reshape(1, -1)
 
     for i in range(batch_size):
-        title = f"Sample {i + 1}: Radiation Pattern"
+        steering_str = analyze.steering_repr(np.degrees(steering_angles[i].T))
+        title = f"Radiation Pattern\n{steering_str}"
         analyze.plot_ff_2d(theta_rad, phi_rad, patterns[i], title=title, ax=axes[i, 0])
-        title = f"Sample {i + 1}: Phase Shifts"
+        title = "Phase Shifts\n"
         analyze.plot_phase_shifts(phase_shifts[i], title=title, ax=axes[i, 1])
 
     fig.suptitle("Batch Overview: Model Inputs")
