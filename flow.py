@@ -7,6 +7,8 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
+import numpy as np
 import optax
 import typer
 from flax import nnx
@@ -436,6 +438,42 @@ def dev(
 @app.command()
 def pred():
     pass
+
+
+@app.command()
+def visualize_dataset(
+    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
+    spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
+    theta_end: float = DEFAULT_THETA_END,
+    max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+    batch_size: int = 4,
+    seed: int = 42,
+):
+    key = jax.random.key(seed)
+
+    dataset_args = array_size, spacing_mm, theta_end, max_n_beams, batch_size
+    dataset = Dataset(*dataset_args, key=key, normalize=True)
+    batch = next(dataset)
+    patterns, phase_shifts = batch["radiation_patterns"], batch["phase_shifts"]
+
+    theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
+
+    fig, axes = plt.subplots(batch_size, 2, figsize=(12, 3 * batch_size))
+    if batch_size == 1:
+        axes = axes.reshape(1, -1)
+
+    for i in range(batch_size):
+        title = f"Sample {i + 1}: Radiation Pattern"
+        analyze.plot_ff_2d(theta_rad, phi_rad, patterns[i], title=title, ax=axes[i, 0])
+        title = f"Sample {i + 1}: Phase Shifts"
+        analyze.plot_phase_shifts(phase_shifts[i], title=title, ax=axes[i, 1])
+
+    fig.suptitle("Batch Overview: Model Inputs")
+    fig.set_tight_layout(True)
+
+    plot_path = "batch_overview.png"
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    logger.info(f"Saved batch overview {plot_path}")
 
 
 if __name__ == "__main__":
