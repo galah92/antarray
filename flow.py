@@ -428,7 +428,7 @@ def warmup_step(dataset: Dataset, optimizer: nnx.Optimizer):
 
 
 @app.command()
-def dev(
+def train(
     array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
     spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
     theta_end: float = DEFAULT_THETA_END,
