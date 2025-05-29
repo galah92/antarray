@@ -1,3 +1,4 @@
+import logging
 from functools import lru_cache, partial
 from pathlib import Path
 from typing import Literal
@@ -10,10 +11,12 @@ import numpy as np
 from jax import Array
 from jax.typing import ArrayLike
 
+logger = logging.getLogger(__name__)
+
 
 @lru_cache
 def read_nf2ff(nf2ff_path: Path):
-    print(f"Loading antenna pattern from {nf2ff_path}")
+    logger.info(f"Loading antenna pattern from {nf2ff_path}")
     with h5py.File(nf2ff_path, "r") as h5:
         mesh = h5["Mesh"]
         theta_rad, phi_rad, r = mesh["theta"][:], mesh["phi"][:], mesh["r"][:]
@@ -122,16 +125,16 @@ def check_grating_lobes(freq, dx, dy, verbose=False):
     has_grating_lobes = dx_lambda > 0.5 or dy_lambda > 0.5
 
     if verbose:
-        print("Array spacing check:")
-        print(f"Wavelength: {'wavelength_mm':.2f} mm")
-        print(f"Element spacing: {'dx_lambda':.1f}λ x {'dy_lambda':.1f}λ")
+        logger.info("Array spacing check:")
+        logger.info(f"Wavelength: {'wavelength_mm':.2f} mm")
+        logger.info(f"Element spacing: {'dx_lambda':.1f}λ x {'dy_lambda':.1f}λ")
 
     if has_grating_lobes:
-        print("WARNING: Grating lobes will be visible when steering beyond:")
+        logger.info("WARNING: Grating lobes will be visible when steering beyond:")
         if dx_critical_angle is not None:
-            print(f"  - {'dx_critical_angle':.1f}° in the X direction")
+            logger.info(f"  - {'dx_critical_angle':.1f}° in the X direction")
         if dy_critical_angle is not None:
-            print(f"  - {'dy_critical_angle':.1f}° in the Y direction")
+            logger.info(f"  - {'dy_critical_angle':.1f}° in the Y direction")
 
 
 def calc_array_params2(
@@ -719,7 +722,7 @@ def test_plot_ff_3d():
 
     fig_path = "test.png"
     fig.savefig(fig_path, dpi=600, bbox_inches="tight")
-    print(f"Saved sample plot to {fig_path}")
+    logger.info(f"Saved sample plot to {fig_path}")
 
 
 # test_plot_ff_3d()

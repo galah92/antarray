@@ -1,3 +1,4 @@
+import logging
 import subprocess as sp
 from functools import partial
 from pathlib import Path
@@ -12,6 +13,8 @@ from matplotlib import animation
 from tqdm import tqdm
 
 import analyze
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
 DEFAULT_DATASET_DIR = Path.cwd() / "dataset"
@@ -64,7 +67,7 @@ def generate_beamforming(
     theta_rad = np.radians(np.arange(180))
     phi_rad = np.radians(np.arange(360))
 
-    print(f"Generating dataset with {n_samples} samples")
+    logger.info(f"Generating dataset with {n_samples} samples")
 
     array_params = analyze.calc_array_params2(
         array_size=array_size,
@@ -140,7 +143,7 @@ def plot_dataset_phase_shifts(
         im = ax.imshow(im, cmap=cmap, origin="lower", vmin=-180, vmax=180)
 
         def animate(i):
-            print(f"Plotting {i}")
+            logger.debug(f"Plotting {i}")
             j = i * 111
 
             # Update the data for the plot
@@ -199,7 +202,7 @@ def plot_sample(
 
     sample_path = dataset_dir / f"sample_{idx}.png"
     fig.savefig(sample_path, dpi=600, bbox_inches="tight")
-    print(f"Saved sample plot to {sample_path}")
+    logger.info(f"Saved sample plot to {sample_path}")
 
 
 def ff_from_phase_shifts(

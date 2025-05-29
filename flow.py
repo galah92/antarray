@@ -1,3 +1,4 @@
+import logging
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -10,6 +11,8 @@ from flax import nnx
 
 import analyze
 import data
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
@@ -291,10 +294,21 @@ def dev(
 
         loss = train_metrics["loss"]
         duration = time.time() - step_start_time
-        print(f"{step=:02}, {duration=:.2f}s, {loss=:.3f}")
+        logger.info(f"{step=:02}, {duration=:.2f}s, {loss=:.3f}")
 
-    print("Development run completed successfully")
+    logger.info("Development run completed successfully")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="{asctime} {levelname} {filename}:{lineno} {message}",
+        style="{",
+        handlers=[
+            logging.FileHandler(
+                Path("app.log"), mode="w+"
+            ),  # Overwrite log on each run
+            logging.StreamHandler(),
+        ],
+    )
     app()
