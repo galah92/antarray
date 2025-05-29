@@ -55,8 +55,8 @@ class Dataset:
         # Beam probability distribution
         self.n_beams_prob = data.get_beams_prob(max_n_beams)
 
-    def generate_sample(self, key: jax.random.PRNGKey) -> DataSample:
-        key1, key2 = jax.random.split(key, 2)
+    def generate_sample(self, key: jax.Array) -> DataSample:
+        key1, key2 = jax.random.split(key)
 
         # For now, let's simplify to single beam to avoid vmap issues
         # Generate random steering angles for a single beam
@@ -73,9 +73,7 @@ class Dataset:
 
         return DataSample(radiation_pattern, phase_shifts, steering_angles)
 
-    def generate_batch(
-        self, key: jax.random.PRNGKey, batch_size: int
-    ) -> dict[str, jnp.ndarray]:
+    def generate_batch(self, key: jax.Array, batch_size: int) -> dict[str, jax.Array]:
         keys = jax.random.split(key, batch_size)
         samples = jax.vmap(self.generate_sample)(keys)
         return {
@@ -289,6 +287,19 @@ def train_step(
     return optimizer, metrics
 
 
+def warmup_step(
+    dataset: Dataset,
+    optimizer: nnx.Optimizer,
+    batch_size: int,
+    key: jax.Array,
+):
+    logger.info("Warming up GPU kernels")
+    key, warmup_key = jax.random.split(key)
+    warmup_batch = dataset.generate_batch(warmup_key, batch_size)
+    _ = train_step(optimizer, warmup_batch)
+    logger.info("Warmup completed")
+
+
 @app.command()
 def dev(
     array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
@@ -299,22 +310,17 @@ def dev(
     learning_rate: float = 1e-3,
     seed: int = 42,
 ):
-    key = jax.random.PRNGKey(0)
+    key = jax.random.key(seed)
 
     dataset = Dataset(array_size, spacing_mm, theta_end, max_n_beams)
 
     logger.info("Initializing model and optimizer")
-    rngs = nnx.Rngs(seed)
+    key, rngs = jax.random.split(key)
     model = PhaseShiftPredictor(array_size, rngs=rngs)
     # model = SimplePhaseShiftPredictor(array_size, rngs=rngs)
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate))
 
-    logger.info("Warming up GPU kernels")
-    key, warmup_key = jax.random.split(key)
-    warmup_batch = dataset.generate_batch(warmup_key, batch_size)
-    warmup_start = time.time()
-    _ = train_step(optimizer, warmup_batch)
-    logger.info(f"Warmup completed in {time.time() - warmup_start:.2f}s")
+    warmup_step(dataset, optimizer, batch_size, key)
 
     logger.info("Starting development run")
     for step in range(10):
