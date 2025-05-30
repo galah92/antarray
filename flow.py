@@ -29,7 +29,7 @@ DEFAULT_MAX_N_BEAMS = 3
 
 
 class DataSample(NamedTuple):
-    radiation_pattern: jax.Array  # (n_theta, n_phi)
+    radiation_pattern: jax.Array  # (n_theta, n_phi, 3) - pattern & trig encoding
     phase_shifts: jax.Array  # (array_x, array_y)
     steering_angles: jax.Array  # (n_beams, 2) - theta, phi in radians
 
@@ -102,6 +102,12 @@ class Dataset:
         if self.normalize:
             radiation_pattern = radiation_pattern / self.radiation_pattern_max
 
+        # Add trigonometric encoding channels
+        phi_rad = jnp.arange(360) * jnp.pi / 180
+        sin_phi = jnp.sin(phi_rad)[None, :] * jnp.ones((90, 1))
+        cos_phi = jnp.cos(phi_rad)[None, :] * jnp.ones((90, 1))
+        radiation_pattern = jnp.stack([radiation_pattern, sin_phi, cos_phi], axis=-1)
+
         return DataSample(radiation_pattern, phase_shifts, steering_angles)
 
     def generate_batch(self) -> dict[str, jax.Array]:
@@ -131,14 +137,14 @@ class SimplePhaseShiftPredictor(nnx.Module):
     def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
         self.array_size = array_size
 
-        self.conv1 = nnx.Conv(1, 32, kernel_size=(7, 7), strides=(2, 4), rngs=rngs)
+        self.conv1 = nnx.Conv(3, 32, kernel_size=(7, 7), strides=(2, 4), rngs=rngs)
         self.norm1 = nnx.BatchNorm(32, rngs=rngs)
         self.conv2 = nnx.Conv(32, 64, kernel_size=(5, 5), strides=(2, 2), rngs=rngs)
         self.norm2 = nnx.BatchNorm(64, rngs=rngs)
         self.conv3 = nnx.Conv(64, 1, kernel_size=(3, 3), rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = x.reshape(x.shape[0], 90, 360, 1)
+        x = x.reshape(x.shape[0], 90, 360, 3)
 
         x = self.conv1(x)
         x = self.norm1(x, use_running_average=not training)
@@ -340,7 +346,7 @@ class ConvAutoencoder(nnx.Module):
 
         ch = base_channels
 
-        self.inc = DoubleConv(1, ch, rngs=rngs)
+        self.inc = DoubleConv(3, ch, rngs=rngs)
 
         # Encoder
         self.down1 = AsymmetricDown(ch, ch * 2, rngs=rngs)  # (96,384) → (96,192)
@@ -359,7 +365,7 @@ class ConvAutoencoder(nnx.Module):
         self.final_conv = nnx.Conv(ch * 4, 1, kernel_size=(1, 1), rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = x.reshape(x.shape[0], 90, 360, 1)
+        x = x.reshape(x.shape[0], 90, 360, 3)
 
         # Pad input to make it divisible by 2^unet_depth
         x = jnp.pad(x, self.input_padding, mode="reflect")
