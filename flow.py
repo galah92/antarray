@@ -524,8 +524,91 @@ def train(
 
 
 @app.command()
-def pred():
-    pass
+def pred(
+    checkpoint_dir: Path = Path.cwd() / "checkpoints",
+    theta_deg: list[float] = None,
+    phi_deg: list[float] = None,
+    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
+    spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
+    theta_end: float = DEFAULT_THETA_END,
+    max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+    seed: int = 42,
+):
+    """Predict phase shifts for given or random steering angles (CPU only)"""
+
+    with jax.default_device(jax.devices("cpu")[0]):
+        logger.info("Running prediction on CPU")
+
+        # Create model
+        key = jax.random.key(seed)
+        model_key, angles_key = jax.random.split(key)
+        model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
+
+        # Get and load latest checkpoint
+        restored = ocp.CheckpointManager(checkpoint_dir).restore(
+            step=None,
+            args=ocp.args.Composite(
+                state=ocp.args.StandardRestore(item=nnx.state(model))
+            ),
+        )
+        step = restored.state["step"]["value"]
+        logger.info(f"Restored checkpoint at step {step}")
+        # logger.info(f"{'model' in restored.state=}")
+        nnx.update(model, restored.state["model"])
+
+        # Generate or use provided steering angles
+        if theta_deg is None or phi_deg is None:
+            steering_angles = analyze.generate_steering_angles(
+                key=angles_key, theta_end=theta_end, max_n_beams=max_n_beams
+            )
+            logger.info(f"Generated {len(steering_angles)} random steering angles")
+        else:
+            if len(theta_deg) != len(phi_deg):
+                raise typer.BadParameter("theta_deg and phi_deg must have same length")
+            steering_angles = jnp.array(
+                [[jnp.radians(t), jnp.radians(p)] for t, p in zip(theta_deg, phi_deg)]
+            )
+            logger.info(f"Using {len(steering_angles)} provided steering angles")
+
+        # Load array parameters and generate radiation pattern
+        array_params = analyze.calc_array_params2(
+            array_size=array_size,
+            spacing_mm=spacing_mm,
+            theta_rad=jnp.radians(jnp.arange(180)),
+            phi_rad=jnp.radians(jnp.arange(360)),
+            sim_path=data.DEFAULT_SIM_DIR / data.DEFAULT_SINGLE_ANT_FILENAME,
+        )
+        array_params = [jnp.asarray(param) for param in array_params]
+
+        radiation_pattern, _ = analyze.rad_pattern_from_geo(
+            *array_params, steering_angles
+        )
+        radiation_pattern = jnp.clip(radiation_pattern[:90], a_min=0.0) / 30.0
+        predicted_phases = model(radiation_pattern[None, :], training=False)[0]
+
+        steering_str = analyze.steering_repr(jnp.degrees(steering_angles.T))
+        logger.info(f"Steering: {steering_str}")
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+        theta_rad, phi_rad = jnp.radians(jnp.arange(90)), jnp.radians(jnp.arange(360))
+        analyze.plot_ff_2d(
+            theta_rad,
+            phi_rad,
+            radiation_pattern,
+            title=f"Input Pattern\n{steering_str}",
+            ax=ax1,
+        )
+        analyze.plot_phase_shifts(
+            predicted_phases, title=f"Predicted Phases\n{steering_str}", ax=ax2
+        )
+
+        plt.tight_layout()
+
+        plot_path = "prediction.png"
+        fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Saved: {plot_path}")
+        plt.close()
 
 
 @app.command()
