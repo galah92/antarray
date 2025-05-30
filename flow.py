@@ -500,23 +500,27 @@ def train(
     logger.info("Starting development run")
     start_time = time.perf_counter()
 
-    for step in range(start_step, n_steps):
-        batch = next(dataset)
-        optimizer, train_metrics = train_step(optimizer, batch)
-        save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
+    try:
+        for step in range(start_step, n_steps):
+            batch = next(dataset)
+            optimizer, train_metrics = train_step(optimizer, batch)
+            save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
 
-        if (step + 1) % 10 == 0:
-            elapsed = time.perf_counter() - start_time
-            avg_time = elapsed / (step + 1)
+            if (step + 1) % 10 == 0:
+                elapsed = time.perf_counter() - start_time
+                avg_time = elapsed / (step + 1)
 
-            elapsed = datetime.min + timedelta(seconds=elapsed)
-            logger.info(
-                f"Step: {step + 1:04d} ({elapsed.strftime('%H:%M:%S')}) | "
-                f"Time: {avg_time * 1000:.1f}ms/step | "
-                f"Loss: {train_metrics['loss']:.3f}"
-            )
-
-    ckpt_mngr.wait_until_finished()
+                elapsed = datetime.min + timedelta(seconds=elapsed)
+                logger.info(
+                    f"Step: {step + 1:04d} ({elapsed.strftime('%H:%M:%S')}) | "
+                    f"Time: {avg_time * 1000:.1f}ms/step | "
+                    f"Loss: {train_metrics['loss']:.3f}"
+                )
+    except KeyboardInterrupt:
+        logger.info("Training interrupted by user")
+        raise
+    finally:
+        ckpt_mngr.wait_until_finished()
 
 
 @app.command()
