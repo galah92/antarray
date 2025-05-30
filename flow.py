@@ -137,11 +137,11 @@ class SimplePhaseShiftPredictor(nnx.Module):
     def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
         self.array_size = array_size
 
-        self.conv1 = nnx.Conv(3, 32, kernel_size=(7, 7), strides=(2, 4), rngs=rngs)
+        self.conv1 = nnx.Conv(3, 32, (7, 7), strides=(2, 4), use_bias=False, rngs=rngs)
         self.norm1 = nnx.BatchNorm(32, rngs=rngs)
-        self.conv2 = nnx.Conv(32, 64, kernel_size=(5, 5), strides=(2, 2), rngs=rngs)
+        self.conv2 = nnx.Conv(32, 64, (5, 5), strides=(2, 2), use_bias=False, rngs=rngs)
         self.norm2 = nnx.BatchNorm(64, rngs=rngs)
-        self.conv3 = nnx.Conv(64, 1, kernel_size=(3, 3), rngs=rngs)
+        self.conv3 = nnx.Conv(64, 1, (3, 3), rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         x = x.reshape(x.shape[0], 90, 360, 3)
@@ -178,6 +178,7 @@ class CircularConv(nnx.Module):
             out_channels,
             kernel_size=(kernel_size, kernel_size),
             padding="VALID",  # We handle padding manually
+            use_bias=False,
             rngs=rngs,
         )
         self.kernel_size = kernel_size
@@ -238,7 +239,12 @@ class ConvBlock(nnx.Module):
 
     def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
         self.conv = nnx.Conv(
-            in_channels, out_channels, kernel_size=(3, 3), padding="SAME", rngs=rngs
+            in_channels,
+            out_channels,
+            kernel_size=(3, 3),
+            padding="SAME",
+            use_bias=False,
+            rngs=rngs,
         )
         self.norm = nnx.BatchNorm(out_channels, rngs=rngs)
 
