@@ -230,10 +230,7 @@ def restore_checkpoint(
 
 
 @nnx.jit
-def train_step(
-    optimizer: nnx.Optimizer,
-    batch: dict[str, jax.Array],
-) -> tuple[nnx.Optimizer, dict[str, float]]:
+def train_step(optimizer: nnx.Optimizer, batch: DataSample) -> dict[str, float]:
     def loss_fn(model: nnx.Module):
         radiation_patterns = batch["radiation_patterns"]
         phase_shifts = batch["phase_shifts"]
@@ -251,7 +248,7 @@ def train_step(
     (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model)
     optimizer.update(grads)
 
-    return optimizer, metrics
+    return metrics
 
 
 def warmup_step(dataset: Dataset, optimizer: nnx.Optimizer):
@@ -313,9 +310,8 @@ def train(
     start_time = time.perf_counter()
 
     try:
-        for step in range(start_step, n_steps):
-            batch = next(dataset)
-            optimizer, train_metrics = train_step(optimizer, batch)
+        for step, batch in zip(range(start_step, n_steps), dataset):
+            metrics = train_step(optimizer, batch)
             save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
 
             if (step + 1) % 10 == 0:
@@ -326,7 +322,7 @@ def train(
                 logger.info(
                     f"Step: {step + 1:04d} ({elapsed.strftime('%H:%M:%S')}) | "
                     f"Time: {avg_time * 1000:.1f}ms/step | "
-                    f"Loss: {train_metrics['loss']:.3f}"
+                    f"Loss: {metrics['loss']:.3f}"
                 )
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
