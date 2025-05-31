@@ -317,35 +317,29 @@ class ExactConvNet(nnx.Module):
     def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
         assert array_size == (16, 16), "This architecture only supports 16x16 arrays"
 
-        # (96, 384, 3) -> (96, 384, 32)
-        self.conv1 = ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs)
+        self.encoder = nnx.Sequential(
+            ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 32)
+            partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 32)
+            ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs),  # (32, 64, 64)
+            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 64)
+        )
 
-        # (96, 384, 32) -> (32, 64, 32)
-        self.pool1 = partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6))
+        self.bottleneck = nnx.Sequential(
+            ConvBlock(64, 128, (3, 3), rngs=rngs),  # (16, 16, 128)
+            ConvBlock(128, 128, (3, 3), rngs=rngs),  # (16, 16, 128)
+            ConvBlock(128, 64, (3, 3), rngs=rngs),  # (16, 16, 64)
+        )
 
-        # (32, 64, 32) -> (32, 64, 64)
-        self.conv2 = ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs)
-
-        # (32, 64, 32) -> (16, 16, 64)
-        self.pool2 = partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4))
-
-        # (16, 16, 64) -> (16, 16, 64)
-        self.bottleneck = ConvBlock(64, 64, (3, 3), rngs=rngs)
-
-        # (16, 16, 64) -> (16, 16, 1)
-        self.final_conv = ConvBlock(64, 1, (3, 3), rngs=rngs)
+        self.final_conv = ConvBlock(64, 1, (3, 3), rngs=rngs)  # (16, 16, 1)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         x = jnp.pad(x, ((0, 0), (3, 3), (12, 12), (0, 0)), mode="wrap")  # (96, 384, 3)
 
-        x = self.conv1(x, training=training)
-        x = self.pool1(x)
-        x = self.conv2(x, training=training)
-        x = self.pool2(x)
+        x = self.encoder(x, training=training)
         x = self.bottleneck(x, training=training)
         x = self.final_conv(x)
 
-        x = x.squeeze(-1)  # (16, 16)
+        x = x.squeeze(-1)  # Remove the channel dimension
         return x
 
 
