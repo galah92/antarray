@@ -144,8 +144,6 @@ class SimplePhaseShiftPredictor(nnx.Module):
         self.conv3 = nnx.Conv(64, 1, (3, 3), rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = x.reshape(x.shape[0], 90, 360, 3)
-
         x = self.conv1(x)
         x = self.norm1(x, use_running_average=not training)
         x = jax.nn.relu(x)
@@ -234,174 +232,84 @@ class CircularDoubleConv(nnx.Module):
         return x
 
 
-class ConvBlock(nnx.Module):
-    """Basic convolutional block with conv + batchnorm + activation"""
-
-    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
-        self.conv = nnx.Conv(
-            in_channels,
-            out_channels,
-            kernel_size=(3, 3),
-            padding="SAME",
-            use_bias=False,
-            rngs=rngs,
-        )
-        self.norm = nnx.BatchNorm(out_channels, rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = self.conv(x)
-        x = self.norm(x, use_running_average=not training)
-        return nnx.relu(x)
-
-
-class DoubleConv(nnx.Module):
-    """Two consecutive conv blocks (like in U-Net)"""
-
-    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
-        self.conv1 = ConvBlock(in_channels, out_channels, rngs=rngs)
-        self.conv2 = ConvBlock(out_channels, out_channels, rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = self.conv1(x, training=training)
-        x = self.conv2(x, training=training)
-        return x
-
-
-class AsymmetricDown(nnx.Module):
-    """Asymmetric downsampling with circular phi convolutions"""
-
-    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
-        # 1x2 pooling: keeps theta, halves phi
-        self.maxpool = partial(nnx.max_pool, window_shape=(1, 2), strides=(1, 2))
-        self.conv = CircularDoubleConv(in_channels, out_channels, rngs=rngs)  # Changed!
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = self.maxpool(x)
-        return self.conv(x, training=training)
-
-
-class Down(nnx.Module):
-    """Standard downsampling with circular phi convolutions"""
-
-    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
-        self.maxpool = partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2))
-        self.conv = CircularDoubleConv(in_channels, out_channels, rngs=rngs)  # Changed!
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = self.maxpool(x)
-        return self.conv(x, training=training)
-
-
-class Up(nnx.Module):
-    """Standard upsampling with transposed convolution and circular phi convolutions"""
-
-    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
-        # Use transposed convolution for proper upsampling
-        self.upsample = nnx.ConvTranspose(
-            in_channels, in_channels, kernel_size=(2, 2), strides=(2, 2), rngs=rngs
-        )
-        self.conv = CircularDoubleConv(in_channels, out_channels, rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = self.upsample(x)
-        return self.conv(x, training=training)
-
-
 class ConvAutoencoder(nnx.Module):
     def __init__(
         self,
         array_size: tuple[int, int],
-        base_channels: int = 16,
-        unet_depth: int = 4,
+        base_channels: int = 32,
         *,
         rngs: nnx.Rngs,
     ):
         self.array_size = array_size
-        self.unet_depth = unet_depth
-
-        # Calculate padding needed for exact divisibility to target array size
-        H, W = 90, 360  # Input radiation pattern size
-        target_h, target_w = array_size  # (16, 16)
-
-        # We want final output to be exactly divisible by target size
-        # After 2 up layers from bottleneck, we multiply by 4
-        # So we need input dimensions such that after processing we get multiples of target size
-
-        # Working backwards: 96 comes from 24 after 2 up layers (each 2x)
-        # 24 comes from 96 after 2 down layers (each 2x)
-        # 96 comes from 96 after 2 asymmetric down layers (1x2 each)
-        # So we need input to be (96, 384) to get (96, 96) final output
-
-        target_H = 96
-        target_W = 384
-
-        pad_height = target_H - H  # 96 - 90 = 6
-        pad_width = target_W - W  # 384 - 360 = 24
-        pad_top = pad_height // 2
-        pad_bottom = pad_height - pad_top
-        pad_left = pad_width // 2
-        pad_right = pad_width - pad_left
-
-        # Store padding values
-        self.input_padding = (
-            (0, 0),
-            (pad_top, pad_bottom),
-            (pad_left, pad_right),
-            (0, 0),
-        )
+        assert array_size == (16, 16), "This architecture only supports 16x16 arrays"
 
         ch = base_channels
 
-        self.inc = DoubleConv(3, ch, rngs=rngs)
+        # Pad input circularly in phi dimension to get from 360 to 368 (next multiple of 8)
+        # This is physically meaningful since phi is periodic
 
-        # Encoder
-        self.down1 = AsymmetricDown(ch, ch * 2, rngs=rngs)  # (96,384) → (96,192)
-        self.down2 = AsymmetricDown(ch * 2, ch * 4, rngs=rngs)  # (96,192) → (96,96)
-        self.down3 = Down(ch * 4, ch * 8, rngs=rngs)  # (96,96) → (48,48)
-        self.down4 = Down(ch * 8, ch * 16, rngs=rngs)  # (48,48) → (24,24)
+        self.inc = CircularDoubleConv(3, ch, rngs=rngs)  # (90, 368)
 
-        # Bottleneck
-        self.bottleneck1 = DoubleConv(ch * 16, ch * 16, rngs=rngs)
-        self.bottleneck2 = DoubleConv(ch * 16, ch * 16, rngs=rngs)
+        self.pool1 = partial(
+            nnx.avg_pool, window_shape=(2, 8), strides=(2, 8)
+        )  # (90,368) -> (45, 46)
+        self.conv1 = CircularDoubleConv(ch, ch * 2, rngs=rngs)
 
-        # Decoder
-        self.up1 = Up(ch * 16, ch * 8, rngs=rngs)  # (24,24) → (48,48)
-        self.up2 = Up(ch * 8, ch * 4, rngs=rngs)  # (48,48) → (96,96)
+        self.pool2 = partial(
+            nnx.avg_pool, window_shape=(3, 3), strides=(3, 3)
+        )  # (45, 46) -> (15, 15)
+        self.conv2 = CircularDoubleConv(ch * 2, ch * 4, rngs=rngs)
 
-        self.final_conv = nnx.Conv(ch * 4, 1, kernel_size=(1, 1), rngs=rngs)
+        # Simple learned upsampling from 15x15 to 16x16
+        self.upsample = nnx.ConvTranspose(
+            ch * 4, ch * 4, kernel_size=(2, 2), strides=(1, 1), rngs=rngs
+        )
+
+        self.bottleneck = CircularDoubleConv(ch * 4, ch * 8, rngs=rngs)
+        self.final_conv = nnx.Conv(ch * 8, 1, kernel_size=(1, 1), rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = x.reshape(x.shape[0], 90, 360, 3)
+        # Input is already (batch_size, 90, 360, 3) - no need to reshape
 
-        # Pad input to make it divisible by 2^unet_depth
-        x = jnp.pad(x, self.input_padding, mode="reflect")
+        # Circular padding in phi dimension: 360 -> 368 (next multiple of 8)
+        x = jnp.pad(x, ((0, 0), (0, 0), (4, 4), (0, 0)), mode="wrap")  # (90, 368, 3)
 
-        # Encoder
-        x = self.inc(x, training=training)
-        x = self.down1(x, training=training)
-        x = self.down2(x, training=training)
-        x = self.down3(x, training=training)
-        x = self.down4(x, training=training)
+        x = self.inc(x, training=training)  # (90, 368, ch)
+        x = self.pool1(x)  # (45, 46, ch)
+        x = self.conv1(x, training=training)  # (45, 46, ch*2)
+        x = self.pool2(x)  # (15, 15, ch*2)
+        x = self.conv2(x, training=training)  # (15, 15, ch*4)
+        x = self.upsample(x)  # (16, 16, ch*4)
+        x = self.bottleneck(x, training=training)  # (16, 16, ch*8)
+        x = self.final_conv(x)  # (16, 16, 1)
 
-        # Bottleneck
-        x = self.bottleneck1(x, training=training)
-        x = self.bottleneck2(x, training=training)
+        return x.squeeze(-1)  # (16, 16)
 
-        # Decoder
-        x = self.up1(x, training=training)
-        x = self.up2(x, training=training)
 
-        target_h, target_w = self.array_size  # (16, 16)
-        _, current_h, current_w, _ = x.shape  # (96, 96)
+class ExactConvNet(nnx.Module):
+    def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
+        assert array_size == (16, 16), "This architecture only supports 16x16 arrays"
 
-        # (B, 96, 96, ch*4) -> (B, 16, 16, ch*4)
-        strides = current_h // target_h, current_w // target_w
+        self.conv1 = CircularConvBlock(3, 64, rngs=rngs)
 
-        x = nnx.avg_pool(x, window_shape=strides, strides=strides)  # (B, 16, 16, ch*4)
+        # (96, 384) -> (16, 16) via (6, 24) pooling
+        self.downsample1 = nnx.Conv(
+            64, 128, kernel_size=(6, 24), strides=(6, 24), padding="CIRCULAR", rngs=rngs
+        )
+        self.conv2 = CircularConvBlock(128, 256, rngs=rngs)  # (16, 16)
 
-        x = self.final_conv(x)  # (B, 16, 16, 1)
+        self.final_conv = nnx.Conv(256, 1, kernel_size=(1, 1), rngs=rngs)
 
-        return x.squeeze(-1)  # (B, 16, 16)
+    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        x = jnp.pad(x, ((0, 0), (3, 3), (12, 12), (0, 0)), mode="wrap")  # (96, 384, 3)
+
+        x = self.conv1(x, training=training)  # (96, 384, 64)
+        x = self.downsample1(x)  # (16, 16, 128)
+        x = self.conv2(x, training=training)  # (16, 16, 256)
+        x = self.final_conv(x)  # (16, 16, 1)
+
+        x = x.squeeze(-1)  # (16, 16)
+        return x
 
 
 def save_checkpoint(
@@ -498,10 +406,18 @@ def train(
     ckpt_mngr = ocp.CheckpointManager(ckpt_path, options=ckpt_options)
 
     logger.info("Initializing model and optimizer")
-    model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
-    # model = SimplePhaseShiftPredictor(array_size, rngs=nnx.Rngs(model_key))
-    schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
-    optimizer = nnx.Optimizer(model, optax.adam(schedule))
+    model = ExactConvNet(array_size, rngs=nnx.Rngs(model_key))
+    # model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
+
+    # Warmer learning rate schedule
+    schedule = optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=lr,
+        warmup_steps=1000,
+        decay_steps=n_steps,
+        end_value=lr * 0.01,
+    )
+    optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
 
     start_step = 0
     if restore:
