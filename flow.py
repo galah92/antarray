@@ -313,31 +313,40 @@ class ConvBlock(nnx.Module):
         return x
 
 
+def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMethod):
+    shape = (image.shape[0], *shape)  # Add batch dimension
+    return jax.image.resize(image, shape=shape, method=method)
+
+
 class ExactConvNet(nnx.Module):
     def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
         assert array_size == (16, 16), "This architecture only supports 16x16 arrays"
-
         self.encoder = nnx.Sequential(
             ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 32)
             partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 32)
             ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs),  # (32, 64, 64)
             partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 64)
+            ConvBlock(64, 128, (3, 3), padding="CIRCULAR", rngs=rngs),  # (16, 16, 128)
+            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (8, 8, 128)
         )
-
         self.bottleneck = nnx.Sequential(
-            ConvBlock(64, 128, (3, 3), rngs=rngs),  # (16, 16, 128)
-            ConvBlock(128, 128, (3, 3), rngs=rngs),  # (16, 16, 128)
-            ConvBlock(128, 64, (3, 3), rngs=rngs),  # (16, 16, 64)
+            ConvBlock(128, 256, (3, 3), rngs=rngs),  # (8, 8, 256)
+            ConvBlock(256, 256, (3, 3), rngs=rngs),  # (8, 8, 256)
+            ConvBlock(256, 128, (3, 3), rngs=rngs),  # (8, 8, 128)
         )
-
-        self.final_conv = ConvBlock(64, 1, (3, 3), rngs=rngs)  # (16, 16, 1)
+        self.decoder = nnx.Sequential(
+            ConvBlock(128, 64, (3, 3), rngs=rngs),  # (8, 8, 64)
+            partial(resize_batch, shape=(16, 16, 64), method="bilinear"),
+            ConvBlock(64, 32, (3, 3), rngs=rngs),  # (16, 16, 32)
+            ConvBlock(32, 1, (3, 3), rngs=rngs),  # (16, 16, 1)
+        )
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         x = jnp.pad(x, ((0, 0), (3, 3), (12, 12), (0, 0)), mode="wrap")  # (96, 384, 3)
 
         x = self.encoder(x, training=training)
         x = self.bottleneck(x, training=training)
-        x = self.final_conv(x)
+        x = self.decoder(x)
 
         x = x.squeeze(-1)  # Remove the channel dimension
         return x
