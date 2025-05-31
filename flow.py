@@ -14,11 +14,15 @@ import optax
 import orbax.checkpoint as ocp
 import typer
 from flax import nnx
+from jax.experimental.compilation_cache import compilation_cache as cc
 
 import analyze
 import data
 
 logger = logging.getLogger(__name__)
+
+# Persistent Jax compilation cache: https://docs.jax.dev/en/latest/persistent_compilation_cache.html
+cc.set_cache_dir("/tmp/jax_cache")
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
