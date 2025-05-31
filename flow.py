@@ -74,6 +74,11 @@ class Dataset:
         # Beam probability distribution
         self.n_beams_prob = data.get_beams_prob(max_n_beams)
 
+        # Precompute trigonometric encoding channels
+        phi_rad = jnp.arange(360) * jnp.pi / 180
+        self.sin_phi = jnp.sin(phi_rad)[None, :] * jnp.ones((90, 1))
+        self.cos_phi = jnp.cos(phi_rad)[None, :] * jnp.ones((90, 1))
+
         self.vmapped_generate_sample = jax.vmap(self.generate_sample)
 
         self._prefetched_batch = None
@@ -103,10 +108,7 @@ class Dataset:
             radiation_pattern = radiation_pattern / self.radiation_pattern_max
 
         # Add trigonometric encoding channels
-        phi_rad = jnp.arange(360) * jnp.pi / 180
-        sin_phi = jnp.sin(phi_rad)[None, :] * jnp.ones((90, 1))
-        cos_phi = jnp.cos(phi_rad)[None, :] * jnp.ones((90, 1))
-        radiation_pattern = jnp.stack([radiation_pattern, sin_phi, cos_phi], axis=-1)
+        radiation_pattern = jnp.dstack([radiation_pattern, self.sin_phi, self.cos_phi])
 
         return DataSample(radiation_pattern, phase_shifts, steering_angles)
 
