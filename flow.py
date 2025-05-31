@@ -133,159 +133,6 @@ class Dataset:
         return self
 
 
-class SimplePhaseShiftPredictor(nnx.Module):
-    def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
-        self.array_size = array_size
-
-        self.conv1 = nnx.Conv(3, 32, (7, 7), strides=(2, 4), use_bias=False, rngs=rngs)
-        self.norm1 = nnx.BatchNorm(32, rngs=rngs)
-        self.conv2 = nnx.Conv(32, 64, (5, 5), strides=(2, 2), use_bias=False, rngs=rngs)
-        self.norm2 = nnx.BatchNorm(64, rngs=rngs)
-        self.conv3 = nnx.Conv(64, 1, (3, 3), rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = self.conv1(x)
-        x = self.norm1(x, use_running_average=not training)
-        x = jax.nn.relu(x)
-
-        x = self.conv2(x)
-        x = self.norm2(x, use_running_average=not training)
-        x = jax.nn.relu(x)
-
-        x = self.conv3(x)
-
-        target_h, target_w = self.array_size
-        x = jax.image.resize(x, (x.shape[0], target_h, target_w, 1), method="bilinear")
-
-        return x.squeeze(-1)
-
-
-class CircularConv(nnx.Module):
-    """Convolution with circular padding in phi dimension (width)"""
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int = 3,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        self.conv = nnx.Conv(
-            in_channels,
-            out_channels,
-            kernel_size=(kernel_size, kernel_size),
-            padding="VALID",  # We handle padding manually
-            use_bias=False,
-            rngs=rngs,
-        )
-        self.kernel_size = kernel_size
-
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        # x shape: (B, theta, phi, channels)
-        pad_size = self.kernel_size // 2
-
-        # Circular padding in phi dimension (axis=2, width)
-        phi_padded = jnp.concatenate(
-            [
-                x[:, :, -pad_size:, :],  # Wrap φ=359° to beginning
-                x,
-                x[:, :, :pad_size, :],  # Wrap φ=0° to end
-            ],
-            axis=2,
-        )
-
-        # Regular zero-padding in theta dimension (axis=1, height)
-        theta_phi_padded = jnp.pad(
-            phi_padded,
-            ((0, 0), (pad_size, pad_size), (0, 0), (0, 0)),
-            mode="constant",
-            constant_values=0,
-        )
-
-        return self.conv(theta_phi_padded)
-
-
-class CircularConvBlock(nnx.Module):
-    """ConvBlock using CircularConv for phi wrapping"""
-
-    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
-        self.conv = CircularConv(in_channels, out_channels, 3, rngs=rngs)
-        self.norm = nnx.BatchNorm(out_channels, rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = self.conv(x)
-        x = self.norm(x, use_running_average=not training)
-        return nnx.relu(x)
-
-
-class CircularDoubleConv(nnx.Module):
-    """DoubleConv using CircularConv for phi wrapping"""
-
-    def __init__(self, in_channels: int, out_channels: int, *, rngs: nnx.Rngs):
-        self.conv1 = CircularConvBlock(in_channels, out_channels, rngs=rngs)
-        self.conv2 = CircularConvBlock(out_channels, out_channels, rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = self.conv1(x, training=training)
-        x = self.conv2(x, training=training)
-        return x
-
-
-class ConvAutoencoder(nnx.Module):
-    def __init__(
-        self,
-        array_size: tuple[int, int],
-        base_channels: int = 32,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        self.array_size = array_size
-        assert array_size == (16, 16), "This architecture only supports 16x16 arrays"
-
-        ch = base_channels
-
-        # Pad input circularly in phi dimension to get from 360 to 368 (next multiple of 8)
-        # This is physically meaningful since phi is periodic
-
-        self.inc = CircularDoubleConv(3, ch, rngs=rngs)  # (90, 368)
-
-        self.pool1 = partial(
-            nnx.avg_pool, window_shape=(2, 8), strides=(2, 8)
-        )  # (90,368) -> (45, 46)
-        self.conv1 = CircularDoubleConv(ch, ch * 2, rngs=rngs)
-
-        self.pool2 = partial(
-            nnx.avg_pool, window_shape=(3, 3), strides=(3, 3)
-        )  # (45, 46) -> (15, 15)
-        self.conv2 = CircularDoubleConv(ch * 2, ch * 4, rngs=rngs)
-
-        # Simple learned upsampling from 15x15 to 16x16
-        self.upsample = nnx.ConvTranspose(
-            ch * 4, ch * 4, kernel_size=(2, 2), strides=(1, 1), rngs=rngs
-        )
-
-        self.bottleneck = CircularDoubleConv(ch * 4, ch * 8, rngs=rngs)
-        self.final_conv = nnx.Conv(ch * 8, 1, kernel_size=(1, 1), rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        # Input is already (batch_size, 90, 360, 3) - no need to reshape
-
-        # Circular padding in phi dimension: 360 -> 368 (next multiple of 8)
-        x = jnp.pad(x, ((0, 0), (0, 0), (4, 4), (0, 0)), mode="wrap")  # (90, 368, 3)
-
-        x = self.inc(x, training=training)  # (90, 368, ch)
-        x = self.pool1(x)  # (45, 46, ch)
-        x = self.conv1(x, training=training)  # (45, 46, ch*2)
-        x = self.pool2(x)  # (15, 15, ch*2)
-        x = self.conv2(x, training=training)  # (15, 15, ch*4)
-        x = self.upsample(x)  # (16, 16, ch*4)
-        x = self.bottleneck(x, training=training)  # (16, 16, ch*8)
-        x = self.final_conv(x)  # (16, 16, 1)
-
-        return x.squeeze(-1)  # (16, 16)
-
-
 class ConvBlock(nnx.Module):
     def __init__(
         self,
@@ -319,8 +166,10 @@ def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMeth
 
 
 class ExactConvNet(nnx.Module):
-    def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
-        assert array_size == (16, 16), "This architecture only supports 16x16 arrays"
+    def __init__(self, *, rngs: nnx.Rngs):
+        padding = ((0, 0), (3, 3), (12, 12), (0, 0))  # (batch, height, width, channels)
+        self.pad = partial(nnx.pad, padding=padding, mode="wrap")  # (96, 384, 3)
+
         self.encoder = nnx.Sequential(
             ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 32)
             partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 32)
@@ -341,13 +190,11 @@ class ExactConvNet(nnx.Module):
             ConvBlock(32, 1, (3, 3), rngs=rngs),  # (16, 16, 1)
         )
 
-    def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
-        x = jnp.pad(x, ((0, 0), (3, 3), (12, 12), (0, 0)), mode="wrap")  # (96, 384, 3)
-
-        x = self.encoder(x, training=training)
-        x = self.bottleneck(x, training=training)
+    def __call__(self, x: jax.Array) -> jax.Array:
+        x = self.pad(x)
+        x = self.encoder(x)
+        x = self.bottleneck(x)
         x = self.decoder(x)
-
         x = x.squeeze(-1)  # Remove the channel dimension
         return x
 
@@ -447,9 +294,6 @@ def train(
 
     logger.info("Initializing model and optimizer")
     model = ExactConvNet(array_size, rngs=nnx.Rngs(model_key))
-    # model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
-
-    # Warmer learning rate schedule
     schedule = optax.warmup_cosine_decay_schedule(
         init_value=0.0,
         peak_value=lr,
@@ -510,7 +354,7 @@ def pred(
         # Create model
         key = jax.random.key(seed)
         model_key, angles_key = jax.random.split(key)
-        model = ConvAutoencoder(array_size, rngs=nnx.Rngs(model_key))
+        model = ExactConvNet(array_size=array_size, rngs=nnx.Rngs(model_key))
 
         # Get and load latest checkpoint
         restored = ocp.CheckpointManager(checkpoint_dir).restore(
