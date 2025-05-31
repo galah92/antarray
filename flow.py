@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -286,27 +286,64 @@ class ConvAutoencoder(nnx.Module):
         return x.squeeze(-1)  # (16, 16)
 
 
+class ConvBlock(nnx.Module):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        kernel_size: int | Sequence[int],
+        padding: str = "SAME",
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.conv = nnx.Conv(
+            in_features,
+            out_features,
+            kernel_size=kernel_size,
+            padding=padding,
+            use_bias=False,
+            rngs=rngs,
+        )
+        self.norm = nnx.BatchNorm(out_features, rngs=rngs)
+
+    def __call__(self, x: jax.Array, training: bool = True) -> jax.Array:
+        x = self.conv(x)
+        x = self.norm(x, use_running_average=not training)
+        x = nnx.relu(x)
+        return x
+
+
 class ExactConvNet(nnx.Module):
     def __init__(self, array_size: tuple[int, int], *, rngs: nnx.Rngs):
         assert array_size == (16, 16), "This architecture only supports 16x16 arrays"
 
-        self.conv1 = CircularConvBlock(3, 64, rngs=rngs)
+        # (96, 384, 3) -> (96, 384, 32)
+        self.conv1 = ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs)
 
-        # (96, 384) -> (16, 16) via (6, 24) pooling
-        self.downsample1 = nnx.Conv(
-            64, 128, kernel_size=(6, 24), strides=(6, 24), padding="CIRCULAR", rngs=rngs
-        )
-        self.conv2 = CircularConvBlock(128, 256, rngs=rngs)  # (16, 16)
+        # (96, 384, 32) -> (32, 64, 32)
+        self.pool1 = partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6))
 
-        self.final_conv = nnx.Conv(256, 1, kernel_size=(1, 1), rngs=rngs)
+        # (32, 64, 32) -> (32, 64, 64)
+        self.conv2 = ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs)
+
+        # (32, 64, 32) -> (16, 16, 64)
+        self.pool2 = partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4))
+
+        # (16, 16, 64) -> (16, 16, 64)
+        self.bottleneck = ConvBlock(64, 64, (3, 3), rngs=rngs)
+
+        # (16, 16, 64) -> (16, 16, 1)
+        self.final_conv = ConvBlock(64, 1, (3, 3), rngs=rngs)
 
     def __call__(self, x: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         x = jnp.pad(x, ((0, 0), (3, 3), (12, 12), (0, 0)), mode="wrap")  # (96, 384, 3)
 
-        x = self.conv1(x, training=training)  # (96, 384, 64)
-        x = self.downsample1(x)  # (16, 16, 128)
-        x = self.conv2(x, training=training)  # (16, 16, 256)
-        x = self.final_conv(x)  # (16, 16, 1)
+        x = self.conv1(x, training=training)
+        x = self.pool1(x)
+        x = self.conv2(x, training=training)
+        x = self.pool2(x)
+        x = self.bottleneck(x, training=training)
+        x = self.final_conv(x)
 
         x = x.squeeze(-1)  # (16, 16)
         return x
