@@ -153,9 +153,9 @@ class ConvBlock(nnx.Module):
         )
         self.norm = nnx.BatchNorm(out_features, rngs=rngs)
 
-    def __call__(self, x: jax.Array, training: bool = True) -> jax.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         x = self.conv(x)
-        x = self.norm(x, use_running_average=not training)
+        x = self.norm(x)
         x = nnx.relu(x)
         return x
 
@@ -290,7 +290,7 @@ def train(
     ckpt_mngr = ocp.CheckpointManager(ckpt_path, options=ckpt_options)
 
     logger.info("Initializing model and optimizer")
-    model = ExactConvNet(array_size, rngs=nnx.Rngs(model_key))
+    model = ExactConvNet(rngs=nnx.Rngs(model_key))
     schedule = optax.warmup_cosine_decay_schedule(
         init_value=0.0,
         peak_value=lr,
@@ -350,7 +350,7 @@ def pred(
         # Create model
         key = jax.random.key(seed)
         model_key, angles_key = jax.random.split(key)
-        model = ExactConvNet(array_size=array_size, rngs=nnx.Rngs(model_key))
+        model = ExactConvNet(rngs=nnx.Rngs(model_key))
 
         # Get and load latest checkpoint
         restored = ocp.CheckpointManager(checkpoint_dir).restore(
