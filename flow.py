@@ -351,6 +351,7 @@ def pred(
         key = jax.random.key(seed)
         model_key, angles_key = jax.random.split(key)
         model = ExactConvNet(rngs=nnx.Rngs(model_key))
+        model.eval()
 
         # Get and load latest checkpoint
         restored = ocp.CheckpointManager(checkpoint_dir).restore(
