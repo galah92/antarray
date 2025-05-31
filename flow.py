@@ -41,7 +41,7 @@ class Dataset:
         spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
         theta_end: float = DEFAULT_THETA_END,
         max_n_beams: int = DEFAULT_MAX_N_BEAMS,
-        batch_size: int = 128,
+        batch_size: int = 512,
         sim_dir_path: Path = data.DEFAULT_SIM_DIR,
         key: jax.Array = None,
         prefetch: bool = True,
@@ -170,7 +170,7 @@ def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMeth
 class ExactConvNet(nnx.Module):
     def __init__(self, *, rngs: nnx.Rngs):
         padding = ((0, 0), (3, 3), (12, 12), (0, 0))  # (batch, height, width, channels)
-        self.pad = partial(jnp.pad, padding=padding, mode="wrap")  # (96, 384, 3)
+        self.pad = partial(jnp.pad, pad_width=padding, mode="wrap")  # (96, 384, 3)
 
         self.encoder = nnx.Sequential(
             ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 32)
@@ -209,8 +209,9 @@ def save_checkpoint(
 ):
     if not overwrite:
         return
-    state = nnx.state(optimizer)
-    mngr.save(step, args=ocp.args.Composite(state=ocp.args.StandardSave(state)))
+
+    handler = ocp.args.StandardSave(nnx.state(optimizer))
+    mngr.save(step, args=ocp.args.Composite(state=handler))
 
 
 def restore_checkpoint(
@@ -221,13 +222,11 @@ def restore_checkpoint(
     if step is None:
         step = mngr.latest_step()
 
-    state = nnx.state(optimizer)
-    restored = mngr.restore(
-        step,
-        args=ocp.args.Composite(state=ocp.args.StandardRestore(item=state)),
-    )
-    logger.info(f"Restored checkpoint at step {step}")
+    handler = ocp.args.StandardRestore(nnx.state(optimizer))
+    restored = mngr.restore(step, args=ocp.args.Composite(state=handler))
     nnx.update(optimizer, restored.state)
+
+    logger.info(f"Restored checkpoint at step {step}")
     return step
 
 
@@ -236,7 +235,7 @@ def train_step(optimizer: nnx.Optimizer, batch: DataSample) -> dict[str, float]:
     def loss_fn(model: nnx.Module):
         radiation_patterns = batch["radiation_patterns"]
         phase_shifts = batch["phase_shifts"]
-        predictions = model(radiation_patterns, training=True)
+        predictions = model(radiation_patterns)
 
         # Circular MSE loss
         phase_diff = jnp.abs(predictions - phase_shifts)
@@ -260,6 +259,13 @@ def warmup_step(dataset: Dataset, optimizer: nnx.Optimizer):
     logger.info("Warmup completed")
 
 
+def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimizer:
+    model = ExactConvNet(rngs=nnx.Rngs(key))
+    schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
+    optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
+    return optimizer
+
+
 @app.command()
 def train(
     array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
@@ -267,7 +273,7 @@ def train(
     theta_end: float = DEFAULT_THETA_END,
     max_n_beams: int = DEFAULT_MAX_N_BEAMS,
     n_steps: int = 100_000,
-    batch_size: int = 128,
+    batch_size: int = 512,
     lr: float = 2e-3,
     seed: int = 42,
     prefetch: bool = True,
@@ -287,20 +293,11 @@ def train(
         key=dataset_key,
     )
 
+    optimizer = create_trainables(n_steps, lr, key=model_key)
+
     ckpt_path = Path.cwd() / "checkpoints"
     ckpt_options = ocp.CheckpointManagerOptions(max_to_keep=1, save_interval_steps=10)
     ckpt_mngr = ocp.CheckpointManager(ckpt_path, options=ckpt_options)
-
-    logger.info("Initializing model and optimizer")
-    model = ExactConvNet(rngs=nnx.Rngs(model_key))
-    schedule = optax.warmup_cosine_decay_schedule(
-        init_value=0.0,
-        peak_value=lr,
-        warmup_steps=1000,
-        decay_steps=n_steps,
-        end_value=lr * 0.01,
-    )
-    optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
 
     start_step = 0
     if restore:
@@ -335,7 +332,6 @@ def train(
 
 @app.command()
 def pred(
-    checkpoint_dir: Path = Path.cwd() / "checkpoints",
     theta_deg: list[float] = None,
     phi_deg: list[float] = None,
     array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
@@ -345,27 +341,26 @@ def pred(
     seed: int = 42,
 ):
     """Predict phase shifts for given or random steering angles (CPU only)"""
+    key = jax.random.key(seed)
 
     with jax.default_device(jax.devices("cpu")[0]):
         logger.info("Running prediction on CPU")
 
         # Create model
-        key = jax.random.key(seed)
         model_key, angles_key = jax.random.split(key)
-        model = ExactConvNet(rngs=nnx.Rngs(model_key))
-        model.eval()
+        optimizer = create_trainables(
+            n_steps=1,  # Dummy value, we won't train
+            lr=0.0,  # No learning rate needed for prediction
+            key=model_key,
+        )
 
         # Get and load latest checkpoint
-        restored = ocp.CheckpointManager(checkpoint_dir).restore(
-            step=None,
-            args=ocp.args.Composite(
-                state=ocp.args.StandardRestore(item=nnx.state(model))
-            ),
-        )
-        step = restored.state["step"]["value"]
-        logger.info(f"Restored checkpoint at step {step}")
-        # logger.info(f"{'model' in restored.state=}")
-        nnx.update(model, restored.state["model"])
+        ckpt_path = Path.cwd() / "checkpoints"
+        ckpt_options = ocp.CheckpointManagerOptions(read_only=True)
+        ckpt_mngr = ocp.CheckpointManager(ckpt_path, options=ckpt_options)
+        _ = restore_checkpoint(ckpt_mngr, optimizer, step=None)
+
+        optimizer.model.eval()
 
         # Generate or use provided steering angles
         if theta_deg is None or phi_deg is None:
@@ -394,8 +389,12 @@ def pred(
         radiation_pattern, _ = analyze.rad_pattern_from_geo(
             *array_params, steering_angles
         )
-        radiation_pattern = jnp.clip(radiation_pattern[:90], a_min=0.0) / 30.0
-        predicted_phases = model(radiation_pattern[None, :], training=False)[0]
+        transformed = jnp.clip(radiation_pattern[:90], a_min=0.0) / 30.0
+        phi_rad = jnp.arange(360) * jnp.pi / 180
+        sin_phi = jnp.sin(phi_rad)[None, :] * jnp.ones((90, 1))
+        cos_phi = jnp.cos(phi_rad)[None, :] * jnp.ones((90, 1))
+        transformed = jnp.dstack([transformed, sin_phi, cos_phi])
+        predicted_phases = optimizer.model(transformed[None, ...])[0]
 
         steering_str = analyze.steering_repr(jnp.degrees(steering_angles.T))
         logger.info(f"Steering: {steering_str}")
