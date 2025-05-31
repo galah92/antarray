@@ -170,7 +170,7 @@ def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMeth
 class ExactConvNet(nnx.Module):
     def __init__(self, *, rngs: nnx.Rngs):
         padding = ((0, 0), (3, 3), (12, 12), (0, 0))  # (batch, height, width, channels)
-        self.pad = partial(nnx.pad, padding=padding, mode="wrap")  # (96, 384, 3)
+        self.pad = partial(jnp.pad, padding=padding, mode="wrap")  # (96, 384, 3)
 
         self.encoder = nnx.Sequential(
             ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 32)
