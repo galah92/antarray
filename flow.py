@@ -205,6 +205,107 @@ class ExactConvNet(nnx.Module):
         return x
 
 
+class ResidualBlock(nnx.Module):
+    def __init__(
+        self,
+        features: int,
+        kernel_size: int | Sequence[int],
+        padding: str = "SAME",
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.conv1 = ConvBlock(
+            features,
+            features,
+            kernel_size,
+            padding=padding,
+            rngs=rngs,
+        )
+        self.conv2 = nnx.Conv(
+            features,
+            features,
+            kernel_size,
+            padding=padding,
+            use_bias=False,
+            rngs=rngs,
+        )
+        self.norm2 = nnx.BatchNorm(features, rngs=rngs)
+        self.dropout = nnx.Dropout(0.1, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        residual = x
+        x = self.conv1(x)
+        x = self.dropout(x)
+        x = self.conv2(x)
+        x = self.norm2(x)
+        x = x + residual  # Residual connection
+        x = nnx.relu(x)
+        return x
+
+
+class AttentionBlock(nnx.Module):
+    def __init__(self, features: int, *, rngs: nnx.Rngs):
+        self.query_conv = nnx.Conv(
+            features, features // 8, kernel_size=(1, 1), rngs=rngs
+        )
+        self.key_conv = nnx.Conv(features, features // 8, kernel_size=(1, 1), rngs=rngs)
+        self.value_conv = nnx.Conv(features, features, kernel_size=(1, 1), rngs=rngs)
+        self.output_conv = nnx.Conv(features, features, kernel_size=(1, 1), rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        batch_size, height, width, channels = x.shape
+
+        # Compute attention
+        query = self.query_conv(x).reshape(batch_size, height * width, -1)
+        key = self.key_conv(x).reshape(batch_size, height * width, -1)
+        value = self.value_conv(x).reshape(batch_size, height * width, -1)
+
+        # Attention weights
+        attention = jax.nn.softmax(
+            jnp.matmul(query, key.transpose(0, 2, 1)) / jnp.sqrt(key.shape[-1]), axis=-1
+        )
+        attended = jnp.matmul(attention, value)
+        attended = attended.reshape(batch_size, height, width, channels)
+
+        # Output projection
+        output = self.output_conv(attended)
+        return x + output  # Residual connection
+
+
+class ImprovedConvNet(nnx.Module):
+    def __init__(self, *, rngs: nnx.Rngs):
+        padding = ((0, 0), (3, 3), (12, 12), (0, 0))  # (batch, height, width, channels)
+        self.pad = partial(jnp.pad, pad_width=padding, mode="wrap")  # (96, 384, 3)
+
+        self.encoder = nnx.Sequential(
+            ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 32)
+            partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 32)
+            ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs),  # (32, 64, 64)
+            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 64)
+            ConvBlock(64, 128, (3, 3), padding="CIRCULAR", rngs=rngs),  # (16, 16, 128)
+            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (8, 8, 128)
+        )
+        self.bottleneck = nnx.Sequential(
+            ResidualBlock(128, (3, 3), rngs=rngs),  # (8, 8, 128)
+            ResidualBlock(128, (3, 3), rngs=rngs),  # (8, 8, 128)
+            ResidualBlock(128, (3, 3), rngs=rngs),  # (8, 8, 128)
+        )
+        self.decoder = nnx.Sequential(
+            ConvBlock(128, 64, (3, 3), rngs=rngs),  # (8, 8, 64)
+            partial(resize_batch, shape=(16, 16, 64), method="bilinear"),
+            ConvBlock(64, 32, (3, 3), rngs=rngs),  # (16, 16, 32)
+            ConvBlock(32, 1, (3, 3), rngs=rngs),  # (16, 16, 1)
+        )
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        x = self.pad(x)
+        x = self.encoder(x)
+        x = self.bottleneck(x)
+        x = self.decoder(x)
+        x = x.squeeze(-1)  # Remove the channel dimension
+        return x
+
+
 def save_checkpoint(
     mngr: ocp.CheckpointManager,
     optimizer: nnx.Optimizer,
@@ -264,7 +365,8 @@ def warmup_step(dataset: Dataset, optimizer: nnx.Optimizer):
 
 
 def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimizer:
-    model = ExactConvNet(rngs=nnx.Rngs(key))
+    # model = ExactConvNet(rngs=nnx.Rngs(key))
+    model = ImprovedConvNet(rngs=nnx.Rngs(key))
     schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
     optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
     return optimizer
