@@ -305,7 +305,7 @@ def train(
 
             if (step + 1) % 10 == 0:
                 elapsed = time.perf_counter() - start_time
-                avg_time = elapsed / (step + 1)
+                avg_time = elapsed / (step + 1 - start_step)
 
                 elapsed = datetime.min + timedelta(seconds=elapsed)
                 logger.info(
