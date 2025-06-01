@@ -272,31 +272,17 @@ def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimiz
 
 @app.command()
 def train(
-    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
-    spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
-    theta_end: float = DEFAULT_THETA_END,
-    max_n_beams: int = DEFAULT_MAX_N_BEAMS,
     n_steps: int = 100_000,
     batch_size: int = 512,
     lr: float = 2e-3,
     seed: int = 42,
-    prefetch: bool = True,
     restore: bool = True,
     overwrite: bool = False,
 ):
     key = jax.random.key(seed)
     key, dataset_key, model_key = jax.random.split(key, num=3)
 
-    dataset = Dataset(
-        array_size=array_size,
-        spacing_mm=spacing_mm,
-        theta_end=theta_end,
-        max_n_beams=max_n_beams,
-        batch_size=batch_size,
-        prefetch=prefetch,
-        key=dataset_key,
-    )
-
+    dataset = Dataset(batch_size=batch_size, key=dataset_key)
     optimizer = create_trainables(n_steps, lr, key=model_key)
 
     ckpt_path = Path.cwd() / "checkpoints"
@@ -338,13 +324,8 @@ def train(
 def pred(
     theta_deg: list[float] = None,
     phi_deg: list[float] = None,
-    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
-    spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
-    theta_end: float = DEFAULT_THETA_END,
-    max_n_beams: int = DEFAULT_MAX_N_BEAMS,
     seed: int = 42,
 ):
-    """Predict phase shifts for given or random steering angles (CPU only)"""
     key = jax.random.key(seed)
 
     with jax.default_device(jax.devices("cpu")[0]):
@@ -366,24 +347,15 @@ def pred(
 
         optimizer.model.eval()
 
-        # Generate or use provided steering angles
-        if theta_deg is None or phi_deg is None:
-            steering_angles = analyze.generate_steering_angles(
-                key=angles_key, theta_end=theta_end, max_n_beams=max_n_beams
-            )
-            logger.info(f"Generated {len(steering_angles)} random steering angles")
-        else:
-            if len(theta_deg) != len(phi_deg):
-                raise typer.BadParameter("theta_deg and phi_deg must have same length")
-            steering_angles = jnp.array(
-                [[jnp.radians(t), jnp.radians(p)] for t, p in zip(theta_deg, phi_deg)]
-            )
-            logger.info(f"Using {len(steering_angles)} provided steering angles")
+        steering_angles = jnp.array(
+            [[jnp.radians(t), jnp.radians(p)] for t, p in zip(theta_deg, phi_deg)]
+        )
+        logger.info(f"Using {len(steering_angles)} provided steering angles")
 
         # Load array parameters and generate radiation pattern
         array_params = analyze.calc_array_params2(
-            array_size=array_size,
-            spacing_mm=spacing_mm,
+            array_size=DEFAULT_ARRAY_SIZE,
+            spacing_mm=DEFAULT_SPACING_MM,
             theta_rad=jnp.radians(jnp.arange(180)),
             phi_rad=jnp.radians(jnp.arange(360)),
             sim_path=data.DEFAULT_SIM_DIR / data.DEFAULT_SINGLE_ANT_FILENAME,
@@ -426,18 +398,10 @@ def pred(
 
 
 @app.command()
-def visualize_dataset(
-    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
-    spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
-    theta_end: float = DEFAULT_THETA_END,
-    max_n_beams: int = DEFAULT_MAX_N_BEAMS,
-    batch_size: int = 4,
-    seed: int = 42,
-):
+def visualize_dataset(batch_size: int = 4, seed: int = 42):
     key = jax.random.key(seed)
 
-    dataset_args = array_size, spacing_mm, theta_end, max_n_beams, batch_size
-    dataset = Dataset(*dataset_args, key=key, normalize=True)
+    dataset = Dataset(batch_size=batch_size, key=key)
     batch = next(dataset)
     patterns, phase_shifts = batch["radiation_patterns"], batch["phase_shifts"]
     steering_angles = batch["steering_angles"]
