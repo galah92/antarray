@@ -50,6 +50,7 @@ class Dataset:
         key: jax.Array = None,
         prefetch: bool = True,
         normalize: bool = True,
+        front_hemisphere: bool = True,
         radiation_pattern_max=30,  # Maximum radiation pattern value in dB observed
     ):
         self.theta_end = jnp.radians(theta_end)
@@ -67,7 +68,7 @@ class Dataset:
         array_params = analyze.calc_array_params2(
             array_size=array_size,
             spacing_mm=spacing_mm,
-            theta_rad=jnp.radians(jnp.arange(180)),
+            theta_rad=jnp.radians(jnp.arange(90 if front_hemisphere else 180)),
             phi_rad=jnp.radians(jnp.arange(360)),
             sim_path=sim_dir_path / data.DEFAULT_SINGLE_ANT_FILENAME,
         )
@@ -102,7 +103,6 @@ class Dataset:
             *self.array_params,
             steering_angles,
         )
-        radiation_pattern = radiation_pattern[:90]  # Clip to front hemisphere
         phase_shifts = jnp.angle(excitations)
 
         # Add clamping to set negative values to 0 (equivalent to main.py)
@@ -467,7 +467,7 @@ def pred(
         radiation_pattern, _ = analyze.rad_pattern_from_geo(
             *array_params, steering_angles
         )
-        transformed = jnp.clip(radiation_pattern[:90], a_min=0.0) / 30.0
+        transformed = jnp.clip(radiation_pattern, a_min=0.0) / 30.0
         phi_rad = jnp.arange(360) * jnp.pi / 180
         sin_phi = jnp.sin(phi_rad)[None, :] * jnp.ones((90, 1))
         cos_phi = jnp.cos(phi_rad)[None, :] * jnp.ones((90, 1))
@@ -560,6 +560,17 @@ def inspect_data(
                 f"Has NaN: {jnp.any(jnp.isnan(x))}, "
                 f"Has Inf: {jnp.any(jnp.isinf(x))}, "
             )
+
+
+@app.command()
+def dev():
+    key = jax.random.key(42)
+    dataset = Dataset(batch_size=4, key=key)
+    for batch in dataset:
+        logger.info(f"Radiation Patterns shape: {batch['radiation_patterns'].shape}")
+        logger.info(f"Phase Shifts shape: {batch['phase_shifts'].shape}")
+        logger.info(f"Steering Angles shape: {batch['steering_angles'].shape}")
+        break
 
 
 if __name__ == "__main__":

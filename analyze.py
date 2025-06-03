@@ -158,6 +158,9 @@ def calc_array_params2(
     taper = calc_taper(array_size)
     geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
 
+    if theta_rad.size < E_field.shape[2]:
+        E_field = E_field[:, : theta_rad.size, :]  # Trim E_field to match theta_rad
+
     return kx, ky, taper, geo_exp, E_field, Dmax_array
 
 
