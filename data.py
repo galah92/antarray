@@ -266,9 +266,10 @@ def generate_beamforming(
         ex_ds = h5f.create_dataset("excitations", shape=ex_shape, dtype=np.complex64)
 
         for i, batch in tqdm(enumerate(dataset), total=dataset.limit):
-            n = min(batch_size, n_samples - i)  # Handle the last batch
-            patterns_ds[i : i + n] = batch.radiation_patterns[:n]
-            ex_ds[i : i + n] = batch.phase_shifts[:n]
+            k = i * batch_size
+            n = min(batch_size, n_samples - k)  # Handle the last batch
+            patterns_ds[k : k + n] = batch.radiation_patterns[:n]
+            ex_ds[k : k + n] = batch.phase_shifts[:n]
 
         # h5f.create_dataset("steering", data=steerings)
 
