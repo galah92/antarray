@@ -169,22 +169,25 @@ class ImprovedConvNet(nnx.Module):
         self.pad = partial(jnp.pad, pad_width=padding, mode="wrap")  # (96, 384, 3)
 
         self.encoder = nnx.Sequential(
-            ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 32)
-            partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 32)
-            ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs),  # (32, 64, 64)
-            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 64)
-            ConvBlock(64, 128, (3, 3), padding="CIRCULAR", rngs=rngs),  # (16, 16, 128)
-            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (8, 8, 128)
+            ConvBlock(3, 16, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 16)
+            partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 16)
+            ConvBlock(16, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (32, 64, 32)
+            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 32)
+            ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs),  # (16, 16, 64)
+            partial(nnx.avg_pool, window_shape=(2, 2), strides=(2, 2)),  # (8, 8, 64)
+            ConvBlock(64, 128, (3, 3), padding="CIRCULAR", rngs=rngs),  # (8, 8, 128)
+            partial(nnx.avg_pool, window_shape=(2, 2), strides=(2, 2)),  # (4, 4, 128)
         )
         self.bottleneck = nnx.Sequential(
-            ResidualBlock(128, (3, 3), rngs=rngs),  # (8, 8, 128)
-            ResidualBlock(128, (3, 3), rngs=rngs),  # (8, 8, 128)
-            ResidualBlock(128, (3, 3), rngs=rngs),  # (8, 8, 128)
+            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
+            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
+            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
         )
         self.decoder = nnx.Sequential(
-            ConvBlock(128, 64, (3, 3), rngs=rngs),  # (8, 8, 64)
-            partial(resize_batch, shape=(16, 16, 64), method="bilinear"),
-            ConvBlock(64, 32, (3, 3), rngs=rngs),  # (16, 16, 32)
+            ConvBlock(128, 64, (3, 3), rngs=rngs),  # (4, 4, 64)
+            partial(resize_batch, shape=(8, 8, 64), method="bilinear"),
+            ConvBlock(64, 32, (3, 3), rngs=rngs),  # (8, 8, 32)
+            partial(resize_batch, shape=(16, 16, 32), method="bilinear"),
             ConvBlock(32, 1, (3, 3), rngs=rngs),  # (16, 16, 1)
         )
 

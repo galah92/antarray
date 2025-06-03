@@ -17,8 +17,9 @@ import analyze
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
-DEFAULT_DATASET_DIR = Path.cwd() / "dataset"
+root_dir = Path(__file__).parent.parent
+DEFAULT_SIM_DIR = root_dir / "openems" / "sim" / "antenna_array"
+DEFAULT_DATASET_DIR = root_dir / "dataset"
 DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_DATASET_NAME = "farfield_dataset.h5"
 DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
