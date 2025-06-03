@@ -9,7 +9,6 @@ from typing import Sequence
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import numpy as np
 import optax
 import orbax.checkpoint as ocp
 import typer
@@ -385,79 +384,6 @@ def pred(
         fig.savefig(plot_path, dpi=150, bbox_inches="tight")
         logger.info(f"Saved: {plot_path}")
         plt.close()
-
-
-@app.command()
-def visualize_dataset(batch_size: int = 4, seed: int = 42):
-    key = jax.random.key(seed)
-
-    dataset = data.Dataset(batch_size=batch_size, key=key)
-    batch = next(dataset)
-    patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
-    steering_angles = batch.steering_angles
-
-    theta_rad, phi_rad = np.radians(np.arange(90)), np.radians(np.arange(360))
-
-    fig, axes = plt.subplots(batch_size, 2, figsize=(12, 3 * batch_size))
-    if batch_size == 1:
-        axes = axes.reshape(1, -1)
-
-    for i in range(batch_size):
-        steering_str = analyze.steering_repr(np.degrees(steering_angles[i].T))
-        title = f"Radiation Pattern\n{steering_str}"
-        analyze.plot_ff_2d(theta_rad, phi_rad, patterns[i], title=title, ax=axes[i, 0])
-        title = "Phase Shifts\n"
-        analyze.plot_phase_shifts(phase_shifts[i], title=title, ax=axes[i, 1])
-
-    fig.suptitle("Batch Overview: Model Inputs")
-    fig.set_tight_layout(True)
-
-    plot_path = "batch_overview.png"
-    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
-    logger.info(f"Saved batch overview {plot_path}")
-
-
-@app.command()
-def inspect_data(
-    array_size: tuple[int, int] = data.DEFAULT_ARRAY_SIZE,
-    spacing_mm: tuple[float, float] = data.DEFAULT_SPACING_MM,
-    theta_end: float = data.DEFAULT_THETA_END,
-    max_n_beams: int = data.DEFAULT_MAX_N_BEAMS,
-    seed: int = 42,
-):
-    key = jax.random.key(seed)
-
-    dataset_args = array_size, spacing_mm, theta_end, max_n_beams
-    dataset = data.Dataset(*dataset_args, key=key, batch_size=8, normalize=False)
-    for i in range(3):
-        batch = next(dataset)
-        rp, ps = batch.radiation_patterns, batch.phase_shifts
-
-        logger.info(f"Batch {i + 1}:")
-        for x, label in zip(
-            [rp, ps],
-            ["Radiation Patterns", "Phase Shifts"],
-        ):
-            logger.info(
-                f"{label} statistics:, "
-                f"Min: {jnp.min(x):.6f}, "
-                f"Max: {jnp.max(x):.6f}, "
-                f"Mean: {jnp.mean(x):.6f}, "
-                f"Std: {jnp.std(x):.6f}, "
-                f"Has NaN: {jnp.any(jnp.isnan(x))}, "
-                f"Has Inf: {jnp.any(jnp.isinf(x))}, "
-            )
-
-
-@app.command()
-def dev():
-    key = jax.random.key(42)
-    dataset = data.Dataset(batch_size=4, key=key)
-    for batch in dataset:
-        logger.info(f"Radiation Patterns shape: {batch['radiation_patterns'].shape}")
-        logger.info(f"Phase Shifts shape: {batch['phase_shifts'].shape}")
-        logger.info(f"Steering Angles shape: {batch['steering_angles'].shape}")
-        break
 
 
 if __name__ == "__main__":

@@ -372,6 +372,35 @@ def plot_sample(
     logger.info(f"Saved sample plot to {sample_path}")
 
 
+def visualize_dataset(batch_size: int = 4, seed: int = 42):
+    key = jax.random.key(seed)
+
+    dataset = Dataset(batch_size=batch_size, key=key)
+    batch = next(dataset)
+    patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
+    steering_angles = batch.steering_angles
+
+    theta_rad, phi_rad = np.radians(np.arange(90)), np.radians(np.arange(360))
+
+    fig, axes = plt.subplots(batch_size, 2, figsize=(12, 3 * batch_size))
+    if batch_size == 1:
+        axes = axes.reshape(1, -1)
+
+    for i in range(batch_size):
+        steering_str = analyze.steering_repr(np.degrees(steering_angles[i].T))
+        title = f"Radiation Pattern\n{steering_str}"
+        analyze.plot_ff_2d(theta_rad, phi_rad, patterns[i], title=title, ax=axes[i, 0])
+        title = "Phase Shifts\n"
+        analyze.plot_phase_shifts(phase_shifts[i], title=title, ax=axes[i, 1])
+
+    fig.suptitle("Batch Overview: Model Inputs")
+    fig.set_tight_layout(True)
+
+    plot_path = "batch_overview.png"
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    logger.info(f"Saved batch overview {plot_path}")
+
+
 def ff_from_phase_shifts(
     phase_shifts: np.ndarray,
     sim_dir_path: Path = DEFAULT_SIM_DIR,
