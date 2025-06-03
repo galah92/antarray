@@ -1,8 +1,6 @@
 [project]
-name = "openems-docker"
+name = "openems"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "ipykernel>=6.29.5",
@@ -17,8 +15,6 @@ dependencies = [
 
 [project.optional-dependencies]
 jax = ["jax[cuda12]==0.6.1", "flax>=0.10.6", "orbax-checkpoint>=0.11.13"]
-# jax = ["jax[cuda12]==0.5.3", "flax>=0.10.6"]
-# torch = ["torch>=2.7.0", "torchvision>=0.22.0"]
 
 [tool.ruff.lint]
 select = [

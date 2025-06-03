@@ -842,7 +842,7 @@ wheels = [
 ]
 
 [[package]]
-name = "openems-docker"
+name = "openems"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
