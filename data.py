@@ -133,30 +133,37 @@ class Dataset:
         self,
         batch_size: int = 512,
         limit: int = None,
-        theta_end: float = DEFAULT_THETA_END,
+        prefetch: bool = True,
         array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
         spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
-        max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+        theta_end: float = DEFAULT_THETA_END,
         sim_dir_path: Path = DEFAULT_SIM_DIR,
-        key: jax.Array = None,
-        prefetch: bool = True,
+        max_n_beams: int = DEFAULT_MAX_N_BEAMS,
         clip: bool = True,
         normalize: bool = True,
-        front_hemisphere: bool = True,
-        radiation_pattern_max=30,  # Maximum radiation pattern value in dB observed
+        radiation_pattern_max: float = 30.0,  # Maximum radiation pattern value in dB observed
         trig_encoding: bool = True,
+        front_hemisphere: bool = True,
+        key: jax.Array = None,
     ):
         self.batch_size = batch_size
         self.limit = limit
         self.count = 0
+        self.prefetch = prefetch
 
+        self.array_size = array_size
+        self.spacing_mm = spacing_mm
         self.theta_end = jnp.radians(theta_end)
         self.sim_dir_path = sim_dir_path
-        self.prefetch = prefetch
+
         self.clip = clip
         self.normalize = normalize
         self.radiation_pattern_max = radiation_pattern_max
         self.trig_encoding = trig_encoding
+        self.front_hemisphere = front_hemisphere
+
+        self.theta_rad = jnp.radians(jnp.arange(90 if front_hemisphere else 180))
+        self.phi_rad = jnp.radians(jnp.arange(360))
 
         if key is None:
             key = jax.random.key(0)
@@ -166,8 +173,8 @@ class Dataset:
         array_params = analyze.calc_array_params2(
             array_size=array_size,
             spacing_mm=spacing_mm,
-            theta_rad=jnp.radians(jnp.arange(90 if front_hemisphere else 180)),
-            phi_rad=jnp.radians(jnp.arange(360)),
+            theta_rad=self.theta_rad,
+            phi_rad=self.phi_rad,
             sim_path=sim_dir_path / DEFAULT_SINGLE_ANT_FILENAME,
         )
 
