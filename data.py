@@ -59,7 +59,7 @@ DEFAULT_MAX_N_BEAMS = 4
 
 
 class DataSample(NamedTuple):
-    radiation_pattern: jax.Array  # (n_theta, n_phi, 3) - pattern & trig encoding
+    radiation_patterns: jax.Array  # (n_theta, n_phi, 3) - pattern & trig encoding
     phase_shifts: jax.Array  # (array_x, array_y)
     steering_angles: jax.Array  # (n_beams, 2) - theta, phi in radians
 
@@ -149,18 +149,13 @@ class Dataset:
 
         return DataSample(radiation_pattern, phase_shifts, steering_angles)
 
-    def generate_batch(self) -> dict[str, jax.Array]:
+    def generate_batch(self) -> DataSample:
         self.key, batch_key = jax.random.split(self.key)
         sample_keys = jax.random.split(batch_key, self.batch_size)
         samples = self.vmapped_generate_sample(sample_keys)
+        return samples
 
-        return {
-            "radiation_patterns": samples.radiation_pattern,
-            "phase_shifts": samples.phase_shifts,
-            "steering_angles": samples.steering_angles,
-        }
-
-    def __next__(self) -> dict[str, jax.Array]:
+    def __next__(self) -> DataSample:
         if self.prefetch:
             current_batch = self._prefetched_batch
             self._prefetched_batch = self.generate_batch()
@@ -211,10 +206,10 @@ def generate_beamforming(
         ex_shape = (n_samples, *array_size)
         ex_ds = h5f.create_dataset("excitations", shape=ex_shape, dtype=np.complex64)
 
-        for i, sample in zip(range(0, n_samples, batch_size), dataset):
+        for i, batch in zip(range(0, n_samples, batch_size), dataset):
             n = min(batch_size, n_samples - i)  # Handle the last batch
-            patterns_ds[i : i + n] = sample["radiation_patterns"][:n]
-            ex_ds[i : i + n] = sample["phase_shifts"][:n]
+            patterns_ds[i : i + n] = batch.radiation_patterns[:n]
+            ex_ds[i : i + n] = batch.phase_shifts[:n]
 
         # h5f.create_dataset("steering", data=steerings)
 

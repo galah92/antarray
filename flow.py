@@ -226,8 +226,7 @@ def restore_checkpoint(
 @nnx.jit
 def train_step(optimizer: nnx.Optimizer, batch: data.DataSample) -> dict[str, float]:
     def loss_fn(model: nnx.Module):
-        radiation_patterns = batch["radiation_patterns"]
-        phase_shifts = batch["phase_shifts"]
+        radiation_patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
         predictions = model(radiation_patterns)
 
         # Circular MSE loss
@@ -392,8 +391,8 @@ def visualize_dataset(batch_size: int = 4, seed: int = 42):
 
     dataset = data.Dataset(batch_size=batch_size, key=key)
     batch = next(dataset)
-    patterns, phase_shifts = batch["radiation_patterns"], batch["phase_shifts"]
-    steering_angles = batch["steering_angles"]
+    patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
+    steering_angles = batch.steering_angles
 
     theta_rad, phi_rad = np.radians(np.arange(90)), np.radians(np.arange(360))
 
@@ -430,8 +429,7 @@ def inspect_data(
     dataset = data.Dataset(*dataset_args, key=key, batch_size=8, normalize=False)
     for i in range(3):
         batch = next(dataset)
-        rp = batch["radiation_patterns"]
-        ps = batch["phase_shifts"]
+        rp, ps = batch.radiation_patterns, batch.phase_shifts
 
         logger.info(f"Batch {i + 1}:")
         for x, label in zip(
