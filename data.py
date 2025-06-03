@@ -65,6 +65,45 @@ class DataBatch(NamedTuple):
     steering_angles: jax.Array  # (n_beams, 2) - theta, phi in radians
 
 
+def create_radiation_pattern_transform(
+    clip: bool = True,
+    normalize: bool = True,
+    radiation_pattern_max: float = 30.0,
+    trig_encoding: bool = True,
+    front_hemisphere: bool = True,
+):
+    """
+    Create a JIT-compiled radiation pattern transformation function.
+    """
+
+    @jax.jit
+    def transform(
+        radiation_pattern: jax.Array,
+        sin_phi: jax.Array,
+        cos_phi: jax.Array,
+    ) -> jax.Array:
+        if clip:
+            radiation_pattern = jnp.clip(radiation_pattern, a_min=0.0)
+
+        if normalize:
+            radiation_pattern = radiation_pattern / radiation_pattern_max
+
+        if trig_encoding:
+            channels = [radiation_pattern, sin_phi, cos_phi]
+            radiation_pattern = jnp.stack(channels, axis=-1)
+
+        return radiation_pattern
+
+    # Precompute trigonometric encoding channels
+    n_theta = 90 if front_hemisphere else 180
+    phi_rad = jnp.arange(360) * jnp.pi / 180
+    sin_phi = jnp.tile(jnp.sin(phi_rad), reps=(n_theta, 1))
+    cos_phi = jnp.tile(jnp.cos(phi_rad), reps=(n_theta, 1))
+
+    # Return a specialized transform function with sin_phi/cos_phi baked in
+    return jax.jit(partial(transform, sin_phi=sin_phi, cos_phi=cos_phi))
+
+
 class Dataset:
     def __init__(
         self,
@@ -119,10 +158,13 @@ class Dataset:
             *self.array_params,
         )
 
-        # Precompute trigonometric encoding channels
-        phi_rad = jnp.arange(360) * jnp.pi / 180
-        self.sin_phi = jnp.sin(phi_rad)[None, :] * jnp.ones((90, 1))
-        self.cos_phi = jnp.cos(phi_rad)[None, :] * jnp.ones((90, 1))
+        self.transform_fn = create_radiation_pattern_transform(
+            clip=clip,
+            normalize=normalize,
+            radiation_pattern_max=radiation_pattern_max,
+            trig_encoding=trig_encoding,
+            front_hemisphere=front_hemisphere,
+        )
 
         self.vmapped_generate_sample = jax.vmap(self.generate_sample)
 
@@ -142,15 +184,7 @@ class Dataset:
         radiation_pattern, excitations = self.rad_pattern_from_steering(steering_angles)
         phase_shifts = jnp.angle(excitations)
 
-        if self.clip:
-            radiation_pattern = jnp.clip(radiation_pattern, a_min=0.0)
-
-        if self.normalize:
-            radiation_pattern = radiation_pattern / self.radiation_pattern_max
-
-        if self.trig_encoding:
-            arrays = [radiation_pattern, self.sin_phi, self.cos_phi]
-            radiation_pattern = jnp.stack(arrays, axis=-1)
+        radiation_pattern = self.transform_fn(radiation_pattern)
 
         return DataBatch(radiation_pattern, phase_shifts, steering_angles)
 
