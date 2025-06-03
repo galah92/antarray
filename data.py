@@ -35,7 +35,7 @@ def simulate(sim_path: str = "antenna_array.py"):
 	docker run -it --rm \
 		-e DISPLAY=host.docker.internal:0 \
 		-v /tmp/.X11-unix:/tmp/.X11-unix \
-		-v ./src:/app/ \
+		-v ./openems:/app/ \
 		-v /tmp:/tmp/ \
 		{image_name} \
 		python3 /app/{sim_path}

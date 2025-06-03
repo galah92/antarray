@@ -314,9 +314,9 @@ if __name__ == "__main__":
             for steering_theta in steering_thetas:
                 for steering_phi in steering_phis:
                     outfile = f"ff_{n_x}x{n_y}_{d}x{d}_{f0 / 1e6:n}_steer_t{steering_theta}_p{steering_phi}.h5"
-                    # if (sim_path / outfile).exists():
-                    #     print(f"Skipping {outfile}")
-                    #     continue
+                    if (sim_path / outfile).exists():
+                        print(f"Skipping {outfile}")
+                        continue
                     sim_path, nf2ff, ports = simulate(
                         n_x=n_x,
                         n_y=n_y,
