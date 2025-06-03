@@ -59,7 +59,7 @@ DEFAULT_THETA_END = 65.0
 DEFAULT_MAX_N_BEAMS = 4
 
 
-class DataSample(NamedTuple):
+class DataBatch(NamedTuple):
     radiation_patterns: jax.Array  # (n_theta, n_phi, 3) - pattern & trig encoding
     phase_shifts: jax.Array  # (array_x, array_y)
     steering_angles: jax.Array  # (n_beams, 2) - theta, phi in radians
@@ -130,7 +130,7 @@ class Dataset:
         if self.prefetch:
             self._prefetched_batch = self.generate_batch()
 
-    def generate_sample(self, key: jax.Array) -> DataSample:
+    def generate_sample(self, key: jax.Array) -> DataBatch:
         key1, key2 = jax.random.split(key)
 
         # Generate random steering angles for multiple beams
@@ -152,15 +152,15 @@ class Dataset:
             arrays = [radiation_pattern, self.sin_phi, self.cos_phi]
             radiation_pattern = jnp.stack(arrays, axis=-1)
 
-        return DataSample(radiation_pattern, phase_shifts, steering_angles)
+        return DataBatch(radiation_pattern, phase_shifts, steering_angles)
 
-    def generate_batch(self) -> DataSample:
+    def generate_batch(self) -> DataBatch:
         self.key, batch_key = jax.random.split(self.key)
         sample_keys = jax.random.split(batch_key, self.batch_size)
         samples = self.vmapped_generate_sample(sample_keys)
         return samples
 
-    def __next__(self) -> DataSample:
+    def __next__(self) -> DataBatch:
         if self.limit is not None and self.count >= self.limit:
             raise StopIteration
         self.count += 1

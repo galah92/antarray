@@ -224,7 +224,7 @@ def restore_checkpoint(
 
 
 @nnx.jit
-def train_step(optimizer: nnx.Optimizer, batch: data.DataSample) -> dict[str, float]:
+def train_step(optimizer: nnx.Optimizer, batch: data.DataBatch) -> dict[str, float]:
     def loss_fn(model: nnx.Module):
         radiation_patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
         predictions = model(radiation_patterns)
