@@ -65,6 +65,32 @@ class DataBatch(NamedTuple):
     steering_angles: jax.Array  # (n_beams, 2) - theta, phi in radians
 
 
+def create_sample_generator(
+    theta_end: float,
+    rad_pattern_from_steering,
+    transform_fn,
+):
+    """Create a JIT-compiled sample generation function."""
+
+    @jax.jit
+    def generate_sample(key: jax.Array) -> DataBatch:
+        key1, key2 = jax.random.split(key)
+
+        # Generate random steering angles for multiple beams
+        n_beams = 2
+        theta_steering = jax.random.uniform(key1, (n_beams,)) * theta_end
+        phi_steering = jax.random.uniform(key2, (n_beams,)) * (2 * jnp.pi)
+        steering_angles = jnp.stack((theta_steering, phi_steering), axis=-1)
+
+        radiation_pattern, excitations = rad_pattern_from_steering(steering_angles)
+        phase_shifts = jnp.angle(excitations)
+        radiation_pattern = transform_fn(radiation_pattern)
+
+        return DataBatch(radiation_pattern, phase_shifts, steering_angles)
+
+    return generate_sample
+
+
 def create_radiation_pattern_transform(
     clip: bool = True,
     normalize: bool = True,
@@ -72,9 +98,7 @@ def create_radiation_pattern_transform(
     trig_encoding: bool = True,
     front_hemisphere: bool = True,
 ):
-    """
-    Create a JIT-compiled radiation pattern transformation function.
-    """
+    """Create a JIT-compiled radiation pattern transformation function."""
 
     @jax.jit
     def transform(
@@ -166,45 +190,35 @@ class Dataset:
             front_hemisphere=front_hemisphere,
         )
 
-        self.vmapped_generate_sample = jax.vmap(self.generate_sample)
+        self.generate_sample = create_sample_generator(
+            self.theta_end,
+            self.rad_pattern_from_steering,
+            self.transform_fn,
+        )
 
-        self._prefetched_batch = None
+        self.generate_batch = jax.jit(
+            lambda key: jax.vmap(self.generate_sample)(
+                jax.random.split(key, self.batch_size)
+            )
+        )
+
+        self.prefetched_batch = None
         if self.prefetch:
-            self._prefetched_batch = self.generate_batch()
-
-    def generate_sample(self, key: jax.Array) -> DataBatch:
-        key1, key2 = jax.random.split(key)
-
-        # Generate random steering angles for multiple beams
-        n_beams = 2
-        theta_steering = jax.random.uniform(key1, (n_beams,)) * self.theta_end
-        phi_steering = jax.random.uniform(key2, (n_beams,)) * (2 * jnp.pi)
-        steering_angles = jnp.stack((theta_steering, phi_steering), axis=-1)
-
-        radiation_pattern, excitations = self.rad_pattern_from_steering(steering_angles)
-        phase_shifts = jnp.angle(excitations)
-
-        radiation_pattern = self.transform_fn(radiation_pattern)
-
-        return DataBatch(radiation_pattern, phase_shifts, steering_angles)
-
-    def generate_batch(self) -> DataBatch:
-        self.key, batch_key = jax.random.split(self.key)
-        sample_keys = jax.random.split(batch_key, self.batch_size)
-        samples = self.vmapped_generate_sample(sample_keys)
-        return samples
+            self.key, batch_key = jax.random.split(self.key)
+            self.prefetched_batch = self.generate_batch(batch_key)
 
     def __next__(self) -> DataBatch:
         if self.limit is not None and self.count >= self.limit:
             raise StopIteration
         self.count += 1
 
+        self.key, batch_key = jax.random.split(self.key)
         if self.prefetch:
-            current_batch = self._prefetched_batch
-            self._prefetched_batch = self.generate_batch()
+            current_batch = self.prefetched_batch
+            self.prefetched_batch = self.generate_batch(batch_key)
             return current_batch
         else:
-            return self.generate_batch()
+            return self.generate_batch(batch_key)
 
     def __iter__(self):
         self.count = 0
