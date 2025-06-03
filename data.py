@@ -2,6 +2,7 @@ import logging
 import subprocess as sp
 from functools import partial
 from pathlib import Path
+from typing import NamedTuple
 
 import h5py
 import jax
@@ -10,7 +11,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import typer
 from matplotlib import animation
-from tqdm import tqdm
 
 import analyze
 
@@ -52,44 +52,154 @@ def get_beams_prob(max_n_beams: int = 1):
     return n_beams_prob
 
 
+DEFAULT_ARRAY_SIZE = (16, 16)
+DEFAULT_SPACING_MM = (60, 60)
+DEFAULT_THETA_END = 65.0
+DEFAULT_MAX_N_BEAMS = 4
+
+
+class DataSample(NamedTuple):
+    radiation_pattern: jax.Array  # (n_theta, n_phi, 3) - pattern & trig encoding
+    phase_shifts: jax.Array  # (array_x, array_y)
+    steering_angles: jax.Array  # (n_beams, 2) - theta, phi in radians
+
+
+class Dataset:
+    def __init__(
+        self,
+        array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
+        spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
+        theta_end: float = DEFAULT_THETA_END,
+        max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+        batch_size: int = 512,
+        sim_dir_path: Path = DEFAULT_SIM_DIR,
+        key: jax.Array = None,
+        prefetch: bool = True,
+        clip: bool = True,
+        normalize: bool = True,
+        front_hemisphere: bool = True,
+        radiation_pattern_max=30,  # Maximum radiation pattern value in dB observed
+        trig_encoding: bool = True,
+    ):
+        self.theta_end = jnp.radians(theta_end)
+        self.sim_dir_path = sim_dir_path
+        self.batch_size = batch_size
+        self.prefetch = prefetch
+        self.clip = clip
+        self.normalize = normalize
+        self.radiation_pattern_max = radiation_pattern_max
+        self.trig_encoding = trig_encoding
+
+        if key is None:
+            key = jax.random.key(0)
+        self.key = key
+
+        # Load and prepare array parameters
+        array_params = analyze.calc_array_params2(
+            array_size=array_size,
+            spacing_mm=spacing_mm,
+            theta_rad=jnp.radians(jnp.arange(90 if front_hemisphere else 180)),
+            phi_rad=jnp.radians(jnp.arange(360)),
+            sim_path=sim_dir_path / DEFAULT_SINGLE_ANT_FILENAME,
+        )
+
+        # Convert to JAX arrays and make them static
+        self.array_params = [jnp.asarray(param) for param in array_params]
+
+        # Beam probability distribution
+        self.n_beams_prob = get_beams_prob(max_n_beams)
+
+        self.rad_pattern_from_steering = partial(
+            analyze.rad_pattern_from_geo,
+            *self.array_params,
+        )
+
+        # Precompute trigonometric encoding channels
+        phi_rad = jnp.arange(360) * jnp.pi / 180
+        self.sin_phi = jnp.sin(phi_rad)[None, :] * jnp.ones((90, 1))
+        self.cos_phi = jnp.cos(phi_rad)[None, :] * jnp.ones((90, 1))
+
+        self.vmapped_generate_sample = jax.vmap(self.generate_sample)
+
+        self._prefetched_batch = None
+        if self.prefetch:
+            self._prefetched_batch = self.generate_batch()
+
+    def generate_sample(self, key: jax.Array) -> DataSample:
+        key1, key2 = jax.random.split(key)
+
+        # Generate random steering angles for multiple beams
+        n_beams = 2
+        theta_steering = jax.random.uniform(key1, (n_beams,)) * self.theta_end
+        phi_steering = jax.random.uniform(key2, (n_beams,)) * (2 * jnp.pi)
+        steering_angles = jnp.stack((theta_steering, phi_steering), axis=-1)
+
+        radiation_pattern, excitations = self.rad_pattern_from_steering(steering_angles)
+        phase_shifts = jnp.angle(excitations)
+
+        if self.clip:
+            radiation_pattern = jnp.clip(radiation_pattern, a_min=0.0)
+
+        if self.normalize:
+            radiation_pattern = radiation_pattern / self.radiation_pattern_max
+
+        if self.trig_encoding:
+            arrays = [radiation_pattern, self.sin_phi, self.cos_phi]
+            radiation_pattern = jnp.stack(arrays, axis=-1)
+
+        return DataSample(radiation_pattern, phase_shifts, steering_angles)
+
+    def generate_batch(self) -> dict[str, jax.Array]:
+        self.key, batch_key = jax.random.split(self.key)
+        sample_keys = jax.random.split(batch_key, self.batch_size)
+        samples = self.vmapped_generate_sample(sample_keys)
+
+        return {
+            "radiation_patterns": samples.radiation_pattern,
+            "phase_shifts": samples.phase_shifts,
+            "steering_angles": samples.steering_angles,
+        }
+
+    def __next__(self) -> dict[str, jax.Array]:
+        if self.prefetch:
+            current_batch = self._prefetched_batch
+            self._prefetched_batch = self.generate_batch()
+            return current_batch
+        else:
+            return self.generate_batch()
+
+    def __iter__(self):
+        return self
+
+
 @app.command()
 def generate_beamforming(
     n_samples: int = 1_000,
     theta_end: float = 65,  # Degrees
     max_n_beams: int = 1,
-    sim_dir_path: Path = DEFAULT_SIM_DIR,
     dataset_dir: Path = DEFAULT_DATASET_DIR,
     dataset_name: Path = DEFAULT_DATASET_NAME,
     overwrite: bool = False,
-    single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
+    seed: int = 42,
 ):
     array_size = (16, 16)
-    theta_rad = np.radians(np.arange(180))
+    theta_rad = np.radians(np.arange(90))
     phi_rad = np.radians(np.arange(360))
+    batch_size = min(512, n_samples)
 
-    logger.info(f"Generating dataset with {n_samples} samples")
-
-    array_params = analyze.calc_array_params2(
+    dataset = Dataset(
         array_size=array_size,
         spacing_mm=(60, 60),
-        theta_rad=theta_rad,
-        phi_rad=phi_rad,
-        sim_path=sim_dir_path / single_antenna_filename,
+        theta_end=theta_end,
+        max_n_beams=max_n_beams,
+        batch_size=batch_size,
+        key=jax.random.key(seed),
+        clip=False,
+        normalize=False,
+        trig_encoding=False,
     )
 
-    # Create a function to calculate E_norm and excitations for given steering angles
-    static_params = jax.tree_util.tree_map(jnp.asarray, array_params)  # Convert to JAX
-    rad_pattern_from_steering = partial(analyze.rad_pattern_from_geo, *static_params)
-
-    # Choose a random number of beams to simulate for each sample
-    n_beams_prob = get_beams_prob(max_n_beams)
-    n_beams = np.random.choice(max_n_beams, size=n_samples, p=n_beams_prob) + 1
-
-    # Generate random steering angles within the specified range
-    steering_size = (n_samples, max_n_beams)
-    theta_steerings = np.random.uniform(0, theta_end, size=steering_size)
-    phi_steerings = np.random.uniform(0, 360, size=steering_size)
-    steerings = np.dstack([theta_steerings, phi_steerings])
+    logger.info(f"Generating dataset with {n_samples} samples")
 
     mode = "w" if overwrite else "x"
     with h5py.File(dataset_dir / dataset_name, mode) as h5f:
@@ -101,17 +211,12 @@ def generate_beamforming(
         ex_shape = (n_samples, *array_size)
         ex_ds = h5f.create_dataset("excitations", shape=ex_shape, dtype=np.complex64)
 
-        for i in tqdm(range(n_samples)):
-            steer = steerings[i]
-            steer[n_beams[i] :] = np.nan  # Set steering angles to NaN for unused beams
+        for i, sample in zip(range(0, n_samples, batch_size), dataset):
+            n = min(batch_size, n_samples - i)  # Handle the last batch
+            patterns_ds[i : i + n] = sample["radiation_patterns"][:n]
+            ex_ds[i : i + n] = sample["phase_shifts"][:n]
 
-            valid_steer = np.radians(steer[~np.isnan(steer).any(axis=1)])
-            E_norm, excitations = rad_pattern_from_steering(jnp.asarray(valid_steer))
-
-            patterns_ds[i] = E_norm
-            ex_ds[i] = excitations
-
-        h5f.create_dataset("steering", data=steerings)
+        # h5f.create_dataset("steering", data=steerings)
 
 
 @app.command()

@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import Sequence
 
 import jax
 import jax.numpy as jnp
@@ -25,118 +25,6 @@ logger = logging.getLogger(__name__)
 cc.set_cache_dir("/tmp/jax_cache")
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
-
-DEFAULT_ARRAY_SIZE = (16, 16)
-DEFAULT_SPACING_MM = (60, 60)
-DEFAULT_THETA_END = 65.0
-DEFAULT_MAX_N_BEAMS = 3
-
-
-class DataSample(NamedTuple):
-    radiation_pattern: jax.Array  # (n_theta, n_phi, 3) - pattern & trig encoding
-    phase_shifts: jax.Array  # (array_x, array_y)
-    steering_angles: jax.Array  # (n_beams, 2) - theta, phi in radians
-
-
-class Dataset:
-    def __init__(
-        self,
-        array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
-        spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
-        theta_end: float = DEFAULT_THETA_END,
-        max_n_beams: int = DEFAULT_MAX_N_BEAMS,
-        batch_size: int = 512,
-        sim_dir_path: Path = data.DEFAULT_SIM_DIR,
-        key: jax.Array = None,
-        prefetch: bool = True,
-        normalize: bool = True,
-        front_hemisphere: bool = True,
-        radiation_pattern_max=30,  # Maximum radiation pattern value in dB observed
-    ):
-        self.theta_end = jnp.radians(theta_end)
-        self.sim_dir_path = sim_dir_path
-        self.batch_size = batch_size
-        self.prefetch = prefetch
-        self.normalize = normalize
-        self.radiation_pattern_max = radiation_pattern_max
-
-        if key is None:
-            key = jax.random.PRNGKey(0)
-        self.key = key
-
-        # Load and prepare array parameters
-        array_params = analyze.calc_array_params2(
-            array_size=array_size,
-            spacing_mm=spacing_mm,
-            theta_rad=jnp.radians(jnp.arange(90 if front_hemisphere else 180)),
-            phi_rad=jnp.radians(jnp.arange(360)),
-            sim_path=sim_dir_path / data.DEFAULT_SINGLE_ANT_FILENAME,
-        )
-
-        # Convert to JAX arrays and make them static
-        self.array_params = [jnp.asarray(param) for param in array_params]
-
-        # Beam probability distribution
-        self.n_beams_prob = data.get_beams_prob(max_n_beams)
-
-        # Precompute trigonometric encoding channels
-        phi_rad = jnp.arange(360) * jnp.pi / 180
-        self.sin_phi = jnp.sin(phi_rad)[None, :] * jnp.ones((90, 1))
-        self.cos_phi = jnp.cos(phi_rad)[None, :] * jnp.ones((90, 1))
-
-        self.vmapped_generate_sample = jax.vmap(self.generate_sample)
-
-        self._prefetched_batch = None
-        if self.prefetch:
-            self._prefetched_batch = self.generate_batch()
-
-    def generate_sample(self, key: jax.Array) -> DataSample:
-        key1, key2 = jax.random.split(key)
-
-        # Generate random steering angles for multiple beams
-        n_beams = 2
-        theta_steering = jax.random.uniform(key1, (n_beams,)) * self.theta_end
-        phi_steering = jax.random.uniform(key2, (n_beams,)) * (2 * jnp.pi)
-        steering_angles = jnp.stack((theta_steering, phi_steering), axis=-1)
-
-        radiation_pattern, excitations = analyze.rad_pattern_from_geo(
-            *self.array_params,
-            steering_angles,
-        )
-        phase_shifts = jnp.angle(excitations)
-
-        # Add clamping to set negative values to 0 (equivalent to main.py)
-        radiation_pattern = jnp.clip(radiation_pattern, a_min=0.0)
-
-        if self.normalize:
-            radiation_pattern = radiation_pattern / self.radiation_pattern_max
-
-        # Add trigonometric encoding channels
-        radiation_pattern = jnp.dstack([radiation_pattern, self.sin_phi, self.cos_phi])
-
-        return DataSample(radiation_pattern, phase_shifts, steering_angles)
-
-    def generate_batch(self) -> dict[str, jax.Array]:
-        self.key, batch_key = jax.random.split(self.key)
-        sample_keys = jax.random.split(batch_key, self.batch_size)
-        samples = self.vmapped_generate_sample(sample_keys)
-
-        return {
-            "radiation_patterns": samples.radiation_pattern,
-            "phase_shifts": samples.phase_shifts,
-            "steering_angles": samples.steering_angles,
-        }
-
-    def __next__(self) -> dict[str, jax.Array]:
-        if self.prefetch:
-            current_batch = self._prefetched_batch
-            self._prefetched_batch = self.generate_batch()
-            return current_batch
-        else:
-            return self.generate_batch()
-
-    def __iter__(self):
-        return self
 
 
 class ConvBlock(nnx.Module):
@@ -336,7 +224,7 @@ def restore_checkpoint(
 
 
 @nnx.jit
-def train_step(optimizer: nnx.Optimizer, batch: DataSample) -> dict[str, float]:
+def train_step(optimizer: nnx.Optimizer, batch: data.DataSample) -> dict[str, float]:
     def loss_fn(model: nnx.Module):
         radiation_patterns = batch["radiation_patterns"]
         phase_shifts = batch["phase_shifts"]
@@ -357,7 +245,7 @@ def train_step(optimizer: nnx.Optimizer, batch: DataSample) -> dict[str, float]:
     return metrics
 
 
-def warmup_step(dataset: Dataset, optimizer: nnx.Optimizer):
+def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer):
     logger.info("Warming up GPU kernels")
     warmup_batch = next(dataset)
     _ = train_step(optimizer, warmup_batch)
@@ -384,7 +272,7 @@ def train(
     key = jax.random.key(seed)
     key, dataset_key, model_key = jax.random.split(key, num=3)
 
-    dataset = Dataset(batch_size=batch_size, key=dataset_key)
+    dataset = data.Dataset(batch_size=batch_size, key=dataset_key)
     optimizer = create_trainables(n_steps, lr, key=model_key)
 
     ckpt_path = Path.cwd() / "checkpoints"
@@ -434,11 +322,10 @@ def pred(
         logger.info("Running prediction on CPU")
 
         # Create model
-        model_key, angles_key = jax.random.split(key)
         optimizer = create_trainables(
             n_steps=1,  # Dummy value, we won't train
             lr=0.0,  # No learning rate needed for prediction
-            key=model_key,
+            key=key,
         )
 
         # Get and load latest checkpoint
@@ -456,8 +343,8 @@ def pred(
 
         # Load array parameters and generate radiation pattern
         array_params = analyze.calc_array_params2(
-            array_size=DEFAULT_ARRAY_SIZE,
-            spacing_mm=DEFAULT_SPACING_MM,
+            array_size=data.DEFAULT_ARRAY_SIZE,
+            spacing_mm=data.DEFAULT_SPACING_MM,
             theta_rad=jnp.radians(jnp.arange(180)),
             phi_rad=jnp.radians(jnp.arange(360)),
             sim_path=data.DEFAULT_SIM_DIR / data.DEFAULT_SINGLE_ANT_FILENAME,
@@ -503,7 +390,7 @@ def pred(
 def visualize_dataset(batch_size: int = 4, seed: int = 42):
     key = jax.random.key(seed)
 
-    dataset = Dataset(batch_size=batch_size, key=key)
+    dataset = data.Dataset(batch_size=batch_size, key=key)
     batch = next(dataset)
     patterns, phase_shifts = batch["radiation_patterns"], batch["phase_shifts"]
     steering_angles = batch["steering_angles"]
@@ -531,16 +418,16 @@ def visualize_dataset(batch_size: int = 4, seed: int = 42):
 
 @app.command()
 def inspect_data(
-    array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
-    spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
-    theta_end: float = DEFAULT_THETA_END,
-    max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+    array_size: tuple[int, int] = data.DEFAULT_ARRAY_SIZE,
+    spacing_mm: tuple[float, float] = data.DEFAULT_SPACING_MM,
+    theta_end: float = data.DEFAULT_THETA_END,
+    max_n_beams: int = data.DEFAULT_MAX_N_BEAMS,
     seed: int = 42,
 ):
     key = jax.random.key(seed)
 
     dataset_args = array_size, spacing_mm, theta_end, max_n_beams
-    dataset = Dataset(*dataset_args, key=key, batch_size=8, normalize=False)
+    dataset = data.Dataset(*dataset_args, key=key, batch_size=8, normalize=False)
     for i in range(3):
         batch = next(dataset)
         rp = batch["radiation_patterns"]
@@ -565,7 +452,7 @@ def inspect_data(
 @app.command()
 def dev():
     key = jax.random.key(42)
-    dataset = Dataset(batch_size=4, key=key)
+    dataset = data.Dataset(batch_size=4, key=key)
     for batch in dataset:
         logger.info(f"Radiation Patterns shape: {batch['radiation_patterns'].shape}")
         logger.info(f"Phase Shifts shape: {batch['phase_shifts'].shape}")
