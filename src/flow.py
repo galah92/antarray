@@ -23,7 +23,11 @@ logger = logging.getLogger(__name__)
 # Persistent Jax compilation cache: https://docs.jax.dev/en/latest/persistent_compilation_cache.html
 cc.set_cache_dir("/tmp/jax_cache")
 
-app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+app = typer.Typer(
+    no_args_is_help=True,
+    pretty_exceptions_enable=False,
+    add_completion=False,
+)
 
 
 class ConvBlock(nnx.Module):

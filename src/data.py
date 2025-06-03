@@ -24,7 +24,11 @@ DEFAULT_DATASET_NAME = "farfield_dataset.h5"
 DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
 
 
-app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+app = typer.Typer(
+    no_args_is_help=True,
+    pretty_exceptions_enable=False,
+    add_completion=False,
+)
 
 
 @app.command()
