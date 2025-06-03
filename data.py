@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import typer
 from matplotlib import animation
+from tqdm import tqdm
 
 import analyze
 
@@ -67,11 +68,12 @@ class DataSample(NamedTuple):
 class Dataset:
     def __init__(
         self,
+        batch_size: int = 512,
+        limit: int = None,
+        theta_end: float = DEFAULT_THETA_END,
         array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
         spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
-        theta_end: float = DEFAULT_THETA_END,
         max_n_beams: int = DEFAULT_MAX_N_BEAMS,
-        batch_size: int = 512,
         sim_dir_path: Path = DEFAULT_SIM_DIR,
         key: jax.Array = None,
         prefetch: bool = True,
@@ -81,9 +83,12 @@ class Dataset:
         radiation_pattern_max=30,  # Maximum radiation pattern value in dB observed
         trig_encoding: bool = True,
     ):
+        self.batch_size = batch_size
+        self.limit = limit
+        self.count = 0
+
         self.theta_end = jnp.radians(theta_end)
         self.sim_dir_path = sim_dir_path
-        self.batch_size = batch_size
         self.prefetch = prefetch
         self.clip = clip
         self.normalize = normalize
@@ -156,6 +161,10 @@ class Dataset:
         return samples
 
     def __next__(self) -> DataSample:
+        if self.limit is not None and self.count >= self.limit:
+            raise StopIteration
+        self.count += 1
+
         if self.prefetch:
             current_batch = self._prefetched_batch
             self._prefetched_batch = self.generate_batch()
@@ -164,6 +173,7 @@ class Dataset:
             return self.generate_batch()
 
     def __iter__(self):
+        self.count = 0
         return self
 
 
@@ -183,11 +193,12 @@ def generate_beamforming(
     batch_size = min(512, n_samples)
 
     dataset = Dataset(
+        batch_size=batch_size,
+        limit=np.ceil(n_samples / batch_size).astype(np.int64),
         array_size=array_size,
         spacing_mm=(60, 60),
         theta_end=theta_end,
         max_n_beams=max_n_beams,
-        batch_size=batch_size,
         key=jax.random.key(seed),
         clip=False,
         normalize=False,
@@ -206,7 +217,7 @@ def generate_beamforming(
         ex_shape = (n_samples, *array_size)
         ex_ds = h5f.create_dataset("excitations", shape=ex_shape, dtype=np.complex64)
 
-        for i, batch in zip(range(0, n_samples, batch_size), dataset):
+        for i, batch in tqdm(enumerate(dataset), total=dataset.limit):
             n = min(batch_size, n_samples - i)  # Handle the last batch
             patterns_ds[i : i + n] = batch.radiation_patterns[:n]
             ex_ds[i : i + n] = batch.phase_shifts[:n]

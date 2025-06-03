@@ -271,7 +271,6 @@ def train(
     key = jax.random.key(seed)
     key, dataset_key, model_key = jax.random.split(key, num=3)
 
-    dataset = data.Dataset(batch_size=batch_size, key=dataset_key)
     optimizer = create_trainables(n_steps, lr, key=model_key)
 
     ckpt_path = Path.cwd() / "checkpoints"
@@ -281,14 +280,17 @@ def train(
     start_step = 0
     if restore:
         start_step = restore_checkpoint(ckpt_mngr, optimizer, step=None)
+        logger.info(f"Resuming from step {start_step}")
 
+    n_steps -= start_step  # Adjust n_steps based on the restored step
+    dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
     warmup_step(dataset, optimizer)
 
     logger.info("Starting development run")
     start_time = time.perf_counter()
 
     try:
-        for step, batch in zip(range(start_step, n_steps), dataset):
+        for step, batch in enumerate(dataset, start=start_step):
             metrics = train_step(optimizer, batch)
             save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
 
