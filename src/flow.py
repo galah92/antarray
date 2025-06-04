@@ -252,6 +252,7 @@ def train_step(optimizer: nnx.Optimizer, batch: data.DataBatch) -> dict[str, flo
     model = optimizer.model
     (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model)
     optimizer.update(grads)
+    metrics["grad_norm"] = optax.global_norm(grads)
 
     return metrics
 
@@ -313,7 +314,8 @@ def train(
                 logger.info(
                     f"Step: {step + 1:04d} ({elapsed.strftime('%H:%M:%S')}) | "
                     f"Time: {avg_time * 1000:.1f}ms/step | "
-                    f"Loss: {metrics['loss']:.3f}"
+                    f"Loss: {metrics['loss']:.3f} | "
+                    f"Grad Norm: {metrics['grad_norm']:.3f} | "
                 )
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")

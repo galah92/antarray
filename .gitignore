@@ -175,6 +175,7 @@ cython_debug/
 
 *.png
 *.jpeg
+*.ipynb
 .h5
 *.pt
 dataset
