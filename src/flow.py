@@ -155,8 +155,13 @@ def pad_batch(
     return jnp.pad(image, pad_width=pad_width, mode=mode)
 
 
-class ImprovedConvNet(nnx.Module):
-    def __init__(self, *, rngs: nnx.Rngs):
+class ConvNet(nnx.Module):
+    def __init__(
+        self,
+        enc_pad="SAME",
+        *,
+        rngs: nnx.Rngs,
+    ):
         self.pad = nnx.Sequential(
             # Simmetry around the zenith: (93, 360, 3)
             partial(pad_batch, pad_width=((3, 0), (0, 0), (0, 0)), mode="reflect"),
@@ -166,13 +171,13 @@ class ImprovedConvNet(nnx.Module):
             partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
         )
         self.encoder = nnx.Sequential(
-            ConvBlock(3, 16, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 16)
+            ConvBlock(3, 16, (3, 3), padding=enc_pad, rngs=rngs),  # (96, 384, 16)
             partial(nnx.max_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 16)
-            ConvBlock(16, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (32, 64, 32)
+            ConvBlock(16, 32, (3, 3), padding=enc_pad, rngs=rngs),  # (32, 64, 32)
             partial(nnx.max_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 32)
-            ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs),  # (16, 16, 64)
+            ConvBlock(32, 64, (3, 3), padding=enc_pad, rngs=rngs),  # (16, 16, 64)
             partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2)),  # (8, 8, 64)
-            ConvBlock(64, 128, (3, 3), padding="CIRCULAR", rngs=rngs),  # (8, 8, 128)
+            ConvBlock(64, 128, (3, 3), padding=enc_pad, rngs=rngs),  # (8, 8, 128)
             partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2)),  # (4, 4, 128)
         )
         self.bottleneck = nnx.Sequential(
@@ -259,8 +264,7 @@ def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer):
 
 
 def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimizer:
-    # model = ExactConvNet(rngs=nnx.Rngs(key))
-    model = ImprovedConvNet(rngs=nnx.Rngs(key))
+    model = ConvNet(rngs=nnx.Rngs(key))
     schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
     optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
     return optimizer
