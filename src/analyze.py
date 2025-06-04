@@ -211,38 +211,6 @@ def calc_phase_shifts(
 
 
 @jax.jit
-def calc_excitations_from_steering(
-    kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
-    ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
-    taper: ArrayLike,
-    steering_rad: ArrayLike,
-) -> Array:
-    """
-    Calculate element excitations for a given array configuration and steering angles.
-    Computes the phase shifts for each element based on the steering angles
-    and applies the tapering to compute the excitations.
-    """
-    phase_shifts = calc_phase_shifts(kx, ky, steering_rad)
-    excitations = jnp.einsum("ij,ijk->ij", taper, jnp.exp(1j * phase_shifts))
-    return excitations
-
-
-@jax.jit
-def calc_excitations_from_phase_shifts(
-    taper: ArrayLike,
-    phase_shifts: ArrayLike,
-) -> Array:
-    """
-    Computes the excitations for each element based on the provided phase shifts
-    and applies the tapering.
-    """
-    # Calculate excitations: (xn, yn), (xn, yn, n_angles) -> (xn, yn)
-    excitations = jnp.einsum("ij,ijk->ij", taper, jnp.exp(1j * phase_shifts))
-
-    return excitations
-
-
-@jax.jit
 def calc_geo_exp(
     theta_rad: ArrayLike,
     phi_rad: ArrayLike,
@@ -368,7 +336,8 @@ def rad_pattern_from_geo_and_phase_shifts(
     Dmax_array: float,
     phase_shifts: ArrayLike = np.array([[0]]),
 ) -> tuple[Array, Array]:
-    excitations = calc_excitations_from_phase_shifts(taper, phase_shifts)
+    excitations = taper * jnp.exp(1j * phase_shifts)
+
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
         geo_exp, E_field, Dmax_array, excitations
     )
@@ -388,7 +357,9 @@ def rad_pattern_from_geo(
     """
     Compute radiation pattern for given steering angles.
     """
-    excitations = calc_excitations_from_steering(kx, ky, taper, steering_rad)
+    phase_shifts = calc_phase_shifts(kx, ky, steering_rad)
+    excitations = jnp.einsum("ij,ijk->ij", taper, jnp.exp(1j * phase_shifts))
+
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
         geo_exp, E_field, Dmax_array, excitations
     )
@@ -581,6 +552,8 @@ def plot_ff_3d(
     z = pattern * np.cos(theta_rad)[:, None]
 
     if hide_backlobe:
+        z = np.asarray(z)  # Ensure z is a NumPy array
+        z.setflags(write=True)  # Allow modification
         z[z < 0] = np.nan  # Set backlobe values to NaN
 
     if ax is None:
@@ -610,7 +583,8 @@ def plot_ff_2d(
 
     theta_deg, phi_deg = np.rad2deg(theta_rad), np.rad2deg(phi_rad)
     extent = [np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg)]
-    im = ax.imshow(pattern, extent=extent, origin="lower")
+    aspect = theta_deg.size / phi_deg.size
+    im = ax.imshow(pattern, extent=extent, origin="lower", aspect=aspect)
     ax.set_xlabel("θ°")
     ax.set_ylabel("φ°")
     ax.set_title(title)

@@ -357,25 +357,45 @@ def pred(theta_deg: list[float] = [], phi_deg: list[float] = [], seed: int = 42)
         transformed = dataset.transform_fn(radiation_pattern)
         pred_ps = optimizer.model(transformed[None, ...])[0]
 
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5))
+        true_rp = data.ff_from_phase_shifts(true_ps)
+        pred_rp = data.ff_from_phase_shifts(pred_ps)
+        true_rp, pred_rp = true_rp[:90], pred_rp[:90]  # Limit to zenith angles
 
-        analyze.plot_ff_2d(
-            theta_rad=dataset.theta_rad,
-            phi_rad=dataset.phi_rad,
-            pattern=radiation_pattern,
-            title="Input Pattern",
-            ax=ax1,
-        )
-        analyze.plot_phase_shifts(true_ps, title="Truth Phase Shifts", ax=ax2)
-        analyze.plot_phase_shifts(pred_ps, title="Predicted Phase Shifts", ax=ax3)
+    fig, axs = plt.subplots(2, 3, figsize=(18, 10))
 
-        steering_str = analyze.steering_repr(jnp.degrees(steering_angles.T))
-        fig.suptitle(f"Prediction with {steering_str}")
+    analyze.plot_phase_shifts(true_ps, title="Ground Truth Phase Shifts", ax=axs[0, 0])
+    analyze.plot_phase_shifts(pred_ps, title="Predicted Phase Shifts", ax=axs[1, 0])
 
-        plt.tight_layout()
-        plot_path = "prediction_custom.png"
-        fig.savefig(plot_path, dpi=300, bbox_inches="tight")
-        logger.info(f"Saved: {plot_path}")
+    clip_ff = True  # Clip FF patterns to non-negative values
+    if clip_ff:
+        true_rp, pred_rp = true_rp.clip(min=0), pred_rp.clip(min=0)
+
+    theta, phi = dataset.theta_rad, dataset.phi_rad
+
+    title = "Ground Truth 2D Radiation Pattern"
+    analyze.plot_ff_2d(theta, phi, true_rp, title=title, ax=axs[0, 1])
+    title = "Predicted 2D Radiation Pattern"
+    analyze.plot_ff_2d(theta, phi, pred_rp, title=title, ax=axs[1, 1])
+
+    axs[0, 2].remove()
+    axs[0, 2] = fig.add_subplot(2, 3, 3, projection="3d")
+    title = "Ground Truth 3D Radiation Pattern"
+    analyze.plot_ff_3d(theta, phi, true_rp, title=title, ax=axs[0, 2])
+
+    axs[1, 2].remove()
+    axs[1, 2] = fig.add_subplot(2, 3, 6, projection="3d")
+    title = "Predicted 3D Radiation Pattern"
+    analyze.plot_ff_3d(theta, phi, true_rp, title=title, ax=axs[1, 2])
+
+    steering_str = analyze.steering_repr(jnp.degrees(steering_angles.T))
+    fig.suptitle(f"Prediction with {steering_str}")
+
+    fig.set_tight_layout(True)
+
+    filepath = "prediction.png"
+    if filepath:
+        fig.savefig(filepath, dpi=300, bbox_inches="tight")
+        print(f"Prediction example saved to {filepath}")
 
 
 if __name__ == "__main__":
