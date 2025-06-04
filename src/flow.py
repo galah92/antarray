@@ -203,80 +203,6 @@ class ConvNet(nnx.Module):
         return x
 
 
-class UNet(nnx.Module):
-    def __init__(
-        self,
-        enc_pad="SAME",
-        *,
-        rngs: nnx.Rngs,
-    ):
-        self.pad = nnx.Sequential(
-            # Simmetry around the zenith: (93, 360, 3)
-            partial(pad_batch, pad_width=((3, 0), (0, 0), (0, 0)), mode="reflect"),
-            # Ignore the horizon: (96, 360, 3)
-            partial(pad_batch, pad_width=((0, 3), (0, 0), (0, 0)), mode="constant"),
-            # Wrap around the azimuth: (96, 384, 3)
-            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
-        )
-
-        enc_conv = partial(ConvBlock, padding=enc_pad, rngs=rngs)
-        max_pool = lambda window: partial(
-            nnx.max_pool(window_shape=window, strides=window)
-        )
-
-        self.enc_conv1 = enc_conv(3, 16, (3, 3))  # (96, 384, 16)
-        self.pool1 = max_pool((3, 6))  # (32, 64, 16)
-        self.enc_conv2 = enc_conv(16, 32, (3, 3))  # (32, 64, 32)
-        self.pool2 = max_pool((2, 4))  # (16, 16, 32)
-        self.enc_conv3 = enc_conv(32, 64, (3, 3))  # (16, 16, 64)
-        self.pool3 = max_pool((2, 2))  # (8, 8, 64)
-        self.enc_conv4 = enc_conv(64, 128, (3, 3))  # (8, 8, 128)
-        self.pool4 = max_pool((2, 2))  # (4, 4, 128)
-
-        self.bottleneck = nnx.Sequential(
-            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
-            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
-            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
-        )
-
-        resize_bilinear = partial(resize_batch, method="bilinear")
-
-        self.dec_conv1 = ConvBlock(128, 64, (3, 3), rngs=rngs)  # (4, 4, 64)
-        self.up1 = partial(resize_bilinear, shape=(8, 8, 64))  # (8, 8, 64)
-        self.dec_conv2 = ConvBlock(64 + 128, 32, (3, 3), rngs=rngs)  # (8, 8, 32)
-        self.up2 = partial(resize_bilinear, shape=(16, 16, 32))  # (16, 16, 32)
-        self.dec_conv3 = ConvBlock(32 + 64, 16, (3, 3), rngs=rngs)  # (16, 16, 16)
-
-        self.final_conv = ConvBlock(16, 1, (1, 1), rngs=rngs)  # (16, 16, 1)
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        x = self.pad(x)
-
-        s1 = self.enc_conv1(x)
-        p1 = self.pool1(s1)
-        s2 = self.enc_conv2(p1)
-        p2 = self.pool2(s2)
-        s3 = self.enc_conv3(p2)
-        p3 = self.pool3(s3)
-        s4 = self.enc_conv4(p3)
-        p4 = self.pool4(s4)
-
-        b = self.bottleneck(p4)
-
-        d1 = self.dec_conv1(b)
-        u1 = self.up1(d1)
-        c1 = jnp.concatenate([u1, s4], axis=-1)  # Skip connection from enc_conv4 output
-        d2 = self.dec_conv2(c1)
-        u2 = self.up2(d2)
-        c2 = jnp.concatenate([u2, s3], axis=-1)  # Skip connection from enc_conv3 output
-        d3 = self.dec_conv3(c2)
-
-        out = self.final_conv(d3)
-
-        out = out.squeeze(-1)  # Remove the channel dimension
-        return out
-
-
 class ConvNeXtBlock(nnx.Module):
     def __init__(
         self,
@@ -409,129 +335,6 @@ class ConvNeXt(nnx.Module):
         return x
 
 
-class FourierLayer(nnx.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        modes: tuple[int, int],
-        *,
-        rngs: nnx.Rngs,
-    ):
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.modes1, self.modes2 = modes
-
-        # Much smaller initialization for better stability
-        scale = 1.0 / (in_channels * out_channels)
-        self.weights1 = nnx.Param(
-            jax.random.normal(
-                rngs(), (self.modes1, self.modes2, in_channels, out_channels, 2)
-            )
-            * scale
-        )
-        self.weights2 = nnx.Param(
-            jax.random.normal(
-                rngs(), (self.modes1, self.modes2, in_channels, out_channels, 2)
-            )
-            * scale
-        )
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        batch_size, size_x, size_y, channels = x.shape
-
-        # Only keep low-frequency modes to save memory
-        effective_modes1 = min(self.modes1, size_x // 2)
-        effective_modes2 = min(
-            self.modes2, size_y // 4
-        )  # rfft2 has size_y//2+1 frequencies
-
-        if effective_modes1 == 0 or effective_modes2 == 0:
-            # If no modes to process, return zero tensor
-            return jnp.zeros((batch_size, size_x, size_y, self.out_channels))
-
-        # Compute 2D FFT
-        x_ft = jnp.fft.rfft2(x, axes=[1, 2])
-        x_ft_real = jnp.stack([x_ft.real, x_ft.imag], axis=-1)
-
-        # Initialize output - only process the modes we actually use
-        out_ft = jnp.zeros((batch_size, size_x, size_y // 2 + 1, self.out_channels, 2))
-
-        # Process positive frequencies only (memory efficient)
-        if effective_modes1 <= size_x and effective_modes2 <= size_y // 2 + 1:
-            x_ft_slice = x_ft_real[:, :effective_modes1, :effective_modes2]
-            weights_slice = self.weights1[:effective_modes1, :effective_modes2]
-            out_slice = jnp.einsum("bxyic,xyior->bxyor", x_ft_slice, weights_slice)
-            out_ft = out_ft.at[:, :effective_modes1, :effective_modes2].set(out_slice)
-
-        # Convert back to complex and inverse FFT
-        out_ft_complex = out_ft[..., 0] + 1j * out_ft[..., 1]
-        x = jnp.fft.irfft2(out_ft_complex, s=(size_x, size_y), axes=[1, 2])
-
-        return x
-
-
-class LightFNO(nnx.Module):
-    def __init__(
-        self,
-        modes: tuple[int, int] = (6, 6),  # Much smaller modes
-        width: int = 32,  # Much smaller width
-        *,
-        rngs: nnx.Rngs,
-    ):
-        self.modes = modes
-        self.width = width
-
-        # Same padding as other models
-        self.pad = nnx.Sequential(
-            partial(pad_batch, pad_width=((3, 0), (0, 0), (0, 0)), mode="reflect"),
-            partial(pad_batch, pad_width=((0, 3), (0, 0), (0, 0)), mode="constant"),
-            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
-        )
-
-        # Adjust downsampling to naturally reach (16, 16)
-        self.stem = nnx.Sequential(
-            nnx.Linear(3, self.width, rngs=rngs),
-            nnx.Conv(
-                self.width, self.width, kernel_size=(3, 3), strides=(6, 24), rngs=rngs
-            ),  # (16, 16)
-        )
-
-        # Work directly at target resolution
-        self.fourier1 = FourierLayer(self.width, self.width, modes, rngs=rngs)
-        self.conv1 = nnx.Conv(self.width, self.width, kernel_size=(1, 1), rngs=rngs)
-
-        self.fourier2 = FourierLayer(self.width, self.width, modes, rngs=rngs)
-        self.conv2 = nnx.Conv(self.width, self.width, kernel_size=(1, 1), rngs=rngs)
-
-        # Direct output without resize
-        self.head = nnx.Sequential(
-            nnx.Conv(self.width, 64, kernel_size=(3, 3), padding="SAME", rngs=rngs),
-            nnx.gelu,
-            nnx.Conv(64, 32, kernel_size=(3, 3), padding="SAME", rngs=rngs),
-            nnx.gelu,
-            nnx.Conv(32, 1, kernel_size=(1, 1), padding="SAME", rngs=rngs),
-        )
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        x = self.pad(x)  # (96, 384, 3)
-        x = self.stem(x)  # (16, 16, width)
-
-        # Fourier blocks
-        x1 = self.fourier1(x)
-        x2 = self.conv1(x)
-        x = x1 + x2
-        x = nnx.gelu(x)
-
-        x1 = self.fourier2(x)
-        x2 = self.conv2(x)
-        x = x1 + x2
-        x = nnx.gelu(x)
-
-        x = self.head(x)  # (16, 16, 1)
-        return x.squeeze(-1)  # (16, 16)
-
-
 def save_checkpoint(
     mngr: ocp.CheckpointManager,
     optimizer: nnx.Optimizer,
@@ -591,10 +394,9 @@ def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer):
 
 
 def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimizer:
-    # model = ConvNet(rngs=nnx.Rngs(key))
+    model = ConvNet(rngs=nnx.Rngs(key))
     # model = UNet(rngs=nnx.Rngs(key))
     # model = ConvNeXt(rngs=nnx.Rngs(key))
-    model = LightFNO(rngs=nnx.Rngs(key))
     schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
     optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
     return optimizer
@@ -651,6 +453,34 @@ def train(
         raise
     finally:
         ckpt_mngr.wait_until_finished()
+
+
+@app.command()
+def eval(seed: int = 42):
+    key = jax.random.key(seed)
+    key, dataset_key, model_key = jax.random.split(key, num=3)
+    batch_size = 1024
+
+    optimizer = create_trainables(n_steps=batch_size, lr=0.0, key=model_key)
+
+    ckpt_path = Path.cwd() / "checkpoints"
+    ckpt_options = ocp.CheckpointManagerOptions(read_only=True)
+    ckpt_mngr = ocp.CheckpointManager(ckpt_path, options=ckpt_options)
+
+    start_step = restore_checkpoint(ckpt_mngr, optimizer, step=None)
+    logger.info(f"Resuming from step {start_step}")
+
+    optimizer.model.eval()
+
+    dataset = data.Dataset(batch_size=batch_size, limit=batch_size, key=dataset_key)
+    batch = next(dataset)
+    metrics = train_step(optimizer, batch)
+    logger.info(
+        f"Evaluation at step {start_step}: "
+        f"Loss: {metrics['loss']:.3f} | "
+        f"Phase RMSE: {metrics['phase_rmse']:.3f} | "
+        f"Grad Norm: {metrics['grad_norm']:.3f}"
+    )
 
 
 @app.command()
@@ -738,7 +568,7 @@ if __name__ == "__main__":
         format="{asctime} {levelname} {filename}:{lineno} {message}",
         style="{",
         handlers=[
-            logging.FileHandler(Path("app.log"), mode="w+"),  # Overwrite log
+            logging.FileHandler(Path("app2.log"), mode="w+"),  # Overwrite log
             logging.StreamHandler(),
         ],
         force=True,  # https://github.com/google/orbax/issues/1248
