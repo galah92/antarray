@@ -9,6 +9,7 @@ from typing import Sequence
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numpy as np
 import optax
 import orbax.checkpoint as ocp
 import typer
@@ -40,7 +41,16 @@ class ConvBlock(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ):
-        self.conv = nnx.Conv(
+        self.conv1 = nnx.Conv(
+            in_features,
+            in_features,
+            kernel_size=kernel_size,
+            padding=padding,
+            use_bias=False,
+            rngs=rngs,
+        )
+        self.norm1 = nnx.BatchNorm(in_features, rngs=rngs)
+        self.conv2 = nnx.Conv(
             in_features,
             out_features,
             kernel_size=kernel_size,
@@ -48,11 +58,14 @@ class ConvBlock(nnx.Module):
             use_bias=False,
             rngs=rngs,
         )
-        self.norm = nnx.BatchNorm(out_features, rngs=rngs)
+        self.norm2 = nnx.BatchNorm(out_features, rngs=rngs)
 
     def __call__(self, x: jax.Array) -> jax.Array:
-        x = self.conv(x)
-        x = self.norm(x)
+        x = self.conv1(x)
+        x = self.norm1(x)
+        x = nnx.relu(x)
+        x = self.conv2(x)
+        x = self.norm2(x)
         x = nnx.relu(x)
         return x
 
@@ -60,40 +73,6 @@ class ConvBlock(nnx.Module):
 def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMethod):
     shape = (image.shape[0], *shape)  # Add batch dimension
     return jax.image.resize(image, shape=shape, method=method)
-
-
-class ExactConvNet(nnx.Module):
-    def __init__(self, *, rngs: nnx.Rngs):
-        padding = ((0, 0), (3, 3), (12, 12), (0, 0))  # (batch, height, width, channels)
-        self.pad = partial(jnp.pad, pad_width=padding, mode="wrap")  # (96, 384, 3)
-
-        self.encoder = nnx.Sequential(
-            ConvBlock(3, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 32)
-            partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 32)
-            ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs),  # (32, 64, 64)
-            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 64)
-            ConvBlock(64, 128, (3, 3), padding="CIRCULAR", rngs=rngs),  # (16, 16, 128)
-            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (8, 8, 128)
-        )
-        self.bottleneck = nnx.Sequential(
-            ConvBlock(128, 256, (3, 3), rngs=rngs),  # (8, 8, 256)
-            ConvBlock(256, 256, (3, 3), rngs=rngs),  # (8, 8, 256)
-            ConvBlock(256, 128, (3, 3), rngs=rngs),  # (8, 8, 128)
-        )
-        self.decoder = nnx.Sequential(
-            ConvBlock(128, 64, (3, 3), rngs=rngs),  # (8, 8, 64)
-            partial(resize_batch, shape=(16, 16, 64), method="bilinear"),
-            ConvBlock(64, 32, (3, 3), rngs=rngs),  # (16, 16, 32)
-            ConvBlock(32, 1, (3, 3), rngs=rngs),  # (16, 16, 1)
-        )
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        x = self.pad(x)
-        x = self.encoder(x)
-        x = self.bottleneck(x)
-        x = self.decoder(x)
-        x = x.squeeze(-1)  # Remove the channel dimension
-        return x
 
 
 class ResidualBlock(nnx.Module):
@@ -105,28 +84,30 @@ class ResidualBlock(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ):
-        self.conv1 = ConvBlock(
+        self.conv1 = nnx.Conv(
             features,
             features,
-            kernel_size,
+            kernel_size=kernel_size,
             padding=padding,
+            use_bias=False,
             rngs=rngs,
         )
+        self.norm1 = nnx.BatchNorm(features, rngs=rngs)
         self.conv2 = nnx.Conv(
             features,
             features,
-            kernel_size,
+            kernel_size=kernel_size,
             padding=padding,
             use_bias=False,
             rngs=rngs,
         )
         self.norm2 = nnx.BatchNorm(features, rngs=rngs)
-        self.dropout = nnx.Dropout(0.1, rngs=rngs)
 
     def __call__(self, x: jax.Array) -> jax.Array:
         residual = x
         x = self.conv1(x)
-        x = self.dropout(x)
+        x = self.norm2(x)
+        x = nnx.relu(x)
         x = self.conv2(x)
         x = self.norm2(x)
         x = x + residual  # Residual connection
@@ -163,20 +144,36 @@ class AttentionBlock(nnx.Module):
         return x + output  # Residual connection
 
 
+def pad_batch(
+    image: jax.Array,
+    pad_width: Sequence[int | Sequence[int]],
+    mode: str = "constant",
+) -> jax.Array:
+    pad_width = np.asarray(pad_width, dtype=np.int32)
+    if pad_width.shape[0] == 3:  # Add batch dimension
+        pad_width = np.pad(pad_width, ((1, 0), (0, 0)))
+    return jnp.pad(image, pad_width=pad_width, mode=mode)
+
+
 class ImprovedConvNet(nnx.Module):
     def __init__(self, *, rngs: nnx.Rngs):
-        padding = ((0, 0), (3, 3), (12, 12), (0, 0))  # (batch, height, width, channels)
-        self.pad = partial(jnp.pad, pad_width=padding, mode="wrap")  # (96, 384, 3)
-
+        self.pad = nnx.Sequential(
+            # Simmetry around the zenith: (93, 360, 3)
+            partial(pad_batch, pad_width=((3, 0), (0, 0), (0, 0)), mode="reflect"),
+            # Ignore the horizon: (96, 360, 3)
+            partial(pad_batch, pad_width=((0, 3), (0, 0), (0, 0)), mode="constant"),
+            # Wrap around the azimuth: (96, 384, 3)
+            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
+        )
         self.encoder = nnx.Sequential(
             ConvBlock(3, 16, (3, 3), padding="CIRCULAR", rngs=rngs),  # (96, 384, 16)
-            partial(nnx.avg_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 16)
+            partial(nnx.max_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 16)
             ConvBlock(16, 32, (3, 3), padding="CIRCULAR", rngs=rngs),  # (32, 64, 32)
-            partial(nnx.avg_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 32)
+            partial(nnx.max_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 32)
             ConvBlock(32, 64, (3, 3), padding="CIRCULAR", rngs=rngs),  # (16, 16, 64)
-            partial(nnx.avg_pool, window_shape=(2, 2), strides=(2, 2)),  # (8, 8, 64)
+            partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2)),  # (8, 8, 64)
             ConvBlock(64, 128, (3, 3), padding="CIRCULAR", rngs=rngs),  # (8, 8, 128)
-            partial(nnx.avg_pool, window_shape=(2, 2), strides=(2, 2)),  # (4, 4, 128)
+            partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2)),  # (4, 4, 128)
         )
         self.bottleneck = nnx.Sequential(
             ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
@@ -188,7 +185,11 @@ class ImprovedConvNet(nnx.Module):
             partial(resize_batch, shape=(8, 8, 64), method="bilinear"),
             ConvBlock(64, 32, (3, 3), rngs=rngs),  # (8, 8, 32)
             partial(resize_batch, shape=(16, 16, 32), method="bilinear"),
-            ConvBlock(32, 1, (3, 3), rngs=rngs),  # (16, 16, 1)
+            ConvBlock(32, 16, (3, 3), rngs=rngs),  # (16, 16, 16)
+            # partial(resize_batch, shape=(32, 32, 16), method="bilinear"),
+            # ConvBlock(16, 8, (3, 3), rngs=rngs),  # (32, 32, 8)
+            # partial(nnx.avg_pool, window_shape=(2, 2), strides=(2, 2)),  # (16, 16, 8)
+            ConvBlock(16, 1, (1, 1), rngs=rngs),  # (16, 16, 1)
         )
 
     def __call__(self, x: jax.Array) -> jax.Array:
