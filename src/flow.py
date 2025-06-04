@@ -186,10 +186,10 @@ class ImprovedConvNet(nnx.Module):
             ConvBlock(64, 32, (3, 3), rngs=rngs),  # (8, 8, 32)
             partial(resize_batch, shape=(16, 16, 32), method="bilinear"),
             ConvBlock(32, 16, (3, 3), rngs=rngs),  # (16, 16, 16)
-            # partial(resize_batch, shape=(32, 32, 16), method="bilinear"),
-            # ConvBlock(16, 8, (3, 3), rngs=rngs),  # (32, 32, 8)
-            # partial(nnx.avg_pool, window_shape=(2, 2), strides=(2, 2)),  # (16, 16, 8)
-            ConvBlock(16, 1, (1, 1), rngs=rngs),  # (16, 16, 1)
+            partial(resize_batch, shape=(32, 32, 16), method="bilinear"),
+            ConvBlock(16, 8, (3, 3), rngs=rngs),  # (32, 32, 8)
+            partial(nnx.avg_pool, window_shape=(2, 2), strides=(2, 2)),  # (16, 16, 8)
+            ConvBlock(8, 1, (1, 1), rngs=rngs),  # (16, 16, 1)
         )
 
     def __call__(self, x: jax.Array) -> jax.Array:
