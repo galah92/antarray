@@ -203,6 +203,80 @@ class ConvNet(nnx.Module):
         return x
 
 
+class UNet(nnx.Module):
+    def __init__(
+        self,
+        enc_pad="SAME",
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.pad = nnx.Sequential(
+            # Simmetry around the zenith: (93, 360, 3)
+            partial(pad_batch, pad_width=((3, 0), (0, 0), (0, 0)), mode="reflect"),
+            # Ignore the horizon: (96, 360, 3)
+            partial(pad_batch, pad_width=((0, 3), (0, 0), (0, 0)), mode="constant"),
+            # Wrap around the azimuth: (96, 384, 3)
+            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
+        )
+
+        enc_conv = partial(ConvBlock, padding=enc_pad, rngs=rngs)
+        max_pool = lambda window: partial(
+            nnx.max_pool(window_shape=window, strides=window)
+        )
+
+        self.enc_conv1 = enc_conv(3, 16, (3, 3))  # (96, 384, 16)
+        self.pool1 = max_pool((3, 6))  # (32, 64, 16)
+        self.enc_conv2 = enc_conv(16, 32, (3, 3))  # (32, 64, 32)
+        self.pool2 = max_pool((2, 4))  # (16, 16, 32)
+        self.enc_conv3 = enc_conv(32, 64, (3, 3))  # (16, 16, 64)
+        self.pool3 = max_pool((2, 2))  # (8, 8, 64)
+        self.enc_conv4 = enc_conv(64, 128, (3, 3))  # (8, 8, 128)
+        self.pool4 = max_pool((2, 2))  # (4, 4, 128)
+
+        self.bottleneck = nnx.Sequential(
+            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
+            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
+            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
+        )
+
+        resize_bilinear = partial(resize_batch, method="bilinear")
+
+        self.dec_conv1 = ConvBlock(128, 64, (3, 3), rngs=rngs)  # (4, 4, 64)
+        self.up1 = partial(resize_bilinear, shape=(8, 8, 64))  # (8, 8, 64)
+        self.dec_conv2 = ConvBlock(64 + 128, 32, (3, 3), rngs=rngs)  # (8, 8, 32)
+        self.up2 = partial(resize_bilinear, shape=(16, 16, 32))  # (16, 16, 32)
+        self.dec_conv3 = ConvBlock(32 + 64, 16, (3, 3), rngs=rngs)  # (16, 16, 16)
+
+        self.final_conv = ConvBlock(16, 1, (1, 1), rngs=rngs)  # (16, 16, 1)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        x = self.pad(x)
+
+        s1 = self.enc_conv1(x)
+        p1 = self.pool1(s1)
+        s2 = self.enc_conv2(p1)
+        p2 = self.pool2(s2)
+        s3 = self.enc_conv3(p2)
+        p3 = self.pool3(s3)
+        s4 = self.enc_conv4(p3)
+        p4 = self.pool4(s4)
+
+        b = self.bottleneck(p4)
+
+        d1 = self.dec_conv1(b)
+        u1 = self.up1(d1)
+        c1 = jnp.concatenate([u1, s4], axis=-1)  # Skip connection from enc_conv4 output
+        d2 = self.dec_conv2(c1)
+        u2 = self.up2(d2)
+        c2 = jnp.concatenate([u2, s3], axis=-1)  # Skip connection from enc_conv3 output
+        d3 = self.dec_conv3(c2)
+
+        out = self.final_conv(d3)
+
+        out = out.squeeze(-1)  # Remove the channel dimension
+        return out
+
+
 def save_checkpoint(
     mngr: ocp.CheckpointManager,
     optimizer: nnx.Optimizer,
@@ -262,7 +336,8 @@ def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer):
 
 
 def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimizer:
-    model = ConvNet(rngs=nnx.Rngs(key))
+    # model = ConvNet(rngs=nnx.Rngs(key))
+    model = UNet(rngs=nnx.Rngs(key))
     schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
     optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
     return optimizer
