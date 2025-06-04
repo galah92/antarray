@@ -277,6 +277,261 @@ class UNet(nnx.Module):
         return out
 
 
+class ConvNeXtBlock(nnx.Module):
+    def __init__(
+        self,
+        dim: int,
+        kernel_size: int = 7,
+        expansion_ratio: int = 4,
+        layer_scale_init_value: float = 1e-6,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.dwconv = nnx.Conv(
+            dim,
+            dim,
+            kernel_size=(kernel_size, kernel_size),
+            padding="SAME",
+            feature_group_count=dim,
+            use_bias=True,
+            rngs=rngs,
+        )
+        self.norm = nnx.LayerNorm(dim, rngs=rngs)
+
+        expanded_dim = dim * expansion_ratio
+        self.pwconv1 = nnx.Linear(dim, expanded_dim, rngs=rngs)
+        self.pwconv2 = nnx.Linear(expanded_dim, dim, rngs=rngs)
+
+        # Add LayerScale
+        if layer_scale_init_value > 0:
+            self.gamma = nnx.Param(layer_scale_init_value * jnp.ones((dim,)))
+        else:
+            self.gamma = None
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        residual = x
+        x = self.dwconv(x)
+        x = self.norm(x)
+        x = self.pwconv1(x)
+        x = nnx.gelu(x)
+        x = self.pwconv2(x)
+
+        if self.gamma is not None:
+            x = self.gamma.value * x
+
+        return residual + x
+
+
+class ConvNeXt(nnx.Module):
+    def __init__(self, *, rngs: nnx.Rngs):
+        # Same padding as other models
+        self.pad = nnx.Sequential(
+            partial(pad_batch, pad_width=((3, 0), (0, 0), (0, 0)), mode="reflect"),
+            partial(pad_batch, pad_width=((0, 3), (0, 0), (0, 0)), mode="constant"),
+            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
+        )
+
+        # Match ConvNet's progression more closely
+        self.stem = nnx.Sequential(
+            nnx.Conv(3, 16, kernel_size=(3, 3), padding="SAME", rngs=rngs),
+            nnx.LayerNorm(16, rngs=rngs),
+        )  # (96, 384, 16)
+
+        # Reduce depth significantly to match ConvNet's complexity
+        dims = [16, 32, 64, 128]
+        depths = [1, 1, 2, 1]  # Much smaller - only 5 blocks total
+
+        # Use smaller expansion ratio to save memory
+        expansion_ratios = [2, 2, 3, 3]  # Instead of 4x everywhere
+
+        # Use smaller kernels to save memory
+        kernel_sizes = [3, 5, 7, 7]  # Progressive increase, starting smaller
+
+        self.stages = []
+        for i, (dim, depth, exp_ratio, kernel_size) in enumerate(
+            zip(dims, depths, expansion_ratios, kernel_sizes)
+        ):
+            # Downsampling layer (except for first stage)
+            if i > 0:
+                # Use the same aggressive downsampling as ConvNet
+                if i == 1:
+                    downsample = partial(
+                        nnx.max_pool, window_shape=(3, 6), strides=(3, 6)
+                    )
+                elif i == 2:
+                    downsample = partial(
+                        nnx.max_pool, window_shape=(2, 4), strides=(2, 4)
+                    )
+                else:
+                    downsample = partial(
+                        nnx.max_pool, window_shape=(2, 2), strides=(2, 2)
+                    )
+                self.stages.append(downsample)
+
+                # Add a conv to change dimensions after pooling
+                self.stages.append(
+                    nnx.Conv(dims[i - 1], dim, kernel_size=(1, 1), rngs=rngs)
+                )
+
+            # ConvNeXt blocks with reduced expansion
+            stage_blocks = []
+            for _ in range(depth):
+                stage_blocks.append(
+                    ConvNeXtBlock(
+                        dim,
+                        kernel_size=kernel_size,
+                        expansion_ratio=exp_ratio,  # Pass custom expansion ratio
+                        rngs=rngs,
+                    )
+                )
+            if stage_blocks:  # Only add if there are blocks
+                self.stages.append(nnx.Sequential(*stage_blocks))
+
+        self.stages = nnx.Sequential(*self.stages)
+
+        # Simpler head to match ConvNet
+        self.head = nnx.Sequential(
+            partial(resize_batch, shape=(8, 8, 128), method="bilinear"),
+            nnx.Conv(128, 64, kernel_size=(3, 3), padding="SAME", rngs=rngs),
+            nnx.gelu,
+            partial(resize_batch, shape=(16, 16, 64), method="bilinear"),
+            nnx.Conv(64, 32, kernel_size=(3, 3), padding="SAME", rngs=rngs),
+            nnx.gelu,
+            nnx.Conv(32, 1, kernel_size=(1, 1), padding="SAME", rngs=rngs),
+        )
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        x = self.pad(x)  # (96, 384, 3)
+        x = self.stem(x)  # (96, 384, 16)
+        x = self.stages(x)  # (4, 4, 128) after all downsampling
+        x = self.head(x)  # (16, 16, 1)
+        x = x.squeeze(-1)  # (16, 16)
+        return x
+
+
+class FourierLayer(nnx.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        modes: tuple[int, int],
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.modes1, self.modes2 = modes
+
+        # Much smaller initialization for better stability
+        scale = 1.0 / (in_channels * out_channels)
+        self.weights1 = nnx.Param(
+            jax.random.normal(
+                rngs(), (self.modes1, self.modes2, in_channels, out_channels, 2)
+            )
+            * scale
+        )
+        self.weights2 = nnx.Param(
+            jax.random.normal(
+                rngs(), (self.modes1, self.modes2, in_channels, out_channels, 2)
+            )
+            * scale
+        )
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        batch_size, size_x, size_y, channels = x.shape
+
+        # Only keep low-frequency modes to save memory
+        effective_modes1 = min(self.modes1, size_x // 2)
+        effective_modes2 = min(
+            self.modes2, size_y // 4
+        )  # rfft2 has size_y//2+1 frequencies
+
+        if effective_modes1 == 0 or effective_modes2 == 0:
+            # If no modes to process, return zero tensor
+            return jnp.zeros((batch_size, size_x, size_y, self.out_channels))
+
+        # Compute 2D FFT
+        x_ft = jnp.fft.rfft2(x, axes=[1, 2])
+        x_ft_real = jnp.stack([x_ft.real, x_ft.imag], axis=-1)
+
+        # Initialize output - only process the modes we actually use
+        out_ft = jnp.zeros((batch_size, size_x, size_y // 2 + 1, self.out_channels, 2))
+
+        # Process positive frequencies only (memory efficient)
+        if effective_modes1 <= size_x and effective_modes2 <= size_y // 2 + 1:
+            x_ft_slice = x_ft_real[:, :effective_modes1, :effective_modes2]
+            weights_slice = self.weights1[:effective_modes1, :effective_modes2]
+            out_slice = jnp.einsum("bxyic,xyior->bxyor", x_ft_slice, weights_slice)
+            out_ft = out_ft.at[:, :effective_modes1, :effective_modes2].set(out_slice)
+
+        # Convert back to complex and inverse FFT
+        out_ft_complex = out_ft[..., 0] + 1j * out_ft[..., 1]
+        x = jnp.fft.irfft2(out_ft_complex, s=(size_x, size_y), axes=[1, 2])
+
+        return x
+
+
+class LightFNO(nnx.Module):
+    def __init__(
+        self,
+        modes: tuple[int, int] = (6, 6),  # Much smaller modes
+        width: int = 32,  # Much smaller width
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.modes = modes
+        self.width = width
+
+        # Same padding as other models
+        self.pad = nnx.Sequential(
+            partial(pad_batch, pad_width=((3, 0), (0, 0), (0, 0)), mode="reflect"),
+            partial(pad_batch, pad_width=((0, 3), (0, 0), (0, 0)), mode="constant"),
+            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
+        )
+
+        # Adjust downsampling to naturally reach (16, 16)
+        self.stem = nnx.Sequential(
+            nnx.Linear(3, self.width, rngs=rngs),
+            nnx.Conv(
+                self.width, self.width, kernel_size=(3, 3), strides=(6, 24), rngs=rngs
+            ),  # (16, 16)
+        )
+
+        # Work directly at target resolution
+        self.fourier1 = FourierLayer(self.width, self.width, modes, rngs=rngs)
+        self.conv1 = nnx.Conv(self.width, self.width, kernel_size=(1, 1), rngs=rngs)
+
+        self.fourier2 = FourierLayer(self.width, self.width, modes, rngs=rngs)
+        self.conv2 = nnx.Conv(self.width, self.width, kernel_size=(1, 1), rngs=rngs)
+
+        # Direct output without resize
+        self.head = nnx.Sequential(
+            nnx.Conv(self.width, 64, kernel_size=(3, 3), padding="SAME", rngs=rngs),
+            nnx.gelu,
+            nnx.Conv(64, 32, kernel_size=(3, 3), padding="SAME", rngs=rngs),
+            nnx.gelu,
+            nnx.Conv(32, 1, kernel_size=(1, 1), padding="SAME", rngs=rngs),
+        )
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        x = self.pad(x)  # (96, 384, 3)
+        x = self.stem(x)  # (16, 16, width)
+
+        # Fourier blocks
+        x1 = self.fourier1(x)
+        x2 = self.conv1(x)
+        x = x1 + x2
+        x = nnx.gelu(x)
+
+        x1 = self.fourier2(x)
+        x2 = self.conv2(x)
+        x = x1 + x2
+        x = nnx.gelu(x)
+
+        x = self.head(x)  # (16, 16, 1)
+        return x.squeeze(-1)  # (16, 16)
+
+
 def save_checkpoint(
     mngr: ocp.CheckpointManager,
     optimizer: nnx.Optimizer,
@@ -337,7 +592,9 @@ def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer):
 
 def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimizer:
     # model = ConvNet(rngs=nnx.Rngs(key))
-    model = UNet(rngs=nnx.Rngs(key))
+    # model = UNet(rngs=nnx.Rngs(key))
+    # model = ConvNeXt(rngs=nnx.Rngs(key))
+    model = LightFNO(rngs=nnx.Rngs(key))
     schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
     optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
     return optimizer
