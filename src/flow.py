@@ -155,6 +155,96 @@ def pad_batch(
     return jnp.pad(image, pad_width=pad_width, mode=mode)
 
 
+class SEBlock(nnx.Module):
+    """Squeeze-and-Excitation block"""
+
+    def __init__(self, channels: int, reduction: int = 2, *, rngs: nnx.Rngs):
+        self.fc1 = nnx.Linear(channels, channels // reduction, rngs=rngs)
+        self.fc2 = nnx.Linear(channels // reduction, channels, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        # Global average pooling
+        se = jnp.mean(x, axis=(1, 2), keepdims=True)  # (batch, 1, 1, channels)
+        se = se.squeeze((1, 2))  # (batch, channels)
+
+        # Squeeze
+        se = self.fc1(se)
+        se = nnx.relu(se)
+
+        # Excitation
+        se = self.fc2(se)
+        se = nnx.sigmoid(se)
+
+        # Scale
+        se = se[:, None, None, :]  # (batch, 1, 1, channels)
+        return x * se
+
+
+class SEConvBlock(nnx.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | Sequence[int] = (3, 3),
+        padding: str = "SAME",
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.conv = nnx.Conv(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            use_bias=False,
+            rngs=rngs,
+        )
+        self.norm = nnx.BatchNorm(out_channels, rngs=rngs)
+        self.activation = nnx.gelu
+        self.se = SEBlock(out_channels, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        x = self.conv(x)
+        x = self.norm(x)
+        x = self.activation(x)
+        x = self.se(x)
+        return x
+
+
+class SEResidualBlock(nnx.Module):
+    def __init__(self, features: int, kernel_size, *, rngs: nnx.Rngs):
+        self.conv1 = nnx.Conv(
+            features,
+            features,
+            kernel_size=kernel_size,
+            padding="SAME",
+            use_bias=False,
+            rngs=rngs,
+        )
+        self.norm1 = nnx.BatchNorm(features, rngs=rngs)
+        self.conv2 = nnx.Conv(
+            features,
+            features,
+            kernel_size=kernel_size,
+            padding="SAME",
+            use_bias=False,
+            rngs=rngs,
+        )
+        self.norm2 = nnx.BatchNorm(features, rngs=rngs)
+        self.se = SEBlock(features, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        residual = x
+        x = self.conv1(x)
+        x = self.norm1(x)
+        x = nnx.gelu(x)  # Changed from relu to match SEConvBlock
+        x = self.conv2(x)
+        x = self.norm2(x)
+        x = self.se(x)
+        x = x + residual
+        x = nnx.gelu(x)
+        return x
+
+
 class ConvNet(nnx.Module):
     def __init__(
         self,
@@ -171,27 +261,27 @@ class ConvNet(nnx.Module):
             partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
         )
         self.encoder = nnx.Sequential(
-            ConvBlock(3, 16, (3, 3), padding=enc_pad, rngs=rngs),  # (96, 384, 16)
+            SEConvBlock(3, 16, (3, 3), padding=enc_pad, rngs=rngs),  # (96, 384, 16)
             partial(nnx.max_pool, window_shape=(3, 6), strides=(3, 6)),  # (32, 64, 16)
-            ConvBlock(16, 32, (3, 3), padding=enc_pad, rngs=rngs),  # (32, 64, 32)
+            SEConvBlock(16, 32, (3, 3), padding=enc_pad, rngs=rngs),  # (32, 64, 32)
             partial(nnx.max_pool, window_shape=(2, 4), strides=(2, 4)),  # (16, 16, 32)
-            ConvBlock(32, 64, (3, 3), padding=enc_pad, rngs=rngs),  # (16, 16, 64)
+            SEConvBlock(32, 64, (3, 3), padding=enc_pad, rngs=rngs),  # (16, 16, 64)
             partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2)),  # (8, 8, 64)
-            ConvBlock(64, 128, (3, 3), padding=enc_pad, rngs=rngs),  # (8, 8, 128)
+            SEConvBlock(64, 128, (3, 3), padding=enc_pad, rngs=rngs),  # (8, 8, 128)
             partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2)),  # (4, 4, 128)
         )
         self.bottleneck = nnx.Sequential(
-            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
-            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
-            ResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
+            SEResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
+            SEResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
+            SEResidualBlock(128, (3, 3), rngs=rngs),  # (4, 4, 128)
         )
         self.decoder = nnx.Sequential(
-            ConvBlock(128, 64, (3, 3), rngs=rngs),  # (4, 4, 64)
+            SEConvBlock(128, 64, (3, 3), rngs=rngs),  # (4, 4, 64)
             partial(resize_batch, shape=(8, 8, 64), method="bilinear"),
-            ConvBlock(64, 32, (3, 3), rngs=rngs),  # (8, 8, 32)
+            SEConvBlock(64, 32, (3, 3), rngs=rngs),  # (8, 8, 32)
             partial(resize_batch, shape=(16, 16, 32), method="bilinear"),
-            ConvBlock(32, 16, (3, 3), rngs=rngs),  # (16, 16, 16)
-            ConvBlock(16, 1, (1, 1), rngs=rngs),  # (16, 16, 1)
+            SEConvBlock(32, 16, (3, 3), rngs=rngs),  # (16, 16, 16)
+            nnx.Conv(16, 1, (1, 1), padding="SAME", rngs=rngs),  # (16, 16, 1)
         )
 
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -200,138 +290,6 @@ class ConvNet(nnx.Module):
         x = self.bottleneck(x)
         x = self.decoder(x)
         x = x.squeeze(-1)  # Remove the channel dimension
-        return x
-
-
-class ConvNeXtBlock(nnx.Module):
-    def __init__(
-        self,
-        dim: int,
-        kernel_size: int = 7,
-        expansion_ratio: int = 4,
-        layer_scale_init_value: float = 1e-6,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        self.dwconv = nnx.Conv(
-            dim,
-            dim,
-            kernel_size=(kernel_size, kernel_size),
-            padding="SAME",
-            feature_group_count=dim,
-            use_bias=True,
-            rngs=rngs,
-        )
-        self.norm = nnx.LayerNorm(dim, rngs=rngs)
-
-        expanded_dim = dim * expansion_ratio
-        self.pwconv1 = nnx.Linear(dim, expanded_dim, rngs=rngs)
-        self.pwconv2 = nnx.Linear(expanded_dim, dim, rngs=rngs)
-
-        # Add LayerScale
-        if layer_scale_init_value > 0:
-            self.gamma = nnx.Param(layer_scale_init_value * jnp.ones((dim,)))
-        else:
-            self.gamma = None
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        residual = x
-        x = self.dwconv(x)
-        x = self.norm(x)
-        x = self.pwconv1(x)
-        x = nnx.gelu(x)
-        x = self.pwconv2(x)
-
-        if self.gamma is not None:
-            x = self.gamma.value * x
-
-        return residual + x
-
-
-class ConvNeXt(nnx.Module):
-    def __init__(self, *, rngs: nnx.Rngs):
-        # Same padding as other models
-        self.pad = nnx.Sequential(
-            partial(pad_batch, pad_width=((3, 0), (0, 0), (0, 0)), mode="reflect"),
-            partial(pad_batch, pad_width=((0, 3), (0, 0), (0, 0)), mode="constant"),
-            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
-        )
-
-        # Match ConvNet's progression more closely
-        self.stem = nnx.Sequential(
-            nnx.Conv(3, 16, kernel_size=(3, 3), padding="SAME", rngs=rngs),
-            nnx.LayerNorm(16, rngs=rngs),
-        )  # (96, 384, 16)
-
-        # Reduce depth significantly to match ConvNet's complexity
-        dims = [16, 32, 64, 128]
-        depths = [1, 1, 2, 1]  # Much smaller - only 5 blocks total
-
-        # Use smaller expansion ratio to save memory
-        expansion_ratios = [2, 2, 3, 3]  # Instead of 4x everywhere
-
-        # Use smaller kernels to save memory
-        kernel_sizes = [3, 5, 7, 7]  # Progressive increase, starting smaller
-
-        self.stages = []
-        for i, (dim, depth, exp_ratio, kernel_size) in enumerate(
-            zip(dims, depths, expansion_ratios, kernel_sizes)
-        ):
-            # Downsampling layer (except for first stage)
-            if i > 0:
-                # Use the same aggressive downsampling as ConvNet
-                if i == 1:
-                    downsample = partial(
-                        nnx.max_pool, window_shape=(3, 6), strides=(3, 6)
-                    )
-                elif i == 2:
-                    downsample = partial(
-                        nnx.max_pool, window_shape=(2, 4), strides=(2, 4)
-                    )
-                else:
-                    downsample = partial(
-                        nnx.max_pool, window_shape=(2, 2), strides=(2, 2)
-                    )
-                self.stages.append(downsample)
-
-                # Add a conv to change dimensions after pooling
-                self.stages.append(
-                    nnx.Conv(dims[i - 1], dim, kernel_size=(1, 1), rngs=rngs)
-                )
-
-            # ConvNeXt blocks with reduced expansion
-            stage_blocks = []
-            for _ in range(depth):
-                stage_blocks.append(
-                    ConvNeXtBlock(
-                        dim,
-                        kernel_size=kernel_size,
-                        expansion_ratio=exp_ratio,  # Pass custom expansion ratio
-                        rngs=rngs,
-                    )
-                )
-            if stage_blocks:  # Only add if there are blocks
-                self.stages.append(nnx.Sequential(*stage_blocks))
-
-        self.stages = nnx.Sequential(*self.stages)
-
-        # Simpler head to match ConvNet
-        self.head = nnx.Sequential(
-            partial(resize_batch, shape=(8, 8, 128), method="bilinear"),
-            nnx.Conv(128, 64, kernel_size=(3, 3), padding="SAME", rngs=rngs),
-            nnx.gelu,
-            partial(resize_batch, shape=(16, 16, 64), method="bilinear"),
-            nnx.Conv(64, 32, kernel_size=(3, 3), padding="SAME", rngs=rngs),
-            nnx.gelu,
-            nnx.Conv(32, 1, kernel_size=(1, 1), padding="SAME", rngs=rngs),
-        )
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        x = self.pad(x)  # (96, 384, 3)
-        x = self.stem(x)  # (96, 384, 16)
-        x = self.stages(x)  # (4, 4, 128) after all downsampling
-        x = self.head(x)  # (16, 16, 1)
-        x = x.squeeze(-1)  # (16, 16)
         return x
 
 
@@ -568,7 +526,7 @@ if __name__ == "__main__":
         format="{asctime} {levelname} {filename}:{lineno} {message}",
         style="{",
         handlers=[
-            logging.FileHandler(Path("app2.log"), mode="w+"),  # Overwrite log
+            logging.FileHandler(Path("app.log"), mode="w+"),  # Overwrite log
             logging.StreamHandler(),
         ],
         force=True,  # https://github.com/google/orbax/issues/1248
