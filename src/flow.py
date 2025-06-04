@@ -361,13 +361,13 @@ def pred(theta_deg: list[float] = [], phi_deg: list[float] = [], seed: int = 42)
         pred_rp = data.ff_from_phase_shifts(pred_ps)
         true_rp, pred_rp = true_rp[:90], pred_rp[:90]  # Limit to zenith angles
 
-    fig, axs = plt.subplots(2, 3, figsize=(18, 10))
+    fig, axs = plt.subplots(2, 4, figsize=(18, 8))
 
     analyze.plot_phase_shifts(true_ps, title="Ground Truth Phase Shifts", ax=axs[0, 0])
     analyze.plot_phase_shifts(pred_ps, title="Predicted Phase Shifts", ax=axs[1, 0])
 
-    clip_ff = True  # Clip FF patterns to non-negative values
-    if clip_ff:
+    clip_rp = True  # Clip ratiation patterns to non-negative values
+    if clip_rp:
         true_rp, pred_rp = true_rp.clip(min=0), pred_rp.clip(min=0)
 
     theta, phi = dataset.theta_rad, dataset.phi_rad
@@ -377,15 +377,20 @@ def pred(theta_deg: list[float] = [], phi_deg: list[float] = [], seed: int = 42)
     title = "Predicted 2D Radiation Pattern"
     analyze.plot_ff_2d(theta, phi, pred_rp, title=title, ax=axs[1, 1])
 
-    axs[0, 2].remove()
-    axs[0, 2] = fig.add_subplot(2, 3, 3, projection="3d")
-    title = "Ground Truth 3D Radiation Pattern"
-    analyze.plot_ff_3d(theta, phi, true_rp, title=title, ax=axs[0, 2])
+    title = "Ground Truth Sine-Space Radiation Pattern"
+    analyze.plot_sine_space(theta, phi, true_rp, title=title, ax=axs[0, 2])
+    title = "Predicted Sine-Space Radiation Pattern"
+    analyze.plot_sine_space(theta, phi, pred_rp, title=title, ax=axs[1, 2])
 
-    axs[1, 2].remove()
-    axs[1, 2] = fig.add_subplot(2, 3, 6, projection="3d")
+    axs[0, 3].remove()
+    axs[0, 3] = fig.add_subplot(2, 4, 4, projection="3d")
+    title = "Ground Truth 3D Radiation Pattern"
+    analyze.plot_ff_3d(theta, phi, true_rp, title=title, ax=axs[0, 3])
+
+    axs[1, 3].remove()
+    axs[1, 3] = fig.add_subplot(2, 4, 8, projection="3d")
     title = "Predicted 3D Radiation Pattern"
-    analyze.plot_ff_3d(theta, phi, true_rp, title=title, ax=axs[1, 2])
+    analyze.plot_ff_3d(theta, phi, pred_rp, title=title, ax=axs[1, 3])
 
     steering_str = analyze.steering_repr(jnp.degrees(steering_angles.T))
     fig.suptitle(f"Prediction with {steering_str}")

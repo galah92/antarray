@@ -552,8 +552,7 @@ def plot_ff_3d(
     z = pattern * np.cos(theta_rad)[:, None]
 
     if hide_backlobe:
-        z = np.asarray(z)  # Ensure z is a NumPy array
-        z.setflags(write=True)  # Allow modification
+        z = np.array(z)  # Ensure z is a NumPy array and thus writable
         z[z < 0] = np.nan  # Set backlobe values to NaN
 
     if ax is None:
@@ -609,7 +608,7 @@ def plot_sine_space(
 
     u = np.sin(theta_rad)[:, None] * np.cos(phi_rad)
     v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)
-    im = ax.contourf(u, v, pattern, levels=128)
+    im = ax.contourf(u, v, pattern, levels=128, cmap="magma_r")
 
     axis_args = dict(color="gray", linestyle="--", linewidth=0.9)
 
