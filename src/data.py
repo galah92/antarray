@@ -58,12 +58,6 @@ def get_beams_prob(max_n_beams: int = 1):
     return n_beams_prob
 
 
-DEFAULT_ARRAY_SIZE = (16, 16)
-DEFAULT_SPACING_MM = (60, 60)
-DEFAULT_THETA_END = 65.0
-DEFAULT_MAX_N_BEAMS = 4
-
-
 class DataBatch(NamedTuple):
     radiation_patterns: jax.Array  # (n_theta, n_phi, 3) - pattern & trig encoding
     phase_shifts: jax.Array  # (array_x, array_y)
@@ -139,11 +133,11 @@ class Dataset:
         batch_size: int = 512,
         limit: int = None,
         prefetch: bool = True,
-        array_size: tuple[int, int] = DEFAULT_ARRAY_SIZE,
-        spacing_mm: tuple[float, float] = DEFAULT_SPACING_MM,
-        theta_end: float = DEFAULT_THETA_END,
-        sim_dir_path: Path = DEFAULT_SIM_DIR,
-        max_n_beams: int = DEFAULT_MAX_N_BEAMS,
+        array_size: tuple[int, int] = (16, 16),
+        spacing_mm: tuple[float, float] = (60, 60),
+        theta_end: float = 65.0,
+        sim_path: Path = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME,
+        max_n_beams: int = 4,
         clip: bool = True,
         normalize: bool = True,
         radiation_pattern_max: float = 30.0,  # Maximum radiation pattern value in dB observed
@@ -159,7 +153,7 @@ class Dataset:
         self.array_size = array_size
         self.spacing_mm = spacing_mm
         self.theta_end = jnp.radians(theta_end)
-        self.sim_dir_path = sim_dir_path
+        self.sim_path = sim_path
 
         self.clip = clip
         self.normalize = normalize
@@ -180,7 +174,7 @@ class Dataset:
             spacing_mm=spacing_mm,
             theta_rad=self.theta_rad,
             phi_rad=self.phi_rad,
-            sim_path=sim_dir_path / DEFAULT_SINGLE_ANT_FILENAME,
+            sim_path=self.sim_path,
         )
 
         # Convert to JAX arrays and make them static

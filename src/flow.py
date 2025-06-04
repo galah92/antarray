@@ -274,7 +274,7 @@ def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimiz
 @app.command()
 def train(
     n_steps: int = 100_000,
-    batch_size: int = 512,
+    batch_size: int = 1024,
     lr: float = 2e-3,
     seed: int = 42,
     restore: bool = True,
@@ -325,79 +325,57 @@ def train(
 
 
 @app.command()
-def pred(
-    theta_deg: list[float] = None,
-    phi_deg: list[float] = None,
-    seed: int = 42,
-):
+def pred(theta_deg: list[float] = [], phi_deg: list[float] = [], seed: int = 42):
     key = jax.random.key(seed)
+    key, dataset_key, model_key = jax.random.split(key, num=3)
 
-    with jax.default_device(jax.devices("cpu")[0]):
+    cpu = jax.devices("cpu")[0]
+    with jax.default_device(cpu):
         logger.info("Running prediction on CPU")
 
-        # Create model
-        optimizer = create_trainables(
-            n_steps=1,  # Dummy value, we won't train
-            lr=0.0,  # No learning rate needed for prediction
-            key=key,
-        )
+        optimizer = create_trainables(n_steps=1, lr=0.0, key=model_key)
 
         # Get and load latest checkpoint
         ckpt_path = Path.cwd() / "checkpoints"
         ckpt_options = ocp.CheckpointManagerOptions(read_only=True)
-        ckpt_mngr = ocp.CheckpointManager(ckpt_path, options=ckpt_options)
-        _ = restore_checkpoint(ckpt_mngr, optimizer, step=None)
+        with ocp.CheckpointManager(ckpt_path, options=ckpt_options) as ckpt_mngr:
+            _ = restore_checkpoint(ckpt_mngr, optimizer, step=None)
 
         optimizer.model.eval()
 
-        steering_angles = jnp.array(
-            [[jnp.radians(t), jnp.radians(p)] for t, p in zip(theta_deg, phi_deg)]
+        # Use provided steering angles
+        theta_deg, phi_deg = jnp.asarray(theta_deg), jnp.asarray(phi_deg)
+        steering_deg = jnp.stack([theta_deg, phi_deg], axis=-1)
+        steering_angles = jnp.radians(steering_deg)
+
+        dataset = data.Dataset(batch_size=1, limit=1, key=dataset_key)
+        radiation_pattern, true_excitations = analyze.rad_pattern_from_geo(
+            *dataset.array_params, steering_angles
         )
-        logger.info(f"Using {len(steering_angles)} provided steering angles")
+        true_ps = jnp.angle(true_excitations)
 
-        # Load array parameters and generate radiation pattern
-        array_params = analyze.calc_array_params2(
-            array_size=data.DEFAULT_ARRAY_SIZE,
-            spacing_mm=data.DEFAULT_SPACING_MM,
-            theta_rad=jnp.radians(jnp.arange(180)),
-            phi_rad=jnp.radians(jnp.arange(360)),
-            sim_path=data.DEFAULT_SIM_DIR / data.DEFAULT_SINGLE_ANT_FILENAME,
-        )
-        array_params = [jnp.asarray(param) for param in array_params]
+        transformed = dataset.transform_fn(radiation_pattern)
+        pred_ps = optimizer.model(transformed[None, ...])[0]
 
-        radiation_pattern, _ = analyze.rad_pattern_from_geo(
-            *array_params, steering_angles
-        )
-        transformed = jnp.clip(radiation_pattern, a_min=0.0) / 30.0
-        phi_rad = jnp.arange(360) * jnp.pi / 180
-        sin_phi = jnp.sin(phi_rad)[None, :] * jnp.ones((90, 1))
-        cos_phi = jnp.cos(phi_rad)[None, :] * jnp.ones((90, 1))
-        transformed = jnp.dstack([transformed, sin_phi, cos_phi])
-        predicted_phases = optimizer.model(transformed[None, ...])[0]
+        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5))
 
-        steering_str = analyze.steering_repr(jnp.degrees(steering_angles.T))
-        logger.info(f"Steering: {steering_str}")
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-        theta_rad, phi_rad = jnp.radians(jnp.arange(90)), jnp.radians(jnp.arange(360))
         analyze.plot_ff_2d(
-            theta_rad,
-            phi_rad,
-            radiation_pattern,
-            title=f"Input Pattern\n{steering_str}",
+            theta_rad=dataset.theta_rad,
+            phi_rad=dataset.phi_rad,
+            pattern=radiation_pattern,
+            title="Input Pattern",
             ax=ax1,
         )
-        analyze.plot_phase_shifts(
-            predicted_phases, title=f"Predicted Phases\n{steering_str}", ax=ax2
-        )
+        analyze.plot_phase_shifts(true_ps, title="Truth Phase Shifts", ax=ax2)
+        analyze.plot_phase_shifts(pred_ps, title="Predicted Phase Shifts", ax=ax3)
+
+        steering_str = analyze.steering_repr(jnp.degrees(steering_angles.T))
+        fig.suptitle(f"Prediction with {steering_str}")
 
         plt.tight_layout()
-
-        plot_path = "prediction.png"
-        fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+        plot_path = "prediction_custom.png"
+        fig.savefig(plot_path, dpi=300, bbox_inches="tight")
         logger.info(f"Saved: {plot_path}")
-        plt.close()
 
 
 if __name__ == "__main__":
