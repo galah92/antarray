@@ -411,7 +411,7 @@ def ff_from_phase_shifts(
         sim_path=sim_dir_path / single_antenna_filename,
     )
 
-    E_norm, _ = analyze.rad_pattern_from_geo_and_phase_shifts(
+    E_norm = analyze.rad_pattern_from_geo_and_phase_shifts(
         taper,
         geo_exp,
         E_field,

@@ -341,7 +341,7 @@ def rad_pattern_from_geo_and_phase_shifts(
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
         geo_exp, E_field, Dmax_array, excitations
     )
-    return E_norm, excitations
+    return E_norm
 
 
 @jax.jit
