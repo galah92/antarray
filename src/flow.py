@@ -322,6 +322,61 @@ def restore_checkpoint(
     return step
 
 
+def create_physics_loss_fn(array_params: list[jax.Array]):
+    # Unpack parameters
+    kx, ky, taper, geo_exp, E_field, Dmax_array = array_params
+
+    # Create partial function with physics baked in
+    pattern_from_phase_shifts = partial(
+        analyze.rad_pattern_from_geo_and_phase_shifts,
+        taper,
+        geo_exp,
+        E_field,
+        Dmax_array,
+    )
+
+    def physics_loss_fn(model: ConvNet, batch: data.DataBatch) -> tuple[float, dict]:
+        """Physics-informed loss function."""
+        radiation_patterns = batch.radiation_patterns
+        target_phase_shifts = batch.phase_shifts
+
+        # Forward pass through ConvNet only
+        predicted_phase_shifts = model(radiation_patterns)  # (batch, 16, 16)
+
+        # Convert predicted phase shifts to radiation patterns using physics
+        def single_pattern_fn(ps):
+            E_norm, _ = pattern_from_phase_shifts(ps)
+            return E_norm
+
+        predicted_patterns = jax.vmap(single_pattern_fn)(predicted_phase_shifts)
+
+        # Extract target radiation pattern
+        target_patterns = radiation_patterns[:, :, :, 0]  # (batch, 90, 360)
+
+        # Physics-informed loss: compare radiation patterns
+        pattern_loss = jnp.mean((predicted_patterns - target_patterns) ** 2)
+
+        # Optional: phase regularization
+        phase_diff = jnp.abs(predicted_phase_shifts - target_phase_shifts)
+        circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
+        phase_loss = jnp.mean(circular_diff**2)
+
+        # Combined loss
+        alpha = 0.1  # Weight for phase loss
+        total_loss = pattern_loss + alpha * phase_loss
+
+        metrics = {
+            "pattern_loss": pattern_loss,
+            "phase_loss": phase_loss,
+            "pattern_rmse": jnp.sqrt(pattern_loss),
+            "phase_rmse": jnp.sqrt(phase_loss),
+        }
+
+        return total_loss, metrics
+
+    return physics_loss_fn
+
+
 @nnx.jit
 def train_step(optimizer: nnx.Optimizer, batch: data.DataBatch) -> dict[str, float]:
     def loss_fn(model: nnx.Module):
@@ -353,8 +408,6 @@ def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer):
 
 def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimizer:
     model = ConvNet(rngs=nnx.Rngs(key))
-    # model = UNet(rngs=nnx.Rngs(key))
-    # model = ConvNeXt(rngs=nnx.Rngs(key))
     schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
     optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
     return optimizer

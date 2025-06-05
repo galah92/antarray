@@ -178,7 +178,7 @@ class Dataset:
         )
 
         # Convert to JAX arrays and make them static
-        self.array_params = [jnp.asarray(param) for param in array_params]
+        self.array_params = jax.tree.map(jnp.asarray, array_params)
 
         # Beam probability distribution
         self.n_beams_prob = get_beams_prob(max_n_beams)
