@@ -322,8 +322,20 @@ def restore_checkpoint(
     return step
 
 
+def circular_mse_fn(model: nnx.Module, batch: data.DataBatch) -> tuple[float, dict]:
+    radiation_patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
+    predictions = model(radiation_patterns)
+
+    # Circular MSE loss
+    phase_diff = jnp.abs(predictions - phase_shifts)
+    circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
+    loss = jnp.mean(circular_diff**2)
+
+    return loss, {"loss": loss}
+
+
 def create_physics_loss_fn(array_params: list[jax.Array], transform_fn):
-    f = partial(analyze.rad_pattern_from_geo_and_phase_shifts, *array_params)
+    f = partial(analyze.rad_pattern_from_geo_and_phase_shifts, *array_params[2:])
     pattern_from_phase_shifts = jax.vmap(f)
 
     def physics_loss_fn(model: nnx.Module, batch: data.DataBatch) -> tuple[float, dict]:
@@ -333,37 +345,32 @@ def create_physics_loss_fn(array_params: list[jax.Array], transform_fn):
         pred_patterns = pattern_from_phase_shifts(pred_phase_shifts)
         pred_patterns = jax.vmap(transform_fn)(pred_patterns)
 
-        target_patterns = radiation_patterns[:, :, :, 0]
+        # Remove trig encoding dimensions
+        radiation_patterns = radiation_patterns[:, :, :, 0]
+        pred_patterns = pred_patterns[:, :, :, 0]
 
-        pattern_loss = jnp.mean((pred_patterns - target_patterns) ** 2)
-        return pattern_loss
+        loss = jnp.mean((pred_patterns - radiation_patterns) ** 2)
+        loss = loss * (30.0**2)  # Scale by max_dB^2
+
+        return loss, {"loss": loss}
 
     return physics_loss_fn
 
 
-@nnx.jit
-def train_step(optimizer: nnx.Optimizer, batch: data.DataBatch) -> dict[str, float]:
-    def loss_fn(model: nnx.Module):
-        radiation_patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
-        predictions = model(radiation_patterns)
+def create_train_step(loss_fn):
+    @nnx.jit
+    def train_step(optimizer: nnx.Optimizer, batch: data.DataBatch) -> dict[str, float]:
+        model = optimizer.model
+        (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
+        optimizer.update(grads)
+        metrics["grad_norm"] = optax.global_norm(grads)
 
-        # Circular MSE loss
-        phase_diff = jnp.abs(predictions - phase_shifts)
-        circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
-        loss = jnp.mean(circular_diff**2)
+        return metrics
 
-        phase_rmse = jnp.sqrt(loss)
-        return loss, {"loss": loss, "phase_rmse": phase_rmse}
-
-    model = optimizer.model
-    (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model)
-    optimizer.update(grads)
-    metrics["grad_norm"] = optax.global_norm(grads)
-
-    return metrics
+    return train_step
 
 
-def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer):
+def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer, train_step):
     logger.info("Warming up GPU kernels")
     warmup_batch = next(dataset)
     _ = train_step(optimizer, warmup_batch)
@@ -402,7 +409,11 @@ def train(
 
     n_steps -= start_step  # Adjust n_steps based on the restored step
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
-    warmup_step(dataset, optimizer)
+
+    # loss_fn = create_physics_loss_fn(dataset.array_params, dataset.transform_fn)
+    train_step = create_train_step(loss_fn=circular_mse_fn)
+
+    warmup_step(dataset, optimizer, train_step)
 
     logger.info("Starting development run")
     start_time = time.perf_counter()
@@ -448,14 +459,14 @@ def eval(seed: int = 42):
     optimizer.model.eval()
 
     dataset = data.Dataset(batch_size=batch_size, limit=batch_size, key=dataset_key)
-    batch = next(dataset)
-    metrics = train_step(optimizer, batch)
-    logger.info(
-        f"Evaluation at step {start_step}: "
-        f"Loss: {metrics['loss']:.3f} | "
-        f"Phase RMSE: {metrics['phase_rmse']:.3f} | "
-        f"Grad Norm: {metrics['grad_norm']:.3f}"
-    )
+    _batch = next(dataset)
+    # metrics = train_step(optimizer, batch)
+    # logger.info(
+    #     f"Evaluation at step {start_step}: "
+    #     f"Loss: {metrics['loss']:.3f} | "
+    #     f"Phase RMSE: {metrics['phase_rmse']:.3f} | "
+    #     f"Grad Norm: {metrics['grad_norm']:.3f}"
+    # )
 
 
 @app.command()
