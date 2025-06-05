@@ -329,9 +329,10 @@ def circular_mse_fn(model: nnx.Module, batch: data.DataBatch) -> tuple[float, di
     # Circular MSE loss
     phase_diff = jnp.abs(predictions - phase_shifts)
     circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
-    loss = jnp.mean(circular_diff**2)
+    circular_mse = jnp.mean(circular_diff**2)
+    loss = circular_mse
 
-    return loss, {"loss": loss}
+    return loss, {"loss": loss, "circular_mse": circular_mse}
 
 
 def create_physics_loss_fn(array_params: list[jax.Array], transform_fn):
@@ -339,7 +340,7 @@ def create_physics_loss_fn(array_params: list[jax.Array], transform_fn):
     pattern_from_phase_shifts = jax.vmap(f)
 
     def physics_loss_fn(model: nnx.Module, batch: data.DataBatch) -> tuple[float, dict]:
-        radiation_patterns = batch.radiation_patterns
+        radiation_patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
         pred_phase_shifts = model(radiation_patterns)
 
         pred_patterns = pattern_from_phase_shifts(pred_phase_shifts)
@@ -352,7 +353,11 @@ def create_physics_loss_fn(array_params: list[jax.Array], transform_fn):
         loss = jnp.mean((pred_patterns - radiation_patterns) ** 2)
         loss = loss * (30.0**2)  # Scale by max_dB^2
 
-        return loss, {"loss": loss}
+        phase_diff = jnp.abs(pred_phase_shifts - phase_shifts)
+        circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
+        circular_mse = jnp.mean(circular_diff**2)
+
+        return loss, {"loss": loss, "circular_mse": circular_mse}
 
     return physics_loss_fn
 
@@ -410,8 +415,8 @@ def train(
     n_steps -= start_step  # Adjust n_steps based on the restored step
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
-    # loss_fn = create_physics_loss_fn(dataset.array_params, dataset.transform_fn)
-    train_step = create_train_step(loss_fn=circular_mse_fn)
+    loss_fn = create_physics_loss_fn(dataset.array_params, dataset.transform_fn)
+    train_step = create_train_step(loss_fn=loss_fn)
 
     warmup_step(dataset, optimizer, train_step)
 
@@ -433,6 +438,7 @@ def train(
                     f"Time: {avg_time * 1000:.1f}ms/step | "
                     f"Loss: {metrics['loss']:.3f} | "
                     f"Grad Norm: {metrics['grad_norm']:.3f} | "
+                    f"Circular MSE: {metrics['circular_mse']:.3f} | "
                 )
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
