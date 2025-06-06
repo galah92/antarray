@@ -476,7 +476,12 @@ def eval(seed: int = 42):
 
 
 @app.command()
-def pred(theta_deg: list[float] = [], phi_deg: list[float] = [], seed: int = 42):
+def pred(
+    theta_deg: list[float] = [],
+    phi_deg: list[float] = [],
+    filepath: str = "prediction.png",
+    seed: int = 42,
+):
     key = jax.random.key(seed)
     key, dataset_key, model_key = jax.random.split(key, num=3)
 
@@ -548,10 +553,8 @@ def pred(theta_deg: list[float] = [], phi_deg: list[float] = [], seed: int = 42)
 
     fig.set_tight_layout(True)
 
-    filepath = "prediction.png"
-    if filepath:
-        fig.savefig(filepath, dpi=300, bbox_inches="tight")
-        print(f"Prediction example saved to {filepath}")
+    fig.savefig(filepath, dpi=300, bbox_inches="tight")
+    print(f"Prediction example saved to {filepath}")
 
 
 if __name__ == "__main__":
