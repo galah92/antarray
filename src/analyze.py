@@ -80,17 +80,6 @@ def get_element_positions(
     return x_positions, y_positions
 
 
-def calc_array_params(
-    array_size: tuple[int, int] = (16, 16),
-    spacing_mm: tuple[float, float] = (60, 60),
-    freq_hz: float = 2.45e9,
-) -> tuple[np.ndarray, np.ndarray]:
-    k = get_wavenumber(freq_hz)
-    x_pos, y_pos = get_element_positions(array_size, spacing_mm)
-    kx, ky = k * x_pos, k * y_pos  # Wavenumber-scaled positions
-    return kx, ky
-
-
 DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
 DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
 DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
@@ -137,7 +126,7 @@ def check_grating_lobes(freq, dx, dy, verbose=False):
             logger.info(f"  - {'dy_critical_angle':.1f}° in the Y direction")
 
 
-def calc_array_params2(
+def calc_array_params(
     array_size: tuple[int, int] = (16, 16),
     spacing_mm: tuple[float, float] = (60, 60),
     *,
@@ -286,35 +275,6 @@ def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> Array:
     return pattern
 
 
-def rad_pattern_from_single_elem(
-    E_field: np.ndarray,
-    Dmax: float,
-    freq_hz: float = 2.45e9,
-    array_size: tuple[int, int] = (16, 16),
-    spacing_mm: tuple[float, float] = (60, 60),
-    steering_deg: np.ndarray = np.array([[0, 0]]),
-    taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
-) -> tuple[np.ndarray, np.ndarray]:
-    theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
-
-    kx, ky = calc_array_params(array_size, spacing_mm, freq_hz)
-    taper = calc_taper(array_size, taper_type)
-    geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
-    Dmax_array = Dmax * np.prod(array_size)
-
-    steering_rad = np.radians(steering_deg)
-    E_norm, excitations = rad_pattern_from_geo(
-        kx,
-        ky,
-        taper,
-        geo_exp,
-        E_field,
-        Dmax_array,
-        steering_rad,
-    )
-    return E_norm, excitations
-
-
 @jax.jit
 def rad_pattern_from_geo_and_excitations(
     geo_exp: ArrayLike,
@@ -427,110 +387,6 @@ def extend_pattern_to_360_theta(pattern: np.ndarray) -> np.ndarray:
     extension = pattern[::-1, phi_indices]  # Mirror pattern
 
     return np.vstack((pattern, extension))
-
-
-def plot_sim_and_af(
-    sim_dir,
-    freq_hz,
-    array_size,
-    spacing_mm,
-    *,
-    steering_theta_deg=0,
-    steering_phi_deg=0,
-    figname: bool | str = True,
-):
-    """
-    Plot comparison between OpenEMS simulation and array factor calculation,
-    optionally with beam steering.
-
-    Parameters:
-    -----------
-    sim_dir : Path
-        Directory containing OpenEMS simulation results
-    freq : float
-        Operating frequency in Hz
-    array_size : list or numpy.ndarray
-        Array sizes as (xn, yn) tuples to plot
-    spacing_mm : list or numpy.ndarray
-        Element spacings as (dx_mm, dy_mm) tuples to plot in millimeters
-    figname : str, optional
-        Filename to save the figure, if None the figure is not saved
-    steering_theta : float, optional
-        Steering elevation angle in degrees (default: 0)
-    steering_phi : float, optional
-        Steering azimuth angle in degrees (default: 0)
-    """
-    if not sim_dir:
-        sim_dir = Path.cwd() / "src" / "sim" / "antenna_array"
-
-    array_size = np.array(array_size)
-    spacing_mm = np.array(spacing_mm)
-
-    # Load the single antenna pattern (for array factor calculation)
-    single_antenna_filename = f"ff_1x1_60x60_{freq_hz / 1e6:n}_steer_t0_p0.h5"
-    nf2ff = read_nf2ff(sim_dir / single_antenna_filename)
-    E_field, Dmax_single = nf2ff["E_field"], nf2ff["Dmax"]
-
-    elem_params = E_field, Dmax_single, freq_hz
-    rad_pattern_from_array_params = partial(rad_pattern_from_single_elem, *elem_params)
-
-    # Create a figure with polar subplots
-    fig, axs = plt.subplots(
-        nrows=len(array_size),
-        ncols=len(spacing_mm),
-        figsize=4 * np.array([len(spacing_mm), len(array_size)]),
-        subplot_kw={"projection": "polar"},
-    )
-    axs = (
-        np.array([axs]).flatten()
-        if min(len(array_size), len(spacing_mm)) == 1
-        else axs.flatten()
-    )
-
-    # Loop through combinations and create combined plots
-    for i, array_size in enumerate(array_size):
-        for j, spacing_mm in enumerate(spacing_mm):
-            ax = axs[i * len(spacing_mm) + j]
-            xn, yn = array_size
-            dx_mm, dy_mm = spacing_mm
-
-            # Plot OpenEMS full simulation
-            filename = f"ff_{xn}x{yn}_{dx_mm}x{dy_mm}_{freq_hz / 1e6:n}_steer_t{steering_theta_deg}_p{steering_phi_deg}.h5"
-            try:
-                nf2ff = read_nf2ff(sim_dir / filename)
-            except (FileNotFoundError, KeyError):  # Could not load simulation data
-                pass
-
-            E_norm = nf2ff["E_norm"]
-            Dmax = nf2ff["Dmax"]
-            label = "OpenEMS Simulation"
-            plot_E_plane(E_norm=E_norm, Dmax=Dmax, normalize=True, label=label, ax=ax)
-
-            steering_deg = np.array([[steering_theta_deg, steering_phi_deg]])
-            E_norm, _ = rad_pattern_from_array_params(
-                array_size, spacing_mm, steering_deg
-            )
-            label = "Array Factor"
-            plot_E_plane(E_norm=E_norm, Dmax=Dmax, fmt="g--", label=label, ax=ax)
-
-            c = 299_792_458
-            lambda0 = c / freq_hz
-            lambda0_mm = lambda0 * 1e3
-            freq_ghz = freq_hz / 1e9
-
-            title = f"{xn}x{yn} array, {dx_mm}x{dy_mm}mm, {freq_ghz:n}GHz, {dx_mm / lambda0_mm:.2f}λ, steering: θ={steering_theta_deg}°, φ={steering_phi_deg}°"
-            ax.set_title(title, fontsize=8)
-
-    fig.legend(["OpenEMS Simulation", "Array Factor"], fontsize=8)
-    fig.suptitle("OpenEMS Simulation vs Array Factor Comparison", y=0.99)
-
-    fig.set_tight_layout(True)
-    if figname:
-        if figname is True:
-            figname = (
-                f"ff_{freq_ghz:.0f}GHz_steer_t{steering_theta_deg}_p{steering_phi_deg}"
-            )
-        fig.savefig(figname, dpi=600)
 
 
 def plot_ff_3d(
@@ -683,7 +539,7 @@ def steering_repr(steering_angles: np.ndarray):
 def test_plot_ff_3d():
     steering_deg = np.array([[15, 15], [30, 120], [45, 210]])
 
-    array_params = calc_array_params2(array_size=(16, 16), spacing_mm=(60, 60))
+    array_params = calc_array_params(array_size=(16, 16), spacing_mm=(60, 60))
     E_norm, _ = rad_pattern_from_geo(*array_params, np.radians(steering_deg))
     E_norm = np.asarray(E_norm)
 

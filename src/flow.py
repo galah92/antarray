@@ -445,9 +445,7 @@ def train(
     n_steps -= start_step  # Adjust n_steps based on the restored step
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
-    local_loss_fn = partial(loss_fn, dataset=dataset)
-    train_step = create_train_step(loss_fn=local_loss_fn)
-
+    train_step = create_train_step(loss_fn=partial(loss_fn, dataset=dataset))
     warmup_step(dataset, optimizer, train_step)
 
     logger.info("Starting development run")

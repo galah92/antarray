@@ -169,7 +169,7 @@ class Dataset:
         self.key = key
 
         # Load and prepare array parameters
-        array_params = analyze.calc_array_params2(
+        array_params = analyze.calc_array_params(
             array_size=array_size,
             spacing_mm=spacing_mm,
             theta_rad=self.theta_rad,
@@ -405,7 +405,7 @@ def ff_from_phase_shifts(
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
-    _, _, taper, geo_exp, E_field, Dmax_array = analyze.calc_array_params2(
+    _, _, taper, geo_exp, E_field, Dmax_array = analyze.calc_array_params(
         array_size=(16, 16),
         spacing_mm=(60, 60),
         sim_path=sim_dir_path / single_antenna_filename,
