@@ -322,29 +322,34 @@ def restore_checkpoint(
     return step
 
 
-def circular_mse_fn(model: nnx.Module, batch: data.DataBatch) -> tuple[float, dict]:
-    radiation_patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
-    predictions = model(radiation_patterns)
+def circular_mse_fn(
+    batch: data.DataBatch,
+    pred_phase_shifts: jax.Array,
+) -> float:
+    phase_shifts = batch.phase_shifts
 
     # Circular MSE loss
-    phase_diff = jnp.abs(predictions - phase_shifts)
+    phase_diff = jnp.abs(pred_phase_shifts - phase_shifts)
     circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
     circular_mse = jnp.mean(circular_diff**2)
-    loss = circular_mse
 
-    return loss, {"loss": loss, "circular_mse": circular_mse}
+    return circular_mse
 
 
-def create_physics_loss_fn(array_params: list[jax.Array], transform_fn):
+def create_physics_loss_fn(dataset: data.Dataset):
+    array_params = dataset.array_params
     f = partial(analyze.rad_pattern_from_geo_and_phase_shifts, *array_params[2:])
     pattern_from_phase_shifts = jax.vmap(f)
+    transform_fn = jax.vmap(dataset.transform_fn)
 
-    def physics_loss_fn(model: nnx.Module, batch: data.DataBatch) -> tuple[float, dict]:
-        radiation_patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
-        pred_phase_shifts = model(radiation_patterns)
+    def physics_loss_fn(
+        batch: data.DataBatch,
+        pred_phase_shifts: jax.Array,
+    ):
+        radiation_patterns = batch.radiation_patterns
 
         pred_patterns = pattern_from_phase_shifts(pred_phase_shifts)
-        pred_patterns = jax.vmap(transform_fn)(pred_patterns)
+        pred_patterns = transform_fn(pred_patterns)
 
         # Remove trig encoding dimensions
         radiation_patterns = radiation_patterns[:, :, :, 0]
@@ -353,13 +358,38 @@ def create_physics_loss_fn(array_params: list[jax.Array], transform_fn):
         loss = jnp.mean((pred_patterns - radiation_patterns) ** 2)
         loss = loss * (30.0**2)  # Scale by max_dB^2
 
-        phase_diff = jnp.abs(pred_phase_shifts - phase_shifts)
-        circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
-        circular_mse = jnp.mean(circular_diff**2)
-
-        return loss, {"loss": loss, "circular_mse": circular_mse}
+        return loss
 
     return physics_loss_fn
+
+
+def loss_fn(
+    model: nnx.Module,
+    batch: data.DataBatch,
+    dataset: data.Dataset,
+    *,
+    use_physics_loss: bool = True,
+    use_circular_mse: bool = True,
+) -> tuple[float, dict]:
+    pred_phase_shifts = model(batch.radiation_patterns)
+
+    metrics = {}
+
+    loss = 0
+
+    if use_physics_loss:
+        physics_loss_fn = create_physics_loss_fn(dataset)
+        physics_loss = physics_loss_fn(batch, pred_phase_shifts)
+        loss += physics_loss
+        metrics["physics_loss"] = physics_loss
+
+    if use_circular_mse:
+        circular_mse = circular_mse_fn(batch, pred_phase_shifts)
+        loss += circular_mse * 10
+        metrics["circular_mse"] = circular_mse
+
+    metrics["loss"] = loss
+    return loss, metrics
 
 
 def create_train_step(loss_fn):
@@ -415,8 +445,8 @@ def train(
     n_steps -= start_step  # Adjust n_steps based on the restored step
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
-    loss_fn = create_physics_loss_fn(dataset.array_params, dataset.transform_fn)
-    train_step = create_train_step(loss_fn=loss_fn)
+    local_loss_fn = partial(loss_fn, dataset=dataset)
+    train_step = create_train_step(loss_fn=local_loss_fn)
 
     warmup_step(dataset, optimizer, train_step)
 
@@ -439,6 +469,7 @@ def train(
                     f"Loss: {metrics['loss']:.3f} | "
                     f"Grad Norm: {metrics['grad_norm']:.3f} | "
                     f"Circular MSE: {metrics['circular_mse']:.3f} | "
+                    f"Physics Loss: {metrics['physics_loss']:.3f} | "
                 )
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
