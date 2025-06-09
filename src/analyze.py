@@ -231,13 +231,8 @@ def calc_array_factor(geo_exp: ArrayLike, excitations: ArrayLike) -> Array:
     """
     Calculates the array factor given the element excitations.
     Excitations should be an (xn, yn) complex NumPy array.
-    If excitations is None, all elements are assumed to have 1 + 0j excitation.
     """
-    # The array factor sum term for each element is Excitation * exp(j * GeometricPhase)
-    # However, if the Excitation is defined as A_n * exp(j * alpha_n), and the array
-    # factor includes a *subtraction* of this phase, like A_n * exp(j * (G_n - alpha_n)),
-    # then this is equivalent to A_n * exp(j G_n) * exp(-j alpha_n) = Excitation.conjugate() * exp(j G_n).
-    weighted_exp_terms = excitations[:, :, None, None].conjugate() * geo_exp
+    weighted_exp_terms = excitations[:, :, None, None] * geo_exp
 
     # Sum contributions from all elements along the element dimensions (xn, yn).
     # Shape: (len(theta), len(phi))
@@ -290,7 +285,7 @@ def rad_pattern_from_geo_and_phase_shifts(
     Dmax_array: float,
     phase_shifts: ArrayLike = np.array([[0]]),
 ) -> tuple[Array, Array]:
-    excitations = taper * jnp.exp(1j * phase_shifts)
+    excitations = taper * jnp.exp(-1j * phase_shifts)
 
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
         geo_exp, E_field, Dmax_array, excitations
@@ -315,7 +310,7 @@ def rad_pattern_from_geo(
 
     # This assumes the taper is constant across all angles.
     # If taper is a 2D array, it should match the shape of phase_shifts.
-    excitations = jnp.einsum("xy,xys->xy", taper, jnp.exp(1j * phase_shifts))
+    excitations = jnp.einsum("xy,xys->xy", taper, jnp.exp(-1j * phase_shifts))
 
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
         geo_exp, E_field, Dmax_array, excitations
@@ -368,7 +363,6 @@ def array_synthesis(
     Returns:
         Shape: (n_theta, n_phi) - power pattern
     """
-    # Scale and sum
     total_field = jnp.sum(
         excitations[:, :, None, None] * precomputed_contributions, axis=(0, 1)
     )
