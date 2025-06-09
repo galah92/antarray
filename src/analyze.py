@@ -227,19 +227,12 @@ def calc_geo_exp(
 
 
 @jax.jit
-def calc_array_factor(
-    geo_exp: ArrayLike,
-    excitations: ArrayLike | None = None,
-) -> Array:
+def calc_array_factor(geo_exp: ArrayLike, excitations: ArrayLike) -> Array:
     """
     Calculates the array factor given the element excitations.
     Excitations should be an (xn, yn) complex NumPy array.
     If excitations is None, all elements are assumed to have 1 + 0j excitation.
     """
-    xn, yn = geo_exp.shape[:2]
-    if excitations is None:
-        excitations = jnp.ones((xn, yn), dtype=jnp.complex64)
-
     # The array factor sum term for each element is Excitation * exp(j * GeometricPhase)
     # However, if the Excitation is defined as A_n * exp(j * alpha_n), and the array
     # factor includes a *subtraction* of this phase, like A_n * exp(j * (G_n - alpha_n)),
@@ -251,6 +244,7 @@ def calc_array_factor(
     AF = jnp.sum(weighted_exp_terms, axis=(0, 1))
 
     # Normalize by the total number of elements.
+    xn, yn = geo_exp.shape[:2]
     AF = AF / (xn * yn)
 
     return AF
