@@ -323,6 +323,59 @@ def rad_pattern_from_geo(
     return E_norm, excitations
 
 
+def precompute_array_contributions(
+    element_patterns: jax.Array,  # Shape: (16, 16, n_theta, n_phi) - your simulated patterns
+    kx: jax.Array,  # From your existing calc_array_params
+    ky: jax.Array,  # From your existing calc_array_params
+    theta_rad: jax.Array,  # From your dataset
+    phi_rad: jax.Array,  # From your dataset
+) -> jax.Array:
+    """
+    Precompute element_patterns * exp(1j * geometric_phase) for all elements.
+    Reuses your existing kx, ky arrays.
+
+    Returns:
+        Shape (16, 16, n_theta, n_phi) - precomputed element contributions
+    """
+    # Direction cosines (reusing your existing approach)
+    sin_theta = jnp.sin(theta_rad)
+    cos_phi = jnp.cos(phi_rad)
+    sin_phi = jnp.sin(phi_rad)
+
+    u = sin_theta[:, None] * cos_phi[None, :]  # Shape: (n_theta, n_phi)
+    v = sin_theta[:, None] * sin_phi[None, :]  # Shape: (n_theta, n_phi)
+
+    # Geometric phase using your existing kx, ky
+    x_phase = kx[:, None, None] * u[None, :, :]  # Shape: (16, n_theta, n_phi)
+    y_phase = ky[:, None, None] * v[None, :, :]  # Shape: (16, n_theta, n_phi)
+
+    geometric_phase = (
+        x_phase[:, None, :, :] + y_phase[None, :, :, :]
+    )  # Shape: (16, 16, n_theta, n_phi)
+
+    # Combine with element patterns
+    return element_patterns * jnp.exp(1j * geometric_phase)
+
+
+@jax.jit
+def array_synthesis(
+    precomputed_contributions: jax.Array,  # From precompute_array_contributions
+    excitations: jax.Array,  # Shape: (16, 16) - complex excitations
+) -> jax.Array:
+    """
+    Synthesize array pattern from precomputed contributions and excitations.
+
+    Returns:
+        Shape: (n_theta, n_phi) - power pattern
+    """
+    # Scale and sum
+    total_field = jnp.sum(
+        excitations[:, :, None, None] * precomputed_contributions, axis=(0, 1)
+    )
+
+    return jnp.abs(total_field) ** 2
+
+
 def extract_E_plane_cut(pattern: np.ndarray, phi_idx: int = 0) -> np.ndarray:
     """
     Extract the E-plane cut (phi = 0°) from the 3D radiation pattern.
