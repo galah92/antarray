@@ -175,7 +175,7 @@ def calc_taper(
 def calc_phase_shifts(
     kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
     ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
-    steering_rad: ArrayLike,
+    steering_rad: ArrayLike,  # Steering angles in radians, (n_angles, 2) for (theta, phi)
 ) -> Array:
     """
     Calculate phase shifts for each element in the array based on steering angles.
@@ -312,7 +312,10 @@ def rad_pattern_from_geo(
     Compute radiation pattern for given steering angles.
     """
     phase_shifts = calc_phase_shifts(kx, ky, steering_rad)
-    excitations = jnp.einsum("ij,ijk->ij", taper, jnp.exp(1j * phase_shifts))
+
+    # This assumes the taper is constant across all angles.
+    # If taper is a 2D array, it should match the shape of phase_shifts.
+    excitations = jnp.einsum("xy,xys->xy", taper, jnp.exp(1j * phase_shifts))
 
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
         geo_exp, E_field, Dmax_array, excitations
