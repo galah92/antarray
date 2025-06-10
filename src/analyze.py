@@ -151,9 +151,7 @@ def calc_array_params(
         E_field = E_field[: theta_rad.size, ...]  # Trim to match theta_rad
 
     # Precompute the array contributions
-    # E_field.shape == (theta, phi, 2), geo_exp.shape == (theta, phi, xn, yn)
-    # precomputed.shape == (theta, phi, 2, xn, yn)
-    precomputed = E_field[..., None, None] * geo_exp[:, :, None]
+    precomputed = jnp.einsum("tpc,tpxy->tpcxy", E_field, geo_exp)
 
     # Normalize by the total number of elements.
     xn, yn = geo_exp.shape[-2:]
