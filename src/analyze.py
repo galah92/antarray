@@ -145,6 +145,7 @@ def calc_array_params(
 ) -> tuple[np.ndarray, np.ndarray]:
     nf2ff = load_openems_nf2ff(sim_path)
     E_field, Dmax, freq_hz = nf2ff.E_field, nf2ff.Dmax, nf2ff.freq_hz
+    E_field = E_field[: theta_rad.size, ...]  # Trim to match theta_rad
     Dmax_array = Dmax * np.prod(array_size)  # Scale Dmax for the array size
 
     check_grating_lobes(freq_hz, *spacing_mm)
@@ -153,19 +154,13 @@ def calc_array_params(
     x_pos, y_pos = get_element_positions(array_size, spacing_mm)
     kx, ky = k * x_pos, k * y_pos  # Wavenumber-scaled positions
 
-    taper = calc_taper(array_size)
     geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
 
-    if theta_rad.size < E_field.shape[0]:
-        E_field = E_field[: theta_rad.size, ...]  # Trim to match theta_rad
-
-    # Precompute the array contributions
+    # Precompute array contributions
     precomputed = jnp.einsum("tpc,tpxy->tpcxy", E_field, geo_exp)
+    precomputed = precomputed / np.prod(array_size)  # Normalize by number of elements
 
-    # Normalize by the total number of elements.
-    xn, yn = geo_exp.shape[-2:]
-    precomputed = precomputed / (xn * yn)
-
+    taper = calc_taper(array_size)
     return kx, ky, taper, precomputed, Dmax_array
 
 
