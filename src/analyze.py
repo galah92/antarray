@@ -79,9 +79,15 @@ def get_element_positions(
     return x_positions, y_positions
 
 
-DEFAULT_SIM_DIR = Path.cwd() / "src" / "sim" / "antenna_array"
+root_dir = Path(__file__).parent.parent
+
+DEFAULT_SIM_DIR = root_dir / "openems" / "sim" / "antenna_array"
 DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
 DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
+
+DEFAULT_DATASET_DIR = root_dir / "dataset"
+DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_DATASET_NAME = "farfield_dataset.h5"
 
 
 def check_grating_lobes(freq, dx, dy, verbose=False):

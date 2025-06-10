@@ -17,14 +17,6 @@ import analyze
 
 logger = logging.getLogger(__name__)
 
-root_dir = Path(__file__).parent.parent
-DEFAULT_SIM_DIR = root_dir / "openems" / "sim" / "antenna_array"
-DEFAULT_DATASET_DIR = root_dir / "dataset"
-DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
-DEFAULT_DATASET_NAME = "farfield_dataset.h5"
-DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
-
-
 app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_enable=False,
@@ -136,7 +128,7 @@ class Dataset:
         array_size: tuple[int, int] = (16, 16),
         spacing_mm: tuple[float, float] = (60, 60),
         theta_end: float = 65.0,
-        sim_path: Path = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME,
+        sim_path: Path = analyze.DEFAULT_SIM_PATH,
         max_n_beams: int = 4,
         clip: bool = True,
         normalize: bool = True,
@@ -236,8 +228,8 @@ def generate_beamforming(
     n_samples: int = 1_000,
     theta_end: float = 65,  # Degrees
     max_n_beams: int = 1,
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: Path = DEFAULT_DATASET_NAME,
+    dataset_dir: Path = analyze.DEFAULT_DATASET_DIR,
+    dataset_name: Path = analyze.DEFAULT_DATASET_NAME,
     overwrite: bool = False,
     seed: int = 42,
 ):
@@ -282,7 +274,7 @@ def generate_beamforming(
 
 @app.command()
 def plot_dataset_phase_shifts(
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset_dir: Path = analyze.DEFAULT_DATASET_DIR,
     dataset_name: Path = "ff_beamforming.h5",
     gif_name: Path = "beamforming_phase_shifts.gif",
 ):
@@ -336,8 +328,8 @@ def plot_dataset_phase_shifts(
 @app.command()
 def plot_sample(
     idx: int,
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: Path = DEFAULT_DATASET_NAME,
+    dataset_dir: Path = analyze.DEFAULT_DATASET_DIR,
+    dataset_name: Path = analyze.DEFAULT_DATASET_NAME,
 ):
     """
     Visualize a single sample from the dataset.
@@ -402,8 +394,8 @@ def visualize_dataset(batch_size: int = 4, seed: int = 42):
 
 def ff_from_phase_shifts(
     phase_shifts: np.ndarray,
-    sim_dir_path: Path = DEFAULT_SIM_DIR,
-    single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
+    sim_dir_path: Path = analyze.DEFAULT_SIM_DIR,
+    single_antenna_filename: str = analyze.DEFAULT_SINGLE_ANT_FILENAME,
 ):
     _, _, taper, percomputed, Dmax_array = analyze.calc_array_params(
         array_size=(16, 16),
