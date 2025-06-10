@@ -249,10 +249,17 @@ def run_array_factor(E_field: ArrayLike, array_factor: ArrayLike) -> Array:
     """
     Calculate the electric field norm from the array factor and single element fields.
     """
-    E_theta, E_phi = E_field[0], E_field[1]
-    E_theta_array, E_phi_array = array_factor * E_theta, array_factor * E_phi
-    E_norm_array = jnp.sqrt(jnp.abs(E_theta_array) ** 2 + jnp.abs(E_phi_array) ** 2)
-    return E_norm_array
+    E_total = jnp.abs(E_field * array_factor) ** 2
+
+    # E_total.shape == (2, theta, phi) or (1, theta, phi).
+    # If it's the former, E_total_theta & E_total_phi are the theta and phi components of the electric field.
+    # In both cases, we want the norm and can sum.
+    E_total = E_total.sum(axis=0)
+
+    # TODO: this is probably not needed because the power density is proportional to the magnitude of the E-field *squared*.
+    E_total = jnp.sqrt(E_total)
+
+    return E_total
 
 
 def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> Array:
@@ -337,16 +344,15 @@ def precompute_array_contributions(
     cos_phi = jnp.cos(phi_rad)
     sin_phi = jnp.sin(phi_rad)
 
-    u = sin_theta[:, None] * cos_phi[None, :]  # Shape: (n_theta, n_phi)
-    v = sin_theta[:, None] * sin_phi[None, :]  # Shape: (n_theta, n_phi)
+    u = sin_theta[:, None] * cos_phi[None, :]  # (n_theta, n_phi)
+    v = sin_theta[:, None] * sin_phi[None, :]  # (n_theta, n_phi)
 
     # Geometric phase using your existing kx, ky
-    x_phase = kx[:, None, None] * u[None, :, :]  # Shape: (16, n_theta, n_phi)
-    y_phase = ky[:, None, None] * v[None, :, :]  # Shape: (16, n_theta, n_phi)
+    x_phase = kx[:, None, None] * u[None, :, :]  # (16, n_theta, n_phi)
+    y_phase = ky[:, None, None] * v[None, :, :]  # (16, n_theta, n_phi)
 
-    geometric_phase = (
-        x_phase[:, None, :, :] + y_phase[None, :, :, :]
-    )  # Shape: (16, 16, n_theta, n_phi)
+    # (16, 16, n_theta, n_phi)
+    geometric_phase = x_phase[:, None, :, :] + y_phase[None, :, :, :]
 
     # Combine with element patterns
     return element_patterns * jnp.exp(1j * geometric_phase)
