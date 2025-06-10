@@ -41,7 +41,7 @@ def read_nf2ff(nf2ff_path: Path):
             E_theta, E_phi = np.squeeze(E_theta), np.squeeze(E_phi)
             freqs = np.squeeze(freqs)
 
-        E_field = np.stack([E_theta, E_phi], axis=0)  # (2, freq, theta, phi)
+        E_field = np.stack([E_theta, E_phi], axis=-1)  # (freq, theta, phi, 2)
         E_norm = np.sqrt(np.abs(E_theta) ** 2 + np.abs(E_phi) ** 2)
 
     return {
@@ -147,19 +147,16 @@ def calc_array_params(
     taper = calc_taper(array_size)
     geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
 
-    if theta_rad.size < E_field.shape[2]:
-        E_field = E_field[:, : theta_rad.size, :]  # Trim E_field to match theta_rad
+    if theta_rad.size < E_field.shape[0]:
+        E_field = E_field[: theta_rad.size, ...]  # Trim to match theta_rad
 
-    # Assuming E_field has shape (2, theta, phi) for a single element,
-    # we broadcast it to all elements.
-    E_field = E_field[:, None, None, :, :]
-    precomputed = E_field * geo_exp
-    # Rearrange to (theta, phi, 2, xn, yn)
-    # TODO: calculate it like that from the start
-    precomputed = precomputed.transpose(3, 4, 0, 1, 2)
+    # Precompute the array contributions
+    # E_field.shape == (theta, phi, 2), geo_exp.shape == (theta, phi, xn, yn)
+    # precomputed.shape == (theta, phi, 2, xn, yn)
+    precomputed = E_field[..., None, None] * geo_exp[:, :, None]
 
     # Normalize by the total number of elements.
-    xn, yn = geo_exp.shape[:2]
+    xn, yn = geo_exp.shape[-2:]
     precomputed = precomputed / (xn * yn)
 
     return kx, ky, taper, precomputed, Dmax_array
@@ -226,9 +223,9 @@ def calc_geo_exp(
     ux = sin_theta * jnp.cos(phi_rad)
     uy = sin_theta * jnp.sin(phi_rad)
 
-    # Geometric phase terms for each element and angle: (xn, yn, len(theta), len(phi))
-    x_geo_phase = kx[:, None, None, None] * ux[None, None, :, :]
-    y_geo_phase = ky[None, :, None, None] * uy[None, None, :, :]
+    # Geometric phase terms for each element and angle: (len(theta), len(phi), xn, yn)
+    x_geo_phase = kx[None, None, :, None] * ux[:, :, None, None]
+    y_geo_phase = ky[None, None, None, :] * uy[:, :, None, None]
 
     geo_phase = x_geo_phase + y_geo_phase  # Geometric phase terms
     geo_exp = jnp.exp(1j * geo_phase)  # Complex exponential of the geometric phases
