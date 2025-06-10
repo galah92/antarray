@@ -150,7 +150,19 @@ def calc_array_params(
     if theta_rad.size < E_field.shape[2]:
         E_field = E_field[:, : theta_rad.size, :]  # Trim E_field to match theta_rad
 
-    return kx, ky, taper, geo_exp, E_field, Dmax_array
+    # Assuming E_field has shape (2, theta, phi) for a single element,
+    # we broadcast it to all elements.
+    E_field = E_field[:, None, None, :, :]
+    precomputed = E_field * geo_exp
+    # Rearrange to (theta, phi, 2, xn, yn)
+    # TODO: calculate it like that from the start
+    precomputed = precomputed.transpose(3, 4, 0, 1, 2)
+
+    # Normalize by the total number of elements.
+    xn, yn = geo_exp.shape[:2]
+    precomputed = precomputed / (xn * yn)
+
+    return kx, ky, taper, precomputed, Dmax_array
 
 
 @lru_cache(maxsize=1)
@@ -226,42 +238,6 @@ def calc_geo_exp(
     return geo_exp
 
 
-@jax.jit
-def calc_array_factor(geo_exp: ArrayLike, excitations: ArrayLike) -> Array:
-    """
-    Calculates the array factor given the element excitations.
-    Excitations should be an (xn, yn) complex NumPy array.
-    """
-    weighted_exp_terms = excitations[:, :, None, None] * geo_exp
-
-    # Sum contributions from all elements along the element dimensions (xn, yn).
-    # Shape: (len(theta), len(phi))
-    AF = jnp.sum(weighted_exp_terms, axis=(0, 1))
-
-    # Normalize by the total number of elements.
-    xn, yn = geo_exp.shape[:2]
-    AF = AF / (xn * yn)
-
-    return AF
-
-
-def run_array_factor(E_field: ArrayLike, array_factor: ArrayLike) -> Array:
-    """
-    Calculate the electric field norm from the array factor and single element fields.
-    """
-    E_total = jnp.abs(E_field * array_factor) ** 2
-
-    # E_total.shape == (2, theta, phi) or (1, theta, phi).
-    # If it's the former, E_total_theta & E_total_phi are the theta and phi components of the electric field.
-    # In both cases, we want the norm and can sum.
-    E_total = E_total.sum(axis=0)
-
-    # TODO: this is probably not needed because the power density is proportional to the magnitude of the E-field *squared*.
-    E_total = jnp.sqrt(E_total)
-
-    return E_total
-
-
 def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> Array:
     """
     Normalize the radiation pattern to dBi.
@@ -273,29 +249,37 @@ def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> Array:
 
 @jax.jit
 def rad_pattern_from_geo_and_excitations(
-    geo_exp: ArrayLike,
-    E_field: ArrayLike,
+    precomputed: ArrayLike,  # Precomputed array exponential terms, shape (2, xn, yn, theta, phi)
     Dmax_array: float,
-    excitations: ArrayLike,
+    w: ArrayLike,  # Element excitations, shape (xn, yn, n_angles)
 ) -> tuple[Array, Array]:
-    array_factor = calc_array_factor(geo_exp, excitations)
-    E_norm = run_array_factor(E_field, array_factor)
-    E_norm = normalize_rad_pattern(E_norm, Dmax_array)
-    return E_norm, excitations
+    E_total = jnp.einsum("xy,tpcxy->tpc", w, precomputed)
+
+    E_total = jnp.abs(E_total) ** 2
+
+    # E_total.shape == (theta, phi, 2) or (theta, phi, 1).
+    # If it's the former, E_total_theta & E_total_phi are the theta and phi components of the electric field.
+    # In both cases, we want the norm and can sum.
+    E_total = jnp.sum(E_total, axis=-1)
+
+    # TODO: this is probably not needed because the power density is proportional to the magnitude of the E-field *squared*.
+    E_total = jnp.sqrt(E_total)
+
+    E_norm = normalize_rad_pattern(E_total, Dmax_array)
+    return E_norm, w
 
 
 @jax.jit
 def rad_pattern_from_geo_and_phase_shifts(
     taper: ArrayLike,
-    geo_exp: ArrayLike,
-    E_field: ArrayLike,
+    precomputed: ArrayLike,  # Precomputed array exponential terms, shape (2, xn, yn, theta, phi)
     Dmax_array: float,
     phase_shifts: ArrayLike = np.array([[0]]),
 ) -> tuple[Array, Array]:
     excitations = taper * jnp.exp(-1j * phase_shifts)
 
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
-        geo_exp, E_field, Dmax_array, excitations
+        precomputed, Dmax_array, excitations
     )
     return E_norm
 
@@ -305,8 +289,7 @@ def rad_pattern_from_geo(
     kx: ArrayLike,
     ky: ArrayLike,
     taper: ArrayLike,
-    geo_exp: ArrayLike,
-    E_field: ArrayLike,
+    precomputed: ArrayLike,
     Dmax_array: ArrayLike,
     steering_rad: ArrayLike,
 ) -> tuple[Array, Array]:
@@ -320,7 +303,7 @@ def rad_pattern_from_geo(
     excitations = jnp.einsum("xy,xys->xy", taper, jnp.exp(-1j * phase_shifts))
 
     E_norm, excitations = rad_pattern_from_geo_and_excitations(
-        geo_exp, E_field, Dmax_array, excitations
+        precomputed, Dmax_array, excitations
     )
     return E_norm, excitations
 

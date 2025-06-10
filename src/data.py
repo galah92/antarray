@@ -405,7 +405,7 @@ def ff_from_phase_shifts(
     sim_dir_path: Path = DEFAULT_SIM_DIR,
     single_antenna_filename: str = DEFAULT_SINGLE_ANT_FILENAME,
 ):
-    _, _, taper, geo_exp, E_field, Dmax_array = analyze.calc_array_params(
+    _, _, taper, percomputed, Dmax_array = analyze.calc_array_params(
         array_size=(16, 16),
         spacing_mm=(60, 60),
         sim_path=sim_dir_path / single_antenna_filename,
@@ -413,8 +413,7 @@ def ff_from_phase_shifts(
 
     E_norm = analyze.rad_pattern_from_geo_and_phase_shifts(
         taper,
-        geo_exp,
-        E_field,
+        percomputed,
         Dmax_array,
         phase_shifts,
     )
