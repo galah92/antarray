@@ -8,7 +8,6 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-from jax import Array
 from jax.typing import ArrayLike
 
 logger = logging.getLogger(__name__)
@@ -183,7 +182,7 @@ def calc_phase_shifts(
     kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
     ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
     steering_rad: ArrayLike,  # Steering angles in radians, (n_angles, 2) for (theta, phi)
-) -> Array:
+) -> jax.Array:
     """
     Calculate phase shifts for each element in the array based on steering angles.
     Computes the phase shifts for each element based on the steering angles
@@ -212,7 +211,7 @@ def calc_geo_exp(
     phi_rad: ArrayLike,
     kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
     ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
-) -> Array:
+) -> jax.Array:
     """
     Calculate the geometric phase terms for the array factor calculation.
     """
@@ -233,7 +232,7 @@ def calc_geo_exp(
     return geo_exp
 
 
-def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> Array:
+def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> jax.Array:
     """
     Normalize the radiation pattern to dBi.
     """
@@ -247,7 +246,7 @@ def rad_pattern_from_geo_and_excitations(
     precomputed: ArrayLike,  # Precomputed array exponential terms, shape (2, xn, yn, theta, phi)
     Dmax_array: float,
     w: ArrayLike,  # Element excitations, shape (xn, yn, n_angles)
-) -> tuple[Array, Array]:
+) -> jax.Array:
     E_total = jnp.einsum("xy,tpcxy->tpc", w, precomputed)
 
     E_total = jnp.abs(E_total) ** 2
@@ -261,7 +260,7 @@ def rad_pattern_from_geo_and_excitations(
     E_total = jnp.sqrt(E_total)
 
     E_norm = normalize_rad_pattern(E_total, Dmax_array)
-    return E_norm, w
+    return E_norm
 
 
 @jax.jit
@@ -270,12 +269,9 @@ def rad_pattern_from_geo_and_phase_shifts(
     precomputed: ArrayLike,  # Precomputed array exponential terms, shape (2, xn, yn, theta, phi)
     Dmax_array: float,
     phase_shifts: ArrayLike = np.array([[0]]),
-) -> tuple[Array, Array]:
+) -> tuple[jax.Array, jax.Array]:
     excitations = taper * jnp.exp(-1j * phase_shifts)
-
-    E_norm, excitations = rad_pattern_from_geo_and_excitations(
-        precomputed, Dmax_array, excitations
-    )
+    E_norm = rad_pattern_from_geo_and_excitations(precomputed, Dmax_array, excitations)
     return E_norm
 
 
@@ -287,7 +283,7 @@ def rad_pattern_from_geo(
     precomputed: ArrayLike,
     Dmax_array: ArrayLike,
     steering_rad: ArrayLike,
-) -> tuple[Array, Array]:
+) -> tuple[jax.Array, jax.Array]:
     """
     Compute radiation pattern for given steering angles.
     """
@@ -297,9 +293,7 @@ def rad_pattern_from_geo(
     # If taper is a 2D array, it should match the shape of phase_shifts.
     excitations = jnp.einsum("xy,xys->xy", taper, jnp.exp(-1j * phase_shifts))
 
-    E_norm, excitations = rad_pattern_from_geo_and_excitations(
-        precomputed, Dmax_array, excitations
-    )
+    E_norm = rad_pattern_from_geo_and_excitations(precomputed, Dmax_array, excitations)
     return E_norm, excitations
 
 
