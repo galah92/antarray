@@ -368,7 +368,7 @@ def loss_fn(
     batch: data.DataBatch,
     dataset: data.Dataset,
     *,
-    use_physics_loss: bool = True,
+    use_physics_loss: bool = False,
     use_circular_mse: bool = True,
 ) -> tuple[float, dict]:
     pred_phase_shifts = model(batch.radiation_patterns)
@@ -385,7 +385,8 @@ def loss_fn(
 
     if use_circular_mse:
         circular_mse = circular_mse_fn(batch, pred_phase_shifts)
-        loss += circular_mse * 10
+        alpha = 10 if use_physics_loss else 1
+        loss += circular_mse * alpha
         metrics["circular_mse"] = circular_mse
 
     metrics["loss"] = loss
@@ -466,8 +467,8 @@ def train(
                     f"Time: {avg_time * 1000:.1f}ms/step | "
                     f"Loss: {metrics['loss']:.3f} | "
                     f"Grad Norm: {metrics['grad_norm']:.3f} | "
-                    f"Circular MSE: {metrics['circular_mse']:.3f} | "
-                    f"Physics Loss: {metrics['physics_loss']:.3f} | "
+                    f"Circular MSE: {metrics.get('circular_mse', 0):.3f} | "
+                    f"Physics Loss: {metrics.get('physics_loss', 0):.3f} | "
                 )
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")

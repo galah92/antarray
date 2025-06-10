@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from functools import lru_cache, partial
 from pathlib import Path
 from typing import Literal
@@ -13,21 +14,32 @@ from jax.typing import ArrayLike
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class OpenEMSData:
+    theta_rad: jax.Array
+    phi_rad: jax.Array
+    r: jax.Array
+    Dmax: float
+    freq_hz: jax.Array
+    E_field: jax.Array
+    E_norm: jax.Array
+
+
 @lru_cache
-def read_nf2ff(nf2ff_path: Path):
+def load_openems_nf2ff(nf2ff_path: Path):
     logger.info(f"Loading antenna pattern from {nf2ff_path}")
     with h5py.File(nf2ff_path, "r") as h5:
         mesh = h5["Mesh"]
         theta_rad, phi_rad, r = mesh["theta"][:], mesh["phi"][:], mesh["r"][:]
 
         Dmax = h5["nf2ff"].attrs["Dmax"]
-        freqs = h5["nf2ff"].attrs["Frequency"]
+        freq_hz = h5["nf2ff"].attrs["Frequency"]
 
-        E_shape = freqs.size, phi_rad.size, theta_rad.size
+        E_shape = freq_hz.size, phi_rad.size, theta_rad.size
         E_theta = np.empty(E_shape, dtype=complex)
         E_phi = np.empty(E_shape, dtype=complex)
 
-        for freq in range(freqs.size):
+        for freq in range(freq_hz.size):
             E_theta.real[freq] = h5[f"/nf2ff/E_theta/FD/f{freq}_real"][:]
             E_theta.imag[freq] = h5[f"/nf2ff/E_theta/FD/f{freq}_imag"][:]
             E_phi.real[freq] = h5[f"/nf2ff/E_phi/FD/f{freq}_real"][:]
@@ -36,22 +48,14 @@ def read_nf2ff(nf2ff_path: Path):
         # Transpose to (freq, theta, phi)
         E_theta, E_phi = E_theta.transpose(0, 2, 1), E_phi.transpose(0, 2, 1)
 
-        if freqs.size == 1:  # Squeeze the frequency dimension
+        if freq_hz.size == 1:  # Squeeze the frequency dimension
             E_theta, E_phi = np.squeeze(E_theta), np.squeeze(E_phi)
-            freqs = np.squeeze(freqs)
+            freq_hz = np.squeeze(freq_hz)
 
         E_field = np.stack([E_theta, E_phi], axis=-1)  # (freq, theta, phi, 2)
         E_norm = np.sqrt(np.abs(E_theta) ** 2 + np.abs(E_phi) ** 2)
 
-    return {
-        "theta_rad": theta_rad,
-        "phi_rad": phi_rad,
-        "r": r,
-        "Dmax": Dmax,
-        "freq": freqs,
-        "E_field": E_field,
-        "E_norm": E_norm,
-    }
+    return OpenEMSData(theta_rad, phi_rad, r, Dmax, freq_hz, E_field, E_norm)
 
 
 def get_wavenumber(freq_hz: float) -> float:
@@ -139,8 +143,8 @@ def calc_array_params(
     phi_rad: np.ndarray = np.radians(np.arange(360)),
     sim_path: Path = DEFAULT_SIM_PATH,
 ) -> tuple[np.ndarray, np.ndarray]:
-    nf2ff = read_nf2ff(sim_path)
-    E_field, Dmax, freq_hz = nf2ff["E_field"], nf2ff["Dmax"], nf2ff["freq"]
+    nf2ff = load_openems_nf2ff(sim_path)
+    E_field, Dmax, freq_hz = nf2ff.E_field, nf2ff.Dmax, nf2ff.freq_hz
     Dmax_array = Dmax * np.prod(array_size)  # Scale Dmax for the array size
 
     check_grating_lobes(freq_hz, *spacing_mm)
