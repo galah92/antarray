@@ -223,7 +223,7 @@ def train_pipeline(
     batch_size: int = 32,
     lr: float = 1e-4,
     seed: int = 42,
-) -> InterferenceCorrector:
+):
     """Main function to set up and run the training pipeline."""
     config = ArrayConfig()
     key = jax.random.key(seed)
@@ -256,18 +256,21 @@ def train_pipeline(
     sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
 
     print("Starting training...")
-    for step, batch in enumerate(sampler):
-        metrics = train_step(optimizer, batch)
+    try:
+        for step, batch in enumerate(sampler):
+            metrics = train_step(optimizer, batch)
 
-        if (step + 1) % 100 == 0:
-            print(
-                f"step {step + 1}/{n_steps}, "
-                f"MSE: {metrics.get('mse').item():.3f}, "
-                f"RMSE: {metrics.get('rmse').item():.3f}, "
-            )
+            if (step + 1) % 100 == 0:
+                print(
+                    f"step {step + 1}/{n_steps}, "
+                    f"MSE: {metrics.get('mse').item():.3f}, "
+                    f"RMSE: {metrics.get('rmse').item():.3f}, "
+                )
+    except KeyboardInterrupt:
+        print("Training interrupted by user")
+        raise
 
-    print("Training complete.")
-    return optimizer.model
+    print("Training completed")
 
 
 if __name__ == "__main__":
