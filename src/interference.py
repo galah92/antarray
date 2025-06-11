@@ -178,7 +178,9 @@ def calculate_pattern_loss(
     predicted_patterns: jax.Array, target_patterns: jax.Array
 ) -> jax.Array:
     """Calculates the loss between batches of predicted and target radiation patterns."""
-    return optax.losses.squared_error(predicted_patterns, target_patterns).mean()
+    mse = optax.losses.squared_error(predicted_patterns, target_patterns).mean()
+    rmse = jnp.sqrt(mse)
+    return mse, {"mse": mse, "rmse": rmse}
 
 
 def create_train_step_fn(
@@ -208,9 +210,10 @@ def create_train_step_fn(
 
     @nnx.jit
     def train_step_fn(optimizer: nnx.Optimizer, batch: jax.Array):
-        loss, grads = nnx.value_and_grad(loss_fn)(optimizer.model, batch)
+        model = optimizer.model
+        (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
         optimizer.update(grads)
-        return loss
+        return metrics
 
     return train_step_fn
 
@@ -254,10 +257,14 @@ def train_pipeline(
 
     print("Starting training...")
     for step, batch in enumerate(sampler):
-        loss = train_step(optimizer, batch)
+        metrics = train_step(optimizer, batch)
 
         if (step + 1) % 100 == 0:
-            print(f"step {step + 1}/{n_steps}, Loss: {loss.item():.6f}")
+            print(
+                f"step {step + 1}/{n_steps}, "
+                f"MSE: {metrics.get('mse').item():.3f}, "
+                f"RMSE: {metrics.get('rmse').item():.3f}, "
+            )
 
     print("Training complete.")
     return optimizer.model
