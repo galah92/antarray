@@ -17,8 +17,12 @@ class Config:
     PHI_POINTS: int = 360
 
 
-class BeamformingCorrector(nnx.Module):
-    """Predicts corrective weights for a 'dirty' array from a target pattern."""
+class InterferenceCorrector(nnx.Module):
+    """
+    Predicts corrective weights to counteract material interference effects,
+    mapping a desired ideal pattern to the weights needed to produce it on a
+    physically embedded array.
+    """
 
     def __init__(self, config: Config, *, rngs: nnx.Rngs):
         self.config = config
@@ -29,11 +33,11 @@ class BeamformingCorrector(nnx.Module):
         self.dense1 = nnx.Linear(input_size, 256, rngs=rngs)
         self.dense2 = nnx.Linear(256, output_size, rngs=rngs)
 
-    def __call__(self, target_pattern: jax.Array) -> jax.Array:
-        """Takes a batch of target patterns and returns a batch of complex weights."""
-        batch_size = target_pattern.shape[0]
+    def __call__(self, target_ideal_pattern: jax.Array) -> jax.Array:
+        """Takes a batch of ideal patterns and returns a batch of corrective weights."""
+        batch_size = target_ideal_pattern.shape[0]
 
-        x = target_pattern.reshape((batch_size, -1))
+        x = target_ideal_pattern.reshape((batch_size, -1))
         x = nnx.relu(self.dense1(x))
         predicted_weights_flat = self.dense2(x)
 
@@ -58,7 +62,7 @@ def get_element_positions(
 def calculate_array_factor_weights(
     k_pos_x: jax.Array, k_pos_y: jax.Array, steering_angle_rad: jax.Array
 ) -> jax.Array:
-    """Calculates ideal weights for the array factor of a single steering angle."""
+    """Calculates ideal, analytical weights for a given steering angle."""
     theta_steer, phi_steer = steering_angle_rad[0], steering_angle_rad[1]
 
     ux = jnp.sin(theta_steer) * jnp.cos(phi_steer)
@@ -69,13 +73,13 @@ def calculate_array_factor_weights(
     return jnp.exp(-1j * phase_shifts)
 
 
+@jax.jit
 def precompute_element_field_basis(
     raw_element_patterns: jax.Array, config: Config
 ) -> jax.Array:
     """
-    Precomputes the field basis for each element. This combines its intrinsic
-    pattern with its geometric phase position to form a basis from which the
-    total array pattern can be synthesized.
+    Precomputes the field basis for each element, combining its intrinsic
+    pattern with its geometric phase position.
     """
     k = config.K_WAVENUMBER
     theta_rad = jnp.radians(jnp.arange(config.THETA_POINTS))
@@ -118,42 +122,47 @@ def calculate_pattern_loss(
     predicted_patterns: jax.Array,
     target_patterns: jax.Array,
 ) -> jax.Array:
-    """
-    Calculates the loss between batches of predicted and target radiation patterns.
-    This function can be easily swapped to experiment with different loss metrics.
-    """
+    """Calculates the loss between batches of predicted and target radiation patterns."""
     return optax.losses.squared_error(predicted_patterns, target_patterns).mean()
 
 
 def create_train_step_fn(
-    clean_element_basis: jax.Array,
-    dirty_element_basis: jax.Array,
+    ideal_element_basis: jax.Array,
+    embedded_element_basis: jax.Array,
     k_pos_x: jax.Array,
     k_pos_y: jax.Array,
 ):
-    """Factory that creates the function for a single training forward pass."""
-    compute_ideal_weights = jax.vmap(
+    """Factory that creates the jitted training step function."""
+    compute_analytical_weights = jax.vmap(
         partial(calculate_array_factor_weights, k_pos_x, k_pos_y)
     )
-    synthesize_clean_pattern = jax.vmap(
-        partial(synthesize_pattern, element_field_basis=clean_element_basis)
+    synthesize_ideal_pattern = jax.vmap(
+        partial(synthesize_pattern, element_field_basis=ideal_element_basis)
     )
-    synthesize_dirty_pattern = jax.vmap(
-        partial(synthesize_pattern, element_field_basis=dirty_element_basis)
+    synthesize_embedded_pattern = jax.vmap(
+        partial(synthesize_pattern, element_field_basis=embedded_element_basis)
     )
 
-    def pipeline_fn(model: BeamformingCorrector, batch_of_angles_rad: jax.Array):
-        ideal_weights = compute_ideal_weights(batch_of_angles_rad)
-        target_patterns = synthesize_clean_pattern(ideal_weights)
+    def loss_fn(model: InterferenceCorrector, batch_of_angles_rad: jax.Array):
+        # 1. Generate the TARGET: the ideal pattern in a perfect, free-space environment.
+        analytical_weights = compute_analytical_weights(batch_of_angles_rad)
+        ideal_patterns = synthesize_ideal_pattern(analytical_weights)
 
-        predicted_weights = model(target_patterns)
-        predicted_dirty_patterns = synthesize_dirty_pattern(predicted_weights)
+        # 2. PREDICT: Give the model the ideal pattern and ask it to predict
+        #    the corrective weights needed to counteract material interference.
+        corrective_weights = model(ideal_patterns)
 
-        return calculate_pattern_loss(predicted_dirty_patterns, target_patterns)
+        # 3. SIMULATE: Synthesize the pattern that would actually be produced
+        #    by applying the corrective weights to the embedded (with interference) array.
+        embedded_patterns = synthesize_embedded_pattern(corrective_weights)
+
+        # 4. COMPARE: The loss is the difference between the desired ideal
+        #    pattern and the actual pattern produced by the compensated embedded array.
+        return calculate_pattern_loss(embedded_patterns, ideal_patterns)
 
     @nnx.jit
     def train_step_fn(optimizer: nnx.Optimizer, batch: jax.Array):
-        loss, grads = nnx.value_and_grad(pipeline_fn)(optimizer.model, batch)
+        loss, grads = nnx.value_and_grad(loss_fn)(optimizer.model, batch)
         optimizer.update(grads)
         return loss
 
@@ -165,30 +174,34 @@ def train_pipeline(
     batch_size: int = 32,
     lr: float = 1e-4,
     seed: int = 42,
-) -> BeamformingCorrector:
+) -> InterferenceCorrector:
     """Main function to set up and run the training pipeline."""
     config = Config()
     key = jax.random.key(seed)
 
     print("Performing one-time precomputation...")
-    pattern_shape = (*config.ARRAY_SIZE, config.THETA_POINTS, config.PHI_POINTS, 2)
-    raw_clean_patterns = jnp.ones(pattern_shape, dtype=jnp.complex64)
-    key, subkey = jax.random.split(key)
-    noise = jax.random.uniform(subkey, pattern_shape) + 0.5
-    raw_dirty_patterns = jnp.ones(pattern_shape, dtype=jnp.complex64) * noise
+    ideal_shape = (*config.ARRAY_SIZE, config.THETA_POINTS, config.PHI_POINTS, 1)
+    embedded_shape = (*config.ARRAY_SIZE, config.THETA_POINTS, config.PHI_POINTS, 2)
 
-    clean_element_basis = precompute_element_field_basis(raw_clean_patterns, config)
-    dirty_element_basis = precompute_element_field_basis(raw_dirty_patterns, config)
+    ideal_patterns = jnp.ones(ideal_shape, dtype=jnp.complex64)
+
+    key, subkey = jax.random.split(key)
+    embedded_patterns = (
+        jax.random.uniform(subkey, embedded_shape, dtype=jnp.complex64) + 0.5
+    )
+
+    ideal_element_basis = precompute_element_field_basis(ideal_patterns, config)
+    embedded_element_basis = precompute_element_field_basis(embedded_patterns, config)
 
     x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
     k_pos_x, k_pos_y = config.K_WAVENUMBER * x_pos, config.K_WAVENUMBER * y_pos
 
     key, model_key = jax.random.split(key)
-    model = BeamformingCorrector(config, rngs=nnx.Rngs(model_key))
+    model = InterferenceCorrector(config, rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=lr))
 
     train_step = create_train_step_fn(
-        clean_element_basis, dirty_element_basis, k_pos_x, k_pos_y
+        ideal_element_basis, embedded_element_basis, k_pos_x, k_pos_y
     )
 
     print("Starting training...")
