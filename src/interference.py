@@ -1,5 +1,3 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 import optax
@@ -58,55 +56,71 @@ def get_element_positions(
     return x_pos, y_pos
 
 
-@jax.jit
-def calculate_array_factor_weights(
-    k_pos_x: jax.Array, k_pos_y: jax.Array, steering_angle_rad: jax.Array
-) -> jax.Array:
-    """Calculates ideal, analytical weights for a given steering angle."""
-    theta_steer, phi_steer = steering_angle_rad[0], steering_angle_rad[1]
-
-    ux = jnp.sin(theta_steer) * jnp.cos(phi_steer)
-    uy = jnp.sin(theta_steer) * jnp.sin(phi_steer)
-
-    x_phase, y_phase = k_pos_x * ux, k_pos_y * uy
-    phase_shifts = x_phase[:, None] + y_phase[None, :]
-    return jnp.exp(-1j * phase_shifts)
-
-
-@jax.jit
-def precompute_element_field_basis(
-    raw_element_patterns: jax.Array, config: Config
-) -> jax.Array:
+def create_analytical_weight_calculator(config: Config) -> callable:
     """
-    Precomputes the field basis for each element, combining its intrinsic
-    pattern with its geometric phase position.
+    Factory to create a specialized function for calculating analytical weights.
+
+    This function precomputes the element position vectors (k_pos) and returns a
+    lightweight, jitted function for calculating steering weights.
     """
-    k = config.K_WAVENUMBER
-    theta_rad = jnp.radians(jnp.arange(config.THETA_POINTS))
-    phi_rad = jnp.radians(jnp.arange(config.PHI_POINTS))
     x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
-    k_pos_x = k * x_pos
-    k_pos_y = k * y_pos
+    k_pos_x = config.K_WAVENUMBER * x_pos
+    k_pos_y = config.K_WAVENUMBER * y_pos
 
-    sin_theta = jnp.sin(theta_rad)
-    ux = sin_theta[:, None] * jnp.cos(phi_rad)[None, :]
-    uy = sin_theta[:, None] * jnp.sin(phi_rad)[None, :]
+    @jax.jit
+    def calculate(steering_angle_rad: jax.Array) -> jax.Array:
+        """Calculates ideal, analytical weights for a given steering angle."""
+        theta_steer, phi_steer = steering_angle_rad[0], steering_angle_rad[1]
 
-    phase_x = ux[..., None] * k_pos_x
-    phase_y = uy[..., None] * k_pos_y
+        ux = jnp.sin(theta_steer) * jnp.cos(phi_steer)
+        uy = jnp.sin(theta_steer) * jnp.sin(phi_steer)
 
-    geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
-    geo_factor = jnp.exp(1j * geo_phase)
+        x_phase, y_phase = k_pos_x * ux, k_pos_y * uy
+        phase_shifts = x_phase[:, None] + y_phase[None, :]
+        return jnp.exp(-1j * phase_shifts)
 
-    return jnp.einsum("xytpz,tpxy->tpzxy", raw_element_patterns, geo_factor)
+    return calculate
 
 
-@jax.jit
-def synthesize_pattern(weights: jax.Array, element_field_basis: jax.Array) -> jax.Array:
-    """Synthesizes a total power pattern from weights and a precomputed field basis."""
-    total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_field_basis)
-    power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
-    return power_pattern
+def create_pattern_synthesizer(element_patterns: jax.Array, config: Config) -> callable:
+    """
+    Factory to create a specialized pattern synthesis function.
+
+    This function performs a one-time, expensive precomputation of the element
+    field basis and returns a lightweight, jitted function for synthesizing
+    patterns from that basis.
+    """
+
+    @jax.jit
+    def precompute_basis(raw_patterns):
+        k = config.K_WAVENUMBER
+        theta_rad = jnp.radians(jnp.arange(config.THETA_POINTS))
+        phi_rad = jnp.radians(jnp.arange(config.PHI_POINTS))
+        x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
+        k_pos_x = k * x_pos
+        k_pos_y = k * y_pos
+
+        sin_theta = jnp.sin(theta_rad)
+        ux = sin_theta[:, None] * jnp.cos(phi_rad)[None, :]
+        uy = sin_theta[:, None] * jnp.sin(phi_rad)[None, :]
+
+        phase_x = ux[..., None] * k_pos_x
+        phase_y = uy[..., None] * k_pos_y
+        geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
+        geo_factor = jnp.exp(1j * geo_phase)
+
+        return jnp.einsum("xytpz,tpxy->tpzxy", raw_patterns, geo_factor)
+
+    element_field_basis = precompute_basis(element_patterns)
+
+    @jax.jit
+    def synthesize(weights: jax.Array) -> jax.Array:
+        """Synthesizes a pattern from weights using the precomputed basis."""
+        total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_field_basis)
+        power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
+        return power_pattern
+
+    return synthesize
 
 
 def generate_random_angles(key: jax.Array, batch_size: int) -> jax.Array:
@@ -119,45 +133,29 @@ def generate_random_angles(key: jax.Array, batch_size: int) -> jax.Array:
 
 @jax.jit
 def calculate_pattern_loss(
-    predicted_patterns: jax.Array,
-    target_patterns: jax.Array,
+    predicted_patterns: jax.Array, target_patterns: jax.Array
 ) -> jax.Array:
     """Calculates the loss between batches of predicted and target radiation patterns."""
     return optax.losses.squared_error(predicted_patterns, target_patterns).mean()
 
 
 def create_train_step_fn(
-    ideal_element_basis: jax.Array,
-    embedded_element_basis: jax.Array,
-    k_pos_x: jax.Array,
-    k_pos_y: jax.Array,
+    synthesize_ideal_pattern: callable,
+    synthesize_embedded_pattern: callable,
+    compute_analytical_weights: callable,
 ):
     """Factory that creates the jitted training step function."""
-    compute_analytical_weights = jax.vmap(
-        partial(calculate_array_factor_weights, k_pos_x, k_pos_y)
-    )
-    synthesize_ideal_pattern = jax.vmap(
-        partial(synthesize_pattern, element_field_basis=ideal_element_basis)
-    )
-    synthesize_embedded_pattern = jax.vmap(
-        partial(synthesize_pattern, element_field_basis=embedded_element_basis)
-    )
+    vmapped_analytical_weights = jax.vmap(compute_analytical_weights)
+    vmapped_ideal_synthesizer = jax.vmap(synthesize_ideal_pattern)
+    vmapped_embedded_synthesizer = jax.vmap(synthesize_embedded_pattern)
 
     def loss_fn(model: InterferenceCorrector, batch_of_angles_rad: jax.Array):
-        # 1. Generate the TARGET: the ideal pattern in a perfect, free-space environment.
-        analytical_weights = compute_analytical_weights(batch_of_angles_rad)
-        ideal_patterns = synthesize_ideal_pattern(analytical_weights)
+        analytical_weights = vmapped_analytical_weights(batch_of_angles_rad)
+        ideal_patterns = vmapped_ideal_synthesizer(analytical_weights)
 
-        # 2. PREDICT: Give the model the ideal pattern and ask it to predict
-        #    the corrective weights needed to counteract material interference.
         corrective_weights = model(ideal_patterns)
+        embedded_patterns = vmapped_embedded_synthesizer(corrective_weights)
 
-        # 3. SIMULATE: Synthesize the pattern that would actually be produced
-        #    by applying the corrective weights to the embedded (with interference) array.
-        embedded_patterns = synthesize_embedded_pattern(corrective_weights)
-
-        # 4. COMPARE: The loss is the difference between the desired ideal
-        #    pattern and the actual pattern produced by the compensated embedded array.
         return calculate_pattern_loss(embedded_patterns, ideal_patterns)
 
     @nnx.jit
@@ -180,29 +178,29 @@ def train_pipeline(
     key = jax.random.key(seed)
 
     print("Performing one-time precomputation...")
-    ideal_shape = (*config.ARRAY_SIZE, config.THETA_POINTS, config.PHI_POINTS, 1)
-    embedded_shape = (*config.ARRAY_SIZE, config.THETA_POINTS, config.PHI_POINTS, 2)
 
+    ideal_shape = (*config.ARRAY_SIZE, config.THETA_POINTS, config.PHI_POINTS, 1)
     ideal_patterns = jnp.ones(ideal_shape, dtype=jnp.complex64)
 
     key, subkey = jax.random.split(key)
+    embedded_shape = (*config.ARRAY_SIZE, config.THETA_POINTS, config.PHI_POINTS, 2)
     embedded_patterns = (
         jax.random.uniform(subkey, embedded_shape, dtype=jnp.complex64) + 0.5
     )
 
-    ideal_element_basis = precompute_element_field_basis(ideal_patterns, config)
-    embedded_element_basis = precompute_element_field_basis(embedded_patterns, config)
+    synthesize_ideal_pattern = create_pattern_synthesizer(ideal_patterns, config)
+    synthesize_embedded_pattern = create_pattern_synthesizer(embedded_patterns, config)
+    compute_analytical_weights = create_analytical_weight_calculator(config)
 
-    x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
-    k_pos_x, k_pos_y = config.K_WAVENUMBER * x_pos, config.K_WAVENUMBER * y_pos
+    train_step = create_train_step_fn(
+        synthesize_ideal_pattern,
+        synthesize_embedded_pattern,
+        compute_analytical_weights,
+    )
 
     key, model_key = jax.random.split(key)
     model = InterferenceCorrector(config, rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=lr))
-
-    train_step = create_train_step_fn(
-        ideal_element_basis, embedded_element_basis, k_pos_x, k_pos_y
-    )
 
     print("Starting training...")
     for step in range(n_steps):
