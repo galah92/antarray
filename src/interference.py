@@ -21,10 +21,10 @@ class InterferenceCorrector(nnx.Module):
 
     def __init__(self, config: ArrayConfig, *, rngs: nnx.Rngs):
         input_size = np.prod(config.PATTERN_SHAPE)
-        self.output_shape = (*config.ARRAY_SIZE, 2)
+        self.array_shape = config.ARRAY_SIZE
 
         self.dense1 = nnx.Linear(input_size, 256, rngs=rngs)
-        self.dense2 = nnx.Linear(256, np.prod(self.output_shape), rngs=rngs)
+        self.dense2 = nnx.Linear(256, self.array_shape * 2, rngs=rngs)
 
     def __call__(self, target_ideal_pattern: jax.Array) -> jax.Array:
         """Takes a batch of ideal patterns and returns a batch of corrective weights."""
@@ -32,10 +32,12 @@ class InterferenceCorrector(nnx.Module):
 
         x = target_ideal_pattern.reshape((batch_size, -1))
         x = nnx.relu(self.dense1(x))
-        predicted_weights_flat = self.dense2(x)
+        pred_weights_flat = self.dense2(x)
 
-        real, imag = jnp.split(predicted_weights_flat, 2, axis=-1)
-        return (real + 1j * imag).reshape((batch_size, *self.output_shape))
+        pred_weights = pred_weights_flat.reshape((batch_size, -1, 2))  # (b, 64, 2)
+        complex_weights = pred_weights.view(jnp.complex64)  # (b, 64)
+        complex_weights = complex_weights.reshape((-1, *self.array_shape))  # (b, 8, 8)
+        return complex_weights
 
 
 def get_wavenumber(freq_hz: float) -> float:
