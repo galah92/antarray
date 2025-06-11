@@ -148,6 +148,28 @@ def steering_angles_sampler(
 
 
 @jax.jit
+def normalize_patterns(patterns: jax.Array) -> jax.Array:
+    """Performs peak normalization on a batch of radiation patterns."""
+    max_vals = jnp.max(patterns, axis=(1, 2), keepdims=True)
+    return patterns / max_vals
+
+
+@jax.jit
+def convert_to_db(patterns: jax.Array, floor_db: float = -60) -> jax.Array:
+    """
+    Converts a batch of normalized linear power patterns to a dB scale.
+    The patterns are clipped at a floor to avoid log(0). Using a dB floor
+    is more physically interpretable than clipping with an arbitrary epsilon.
+    """
+    # Convert the user-friendly dB floor to a non-intuitive linear epsilon.
+    linear_floor = 10.0 ** (floor_db / 10.0)
+    # Clip the patterns at the floor and then convert to dB scale.
+    clipped_patterns = jnp.maximum(patterns, linear_floor)
+    patterns_db = 10.0 * jnp.log10(clipped_patterns)
+    return patterns_db
+
+
+@jax.jit
 def calculate_pattern_loss(
     predicted_patterns: jax.Array, target_patterns: jax.Array
 ) -> jax.Array:
@@ -168,11 +190,17 @@ def create_train_step_fn(
     def loss_fn(model: InterferenceCorrector, batch_of_angles_rad: jax.Array):
         analytical_weights = vmapped_analytical_weights(batch_of_angles_rad)
         ideal_patterns = vmapped_ideal_synthesizer(analytical_weights)
+        normalized_ideal_patterns = normalize_patterns(ideal_patterns)
 
-        corrective_weights = model(ideal_patterns)
+        corrective_weights = model(normalized_ideal_patterns)
+
         embedded_patterns = vmapped_embedded_synthesizer(corrective_weights)
+        normalized_embedded_patterns = normalize_patterns(embedded_patterns)
 
-        return calculate_pattern_loss(embedded_patterns, ideal_patterns)
+        ideal_patterns_db = convert_to_db(normalized_ideal_patterns)
+        embedded_patterns_db = convert_to_db(normalized_embedded_patterns)
+
+        return calculate_pattern_loss(embedded_patterns_db, ideal_patterns_db)
 
     @nnx.jit
     def train_step_fn(optimizer: nnx.Optimizer, batch: jax.Array):
