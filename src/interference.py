@@ -9,8 +9,7 @@ class ArrayConfig:
     ARRAY_SIZE: tuple[int, int] = (8, 8)
     SPACING_MM: tuple[float, float] = (60.0, 60.0)
     FREQUENCY_HZ: float = 2.45e9
-    THETA_POINTS: int = 180
-    PHI_POINTS: int = 360
+    PATTERN_SHAPE: tuple[int, int] = (180, 360)  # (theta, phi)
 
 
 class InterferenceCorrector(nnx.Module):
@@ -21,8 +20,8 @@ class InterferenceCorrector(nnx.Module):
     """
 
     def __init__(self, config: ArrayConfig, *, rngs: nnx.Rngs):
+        input_size = np.prod(config.PATTERN_SHAPE)
         self.output_shape = (*config.ARRAY_SIZE, 2)
-        input_size = config.THETA_POINTS * config.PHI_POINTS
 
         self.dense1 = nnx.Linear(input_size, 256, rngs=rngs)
         self.dense2 = nnx.Linear(256, np.prod(self.output_shape), rngs=rngs)
@@ -102,10 +101,12 @@ def create_pattern_synthesizer(
     @jax.jit
     def precompute_basis(raw_patterns):
         k = get_wavenumber(config.FREQUENCY_HZ)
-        theta_rad = jnp.radians(jnp.arange(config.THETA_POINTS))
-        phi_rad = jnp.radians(jnp.arange(config.PHI_POINTS))
         x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
         k_pos_x, k_pos_y = k * x_pos, k * y_pos
+
+        theta_size, phi_size = raw_patterns.shape[2:4]
+        theta_rad = jnp.radians(jnp.arange(theta_size))
+        phi_rad = jnp.radians(jnp.arange(phi_size))
 
         sin_theta = jnp.sin(theta_rad)
         ux = sin_theta[:, None] * jnp.cos(phi_rad)[None, :]
@@ -194,11 +195,11 @@ def train_pipeline(
 
     print("Performing one-time precomputation...")
 
-    ideal_shape = (*config.ARRAY_SIZE, config.THETA_POINTS, config.PHI_POINTS, 1)
+    ideal_shape = (*config.ARRAY_SIZE, *config.PATTERN_SHAPE, 1)
     ideal_patterns = jnp.ones(ideal_shape, dtype=jnp.complex64)
 
     key, subkey = jax.random.split(key)
-    embedded_shape = (*config.ARRAY_SIZE, config.THETA_POINTS, config.PHI_POINTS, 2)
+    embedded_shape = (*config.ARRAY_SIZE, *config.PATTERN_SHAPE, 2)
     embedded_patterns = (
         jax.random.uniform(subkey, embedded_shape, dtype=jnp.complex64) + 0.5
     )
