@@ -1,16 +1,14 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 from flax import nnx
 
 
-class Config:
+class ArrayConfig:
     ARRAY_SIZE: tuple[int, int] = (8, 8)
     SPACING_MM: tuple[float, float] = (60.0, 60.0)
-    FREQUENCY: float = 2.45e9
-    C: float = 299792458.0
-    WAVELENGTH: float = C / FREQUENCY
-    K_WAVENUMBER: float = 2 * jnp.pi / WAVELENGTH
+    FREQUENCY_HZ: float = 2.45e9
     THETA_POINTS: int = 180
     PHI_POINTS: int = 360
 
@@ -22,14 +20,12 @@ class InterferenceCorrector(nnx.Module):
     physically embedded array.
     """
 
-    def __init__(self, config: Config, *, rngs: nnx.Rngs):
-        self.config = config
-        xn, yn = self.config.ARRAY_SIZE
-        output_size = xn * yn * 2
+    def __init__(self, config: ArrayConfig, *, rngs: nnx.Rngs):
+        self.output_shape = (*config.ARRAY_SIZE, 2)
         input_size = config.THETA_POINTS * config.PHI_POINTS
 
         self.dense1 = nnx.Linear(input_size, 256, rngs=rngs)
-        self.dense2 = nnx.Linear(256, output_size, rngs=rngs)
+        self.dense2 = nnx.Linear(256, np.prod(self.output_shape), rngs=rngs)
 
     def __call__(self, target_ideal_pattern: jax.Array) -> jax.Array:
         """Takes a batch of ideal patterns and returns a batch of corrective weights."""
@@ -39,10 +35,20 @@ class InterferenceCorrector(nnx.Module):
         x = nnx.relu(self.dense1(x))
         predicted_weights_flat = self.dense2(x)
 
-        real_part, imag_part = jnp.split(predicted_weights_flat, 2, axis=-1)
-        return (real_part + 1j * imag_part).reshape(
-            (batch_size, *self.config.ARRAY_SIZE)
-        )
+        real, imag = jnp.split(predicted_weights_flat, 2, axis=-1)
+        return (real + 1j * imag).reshape((batch_size, *self.output_shape))
+
+
+def get_wavenumber(freq_hz: float) -> float:
+    """
+    Calculate the wavenumber for a given frequency in Hz.
+    The wavenumber is defined as k = 2π/λ, where λ is the wavelength.
+    The wavelength is calculated as λ = c/f, where c is the speed of light.
+    """
+    c = 299792458  # Speed of light in m/s
+    wavelength = c / freq_hz  # Wavelength in meters
+    k = 2 * np.pi / wavelength  # Wavenumber in radians/meter
+    return k
 
 
 def get_element_positions(
@@ -56,16 +62,16 @@ def get_element_positions(
     return x_pos, y_pos
 
 
-def create_analytical_weight_calculator(config: Config) -> callable:
+def create_analytical_weight_calculator(config: ArrayConfig) -> callable:
     """
     Factory to create a specialized function for calculating analytical weights.
 
     This function precomputes the element position vectors (k_pos) and returns a
     lightweight, jitted function for calculating steering weights.
     """
+    k = get_wavenumber(config.FREQUENCY_HZ)
     x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
-    k_pos_x = config.K_WAVENUMBER * x_pos
-    k_pos_y = config.K_WAVENUMBER * y_pos
+    k_pos_x, k_pos_y = k * x_pos, k * y_pos
 
     @jax.jit
     def calculate(steering_angle_rad: jax.Array) -> jax.Array:
@@ -82,7 +88,9 @@ def create_analytical_weight_calculator(config: Config) -> callable:
     return calculate
 
 
-def create_pattern_synthesizer(element_patterns: jax.Array, config: Config) -> callable:
+def create_pattern_synthesizer(
+    element_patterns: jax.Array, config: ArrayConfig
+) -> callable:
     """
     Factory to create a specialized pattern synthesis function.
 
@@ -93,19 +101,17 @@ def create_pattern_synthesizer(element_patterns: jax.Array, config: Config) -> c
 
     @jax.jit
     def precompute_basis(raw_patterns):
-        k = config.K_WAVENUMBER
+        k = get_wavenumber(config.FREQUENCY_HZ)
         theta_rad = jnp.radians(jnp.arange(config.THETA_POINTS))
         phi_rad = jnp.radians(jnp.arange(config.PHI_POINTS))
         x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
-        k_pos_x = k * x_pos
-        k_pos_y = k * y_pos
+        k_pos_x, k_pos_y = k * x_pos, k * y_pos
 
         sin_theta = jnp.sin(theta_rad)
         ux = sin_theta[:, None] * jnp.cos(phi_rad)[None, :]
         uy = sin_theta[:, None] * jnp.sin(phi_rad)[None, :]
 
-        phase_x = ux[..., None] * k_pos_x
-        phase_y = uy[..., None] * k_pos_y
+        phase_x, phase_y = ux[..., None] * k_pos_x, uy[..., None] * k_pos_y
         geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
         geo_factor = jnp.exp(1j * geo_phase)
 
@@ -183,7 +189,7 @@ def train_pipeline(
     seed: int = 42,
 ) -> InterferenceCorrector:
     """Main function to set up and run the training pipeline."""
-    config = Config()
+    config = ArrayConfig()
     key = jax.random.key(seed)
 
     print("Performing one-time precomputation...")
