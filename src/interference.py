@@ -1,3 +1,5 @@
+from collections.abc import Iterable
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -24,7 +26,7 @@ class InterferenceCorrector(nnx.Module):
         self.array_shape = config.ARRAY_SIZE
 
         self.dense1 = nnx.Linear(input_size, 256, rngs=rngs)
-        self.dense2 = nnx.Linear(256, self.array_shape * 2, rngs=rngs)
+        self.dense2 = nnx.Linear(256, np.prod(self.array_shape) * 2, rngs=rngs)
 
     def __call__(self, target_ideal_pattern: jax.Array) -> jax.Array:
         """Takes a batch of ideal patterns and returns a batch of corrective weights."""
@@ -136,7 +138,7 @@ def steering_angles_sampler(
     key: jax.Array,
     batch_size: int,
     limit: int | None = None,
-) -> iter[jax.Array]:
+) -> Iterable[jax.Array]:
     """
     Creates a Python generator that yields batches of random steering angles.
     """
@@ -230,9 +232,8 @@ def train_pipeline(
 
     key, subkey = jax.random.split(key)
     embedded_shape = (*config.ARRAY_SIZE, *config.PATTERN_SHAPE, 2)
-    embedded_patterns = (
-        jax.random.uniform(subkey, embedded_shape, dtype=jnp.complex64) + 0.5
-    )
+    embedded_patterns = jnp.ones(embedded_shape, dtype=jnp.complex64)
+    embedded_patterns *= jax.random.uniform(subkey, embedded_patterns.shape) * 0.5
 
     synthesize_ideal_pattern = create_pattern_synthesizer(ideal_patterns, config)
     synthesize_embedded_pattern = create_pattern_synthesizer(embedded_patterns, config)
