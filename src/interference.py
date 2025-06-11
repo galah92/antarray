@@ -123,12 +123,21 @@ def create_pattern_synthesizer(element_patterns: jax.Array, config: Config) -> c
     return synthesize
 
 
-def generate_random_angles(key: jax.Array, batch_size: int) -> jax.Array:
-    """Generates a batch of random (theta, phi) angles in radians."""
-    key_theta, key_phi = jax.random.split(key)
-    thetas = jax.random.uniform(key_theta, shape=(batch_size,), maxval=jnp.pi / 2)
-    phis = jax.random.uniform(key_phi, shape=(batch_size,), maxval=2 * jnp.pi)
-    return jnp.stack([thetas, phis], axis=-1)
+def steering_angles_sampler(
+    key: jax.Array,
+    batch_size: int,
+    limit: int | None = None,
+) -> iter[jax.Array]:
+    """
+    Creates a Python generator that yields batches of random steering angles.
+    """
+    if limit is None:
+        limit = float("inf")
+    for _ in range(limit):
+        key, theta_key, phi_key = jax.random.split(key, num=3)
+        thetas = jax.random.uniform(theta_key, shape=(batch_size,), maxval=jnp.pi / 2)
+        phis = jax.random.uniform(phi_key, shape=(batch_size,), maxval=2 * jnp.pi)
+        yield jnp.stack([thetas, phis], axis=-1)
 
 
 @jax.jit
@@ -202,14 +211,15 @@ def train_pipeline(
     model = InterferenceCorrector(config, rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=lr))
 
+    key, data_key = jax.random.split(key)
+    sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
+
     print("Starting training...")
-    for step in range(n_steps):
-        key, step_key = jax.random.split(key)
-        batch_of_angles = generate_random_angles(step_key, batch_size)
-        loss = train_step(optimizer, batch_of_angles)
+    for step, batch in enumerate(sampler):
+        loss = train_step(optimizer, batch)
 
         if (step + 1) % 100 == 0:
-            print(f"step {step + 1}/{n_steps}, Loss: {loss.item():.3f}")
+            print(f"step {step + 1}/{n_steps}, Loss: {loss.item():.6f}")
 
     print("Training complete.")
     return optimizer.model
