@@ -302,6 +302,7 @@ def create_train_step_fn(
 
     def loss_fn(model: nnx.Module, batch_of_angles_rad: jax.Array):
         analytical_weights = vmapped_analytical_weights(batch_of_angles_rad)
+
         ideal_patterns = vmapped_ideal_synthesizer(analytical_weights)
         normalized_ideal_patterns = normalize_patterns(ideal_patterns)
 
@@ -344,7 +345,8 @@ def train_pipeline(
 
     train_step = create_train_step_fn(
         create_pattern_synthesizer(ideal_patterns, config),
-        create_pattern_synthesizer(embedded_patterns, config),
+        create_pattern_synthesizer(ideal_patterns, config),
+        # create_pattern_synthesizer(embedded_patterns, config),
         create_analytical_weight_calculator(config),
     )
 
