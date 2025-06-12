@@ -245,8 +245,8 @@ def create_train_step_fn(
 
 def train_pipeline(
     n_steps: int = 10_000,
-    batch_size: int = 32,
-    lr: float = 1e-4,
+    batch_size: int = 512,
+    lr: float = 1e-3,
     seed: int = 42,
 ):
     """Main function to set up and run the training pipeline."""
