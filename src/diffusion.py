@@ -1,5 +1,8 @@
+import logging
+import sys
 from collections.abc import Iterable, Sequence
 from functools import partial
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -7,6 +10,8 @@ import numpy as np
 import optax
 from flax import nnx
 from jax.experimental.compilation_cache import compilation_cache as cc
+
+logger = logging.getLogger(__name__)
 
 # Persistent Jax compilation cache: https://docs.jax.dev/en/latest/persistent_compilation_cache.html
 cc.set_cache_dir("/tmp/jax_cache")
@@ -494,7 +499,9 @@ def create_train_step_fn(
             (predicted_patterns - target_patterns) ** 2
         )  # Already real
 
-        total_loss = denoising_loss + 0.1 * physics_loss  # Weight physics loss
+        # Adaptive physics weight - start smaller and increase over time
+        physics_weight = 0.05  # Reduced from 0.1
+        total_loss = denoising_loss + physics_weight * physics_loss
 
         metrics = {
             "denoising_loss": denoising_loss,
@@ -583,7 +590,7 @@ def train_diffusion_pipeline(
     config = ArrayConfig()
     key = jax.random.key(seed)
 
-    print("Setting up diffusion training pipeline")
+    logger.info("Setting up diffusion training pipeline")
 
     # Create element patterns and synthesizers
     key, ideal_key, embedded_key = jax.random.split(key, 3)
@@ -599,7 +606,19 @@ def train_diffusion_pipeline(
 
     key, model_key = jax.random.split(key)
     model = DenoisingUNet(base_channels=64, rngs=nnx.Rngs(model_key))
-    optimizer = nnx.Optimizer(model, optax.adamw(learning_rate=lr, weight_decay=1e-6))
+
+    # Use a learning rate schedule for better stability
+    lr_schedule = optax.warmup_cosine_decay_schedule(
+        init_value=lr * 0.1,  # Start with 10% of target LR
+        peak_value=lr,
+        warmup_steps=500,
+        decay_steps=n_steps - 500,
+        end_value=lr * 0.01,  # End with 1% of target LR
+    )
+
+    optimizer = nnx.Optimizer(
+        model, optax.adamw(learning_rate=lr_schedule, weight_decay=1e-6)
+    )
 
     # Create training step
     train_step = create_train_step_fn(
@@ -613,14 +632,14 @@ def train_diffusion_pipeline(
     key, data_key = jax.random.split(key)
     sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
 
-    print("Starting diffusion training")
+    logger.info("Starting diffusion training")
     try:
         for step, batch in enumerate(sampler):
             key, step_key = jax.random.split(key)
             metrics = train_step(optimizer, batch, step_key)
 
             if (step + 1) % 100 == 0:
-                print(
+                logger.info(
                     f"step {step + 1}/{n_steps}, "
                     f"grad_norm: {metrics['grad_norm'].item():.3f}, "
                     f"total_loss: {metrics['total_loss'].item():.3f}, "
@@ -628,12 +647,25 @@ def train_diffusion_pipeline(
                     f"physics_loss: {metrics['physics_loss'].item():.3f}"
                 )
     except KeyboardInterrupt:
-        print("Training interrupted by user")
+        logger.info("Training interrupted by user")
 
-    print("Diffusion training completed")
+    logger.info("Diffusion training completed")
 
     return model, scheduler, synthesize_embedded
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="{asctime} {levelname} {filename}:{lineno} {message}",
+        style="{",
+        handlers=[
+            logging.FileHandler(Path("app.log"), mode="w+"),  # Overwrite log
+            logging.StreamHandler(),
+        ],
+        force=True,  # https://github.com/google/orbax/issues/1248
+    )
+    logging.getLogger("absl").setLevel(logging.CRITICAL)  # Suppress absl logging
+
+    logger.info(f"uv run {' '.join(sys.argv)}")  # Log command line args
     train_diffusion_pipeline()
