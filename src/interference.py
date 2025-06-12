@@ -1,44 +1,125 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from functools import partial
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 from flax import nnx
+from jax.experimental.compilation_cache import compilation_cache as cc
+
+# Persistent Jax compilation cache: https://docs.jax.dev/en/latest/persistent_compilation_cache.html
+cc.set_cache_dir("/tmp/jax_cache")
 
 
 class ArrayConfig:
-    ARRAY_SIZE: tuple[int, int] = (8, 8)
+    ARRAY_SIZE: tuple[int, int] = (16, 16)
     SPACING_MM: tuple[float, float] = (60.0, 60.0)
     FREQUENCY_HZ: float = 2.45e9
     PATTERN_SHAPE: tuple[int, int] = (180, 360)  # (theta, phi)
 
 
+def pad_batch(
+    image: jax.Array,
+    pad_width: Sequence[int | Sequence[int]],
+    mode: str = "constant",
+) -> jax.Array:
+    pad_width = np.asarray(pad_width, dtype=np.int32)
+    if pad_width.shape[0] == 3:  # Add batch dimension
+        pad_width = np.pad(pad_width, ((1, 0), (0, 0)))
+    return jnp.pad(image, pad_width=pad_width, mode=mode)
+
+
+class ConvBlock(nnx.Module):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        kernel_size: int | Sequence[int],
+        padding: str = "SAME",
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.conv1 = nnx.Conv(
+            in_features,
+            in_features,
+            kernel_size=kernel_size,
+            padding=padding,
+            use_bias=False,
+            rngs=rngs,
+        )
+        self.norm1 = nnx.BatchNorm(in_features, rngs=rngs)
+        self.conv2 = nnx.Conv(
+            in_features,
+            out_features,
+            kernel_size=kernel_size,
+            padding=padding,
+            use_bias=False,
+            rngs=rngs,
+        )
+        self.norm2 = nnx.BatchNorm(out_features, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        x = self.conv1(x)
+        x = self.norm1(x)
+        x = nnx.relu(x)
+        x = self.conv2(x)
+        x = self.norm2(x)
+        x = nnx.relu(x)
+        return x
+
+
+def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMethod):
+    shape = (image.shape[0], *shape)  # Add batch dimension
+    return jax.image.resize(image, shape=shape, method=method)
+
+
 class InterferenceCorrector(nnx.Module):
-    """
-    Predicts corrective weights to counteract material interference effects,
-    mapping a desired ideal pattern to the weights needed to produce it on a
-    physically embedded array.
-    """
+    def __init__(
+        self,
+        *,
+        enc_pad="SAME",
+        rngs: nnx.Rngs,
+    ):
+        self.pad = nnx.Sequential(
+            # Simmetry around the zenith and nadir: (192, 360, 1)
+            partial(pad_batch, pad_width=((6, 6), (0, 0), (0, 0)), mode="reflect"),
+            # Wrap around the azimuth: (192, 384, 1)
+            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
+        )
+        self.encoder = nnx.Sequential(
+            ConvBlock(1, 16, (3, 3), padding=enc_pad, rngs=rngs),  # (192, 384, 16)
+            partial(nnx.max_pool, window_shape=(3, 6), strides=(3, 6)),  # (64, 64, 16)
+            ConvBlock(16, 32, (3, 3), padding=enc_pad, rngs=rngs),  # (64, 64, 32)
+            partial(nnx.max_pool, window_shape=(4, 4), strides=(4, 4)),  # (16, 16, 32)
+            ConvBlock(32, 64, (3, 3), padding=enc_pad, rngs=rngs),  # (16, 16, 64)
+            partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2)),  # (8, 8, 64)
+            ConvBlock(64, 128, (3, 3), padding=enc_pad, rngs=rngs),  # (8, 8, 128)
+            partial(nnx.max_pool, window_shape=(2, 2), strides=(2, 2)),  # (4, 4, 128)
+        )
+        self.bottleneck = nnx.Sequential(
+            ConvBlock(128, 128, (3, 3), rngs=rngs),  # (4, 4, 128)
+            ConvBlock(128, 128, (3, 3), rngs=rngs),  # (4, 4, 128)
+            ConvBlock(128, 128, (3, 3), rngs=rngs),  # (4, 4, 128)
+        )
+        self.decoder = nnx.Sequential(
+            ConvBlock(128, 64, (3, 3), rngs=rngs),  # (4, 4, 64)
+            partial(resize_batch, shape=(8, 8, 64), method="bilinear"),
+            ConvBlock(64, 32, (3, 3), rngs=rngs),  # (8, 8, 32)
+            partial(resize_batch, shape=(16, 16, 32), method="bilinear"),
+            ConvBlock(32, 16, (3, 3), rngs=rngs),  # (16, 16, 16)
+            nnx.Conv(16, 1, (1, 1), padding="SAME", rngs=rngs),  # (16, 16, 1)
+        )
 
-    def __init__(self, config: ArrayConfig, *, rngs: nnx.Rngs):
-        input_size = np.prod(config.PATTERN_SHAPE)
-        self.array_shape = config.ARRAY_SIZE
-
-        self.dense1 = nnx.Linear(input_size, 256, rngs=rngs)
-        self.dense2 = nnx.Linear(256, np.prod(self.array_shape) * 2, rngs=rngs)
-
-    def __call__(self, target_ideal_pattern: jax.Array) -> jax.Array:
-        """Takes a batch of ideal patterns and returns a batch of corrective weights."""
-        batch_size = target_ideal_pattern.shape[0]
-
-        x = target_ideal_pattern.reshape((batch_size, -1))
-        x = nnx.relu(self.dense1(x))
-        pred_weights_flat = self.dense2(x)
-
-        pred_weights = pred_weights_flat.reshape((batch_size, -1, 2))
-        complex_weights = pred_weights.view(jnp.complex64)
-        return complex_weights.reshape((-1, *self.array_shape))
+    def __call__(self, x: jax.Array) -> jax.Array:
+        x = x[..., None]  # Add channel dimension
+        x = self.pad(x)
+        x = self.encoder(x)
+        x = self.bottleneck(x)
+        x = self.decoder(x)
+        x = x.squeeze(-1)  # Remove channel dimension
+        x = jnp.exp(-1j * x)  # Convert phase shifts to complex weights
+        return x
 
 
 def get_wavenumber(freq_hz: float) -> float:
@@ -218,7 +299,7 @@ def create_train_step_fn(
     vmapped_ideal_synthesizer = jax.vmap(synthesize_ideal_pattern)
     vmapped_embedded_synthesizer = jax.vmap(synthesize_embedded_pattern)
 
-    def loss_fn(model: InterferenceCorrector, batch_of_angles_rad: jax.Array):
+    def loss_fn(model: nnx.Module, batch_of_angles_rad: jax.Array):
         analytical_weights = vmapped_analytical_weights(batch_of_angles_rad)
         ideal_patterns = vmapped_ideal_synthesizer(analytical_weights)
         normalized_ideal_patterns = normalize_patterns(ideal_patterns)
@@ -266,7 +347,7 @@ def train_pipeline(
     )
 
     key, model_key = jax.random.split(key)
-    model = InterferenceCorrector(config, rngs=nnx.Rngs(model_key))
+    model = InterferenceCorrector(rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=lr))
 
     key, data_key = jax.random.split(key)
