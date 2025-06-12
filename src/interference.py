@@ -36,22 +36,16 @@ class InterferenceCorrector(nnx.Module):
         x = nnx.relu(self.dense1(x))
         pred_weights_flat = self.dense2(x)
 
-        pred_weights = pred_weights_flat.reshape((batch_size, -1, 2))  # (b, 64, 2)
-        complex_weights = pred_weights.view(jnp.complex64)  # (b, 64)
-        complex_weights = complex_weights.reshape((-1, *self.array_shape))  # (b, 8, 8)
-        return complex_weights
+        pred_weights = pred_weights_flat.reshape((batch_size, -1, 2))
+        complex_weights = pred_weights.view(jnp.complex64)
+        return complex_weights.reshape((-1, *self.array_shape))
 
 
 def get_wavenumber(freq_hz: float) -> float:
-    """
-    Calculate the wavenumber for a given frequency in Hz.
-    The wavenumber is defined as k = 2π/λ, where λ is the wavelength.
-    The wavelength is calculated as λ = c/f, where c is the speed of light.
-    """
-    c = 299792458  # Speed of light in m/s
-    wavelength = c / freq_hz  # Wavelength in meters
-    k = 2 * np.pi / wavelength  # Wavenumber in radians/meter
-    return k
+    """Calculate the wavenumber for a given frequency in Hz."""
+    c = 299792458
+    wavelength = c / freq_hz
+    return 2 * np.pi / wavelength
 
 
 def get_element_positions(
@@ -66,12 +60,7 @@ def get_element_positions(
 
 
 def create_analytical_weight_calculator(config: ArrayConfig) -> callable:
-    """
-    Factory to create a specialized function for calculating analytical weights.
-
-    This function precomputes the element position vectors (k_pos) and returns a
-    lightweight, jitted function for calculating steering weights.
-    """
+    """Factory to create a specialized function for calculating analytical weights."""
     k = get_wavenumber(config.FREQUENCY_HZ)
     x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
     k_pos_x, k_pos_y = k * x_pos, k * y_pos
@@ -95,13 +84,7 @@ def create_analytical_weight_calculator(config: ArrayConfig) -> callable:
 def create_pattern_synthesizer(
     element_patterns: jax.Array, config: ArrayConfig
 ) -> callable:
-    """
-    Factory to create a specialized pattern synthesis function.
-
-    This function performs a one-time, expensive precomputation of the element
-    field basis and returns a lightweight, jitted function for synthesizing
-    patterns from that basis.
-    """
+    """Factory to create a specialized pattern synthesis function."""
 
     @jax.jit
     def precompute_basis(raw_patterns):
@@ -109,7 +92,7 @@ def create_pattern_synthesizer(
         x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
         k_pos_x, k_pos_y = k * x_pos, k * y_pos
 
-        theta_size, phi_size = raw_patterns.shape[2:4]
+        theta_size, phi_size = config.PATTERN_SHAPE
         theta_rad = jnp.radians(jnp.arange(theta_size))
         phi_rad = jnp.radians(jnp.arange(phi_size))
 
@@ -135,6 +118,51 @@ def create_pattern_synthesizer(
     return synthesize
 
 
+def create_element_patterns(
+    config: ArrayConfig, key: jax.Array, is_embedded: bool
+) -> jax.Array:
+    """Simulates the element patterns for either an ideal or embedded array."""
+    theta_size, phi_size = config.PATTERN_SHAPE
+    theta = jnp.radians(jnp.arange(theta_size))
+
+    # --- MINIMAL CHANGE IS HERE ---
+    # Start with a base cosine model for the field amplitude.
+    base_field_amp = jnp.cos(theta)
+    # A realistic element on a ground plane has no back-lobe.
+    # Set field to zero for theta > 90 degrees.
+    base_field_amp = base_field_amp.at[theta > np.pi / 2].set(0)
+
+    # Expand to a full 2D pattern (omnidirectional in phi)
+    base_field_amp = base_field_amp[:, None] * jnp.ones((theta_size, phi_size))
+
+    if not is_embedded:
+        ideal_field = base_field_amp[None, None, :, :, None]
+        ideal_field = jnp.tile(ideal_field, (*config.ARRAY_SIZE, 1, 1, 1))
+        return ideal_field.astype(jnp.complex64)
+
+    # --- Embedded Case: Simulate distortion ---
+    num_pols = 2
+    final_shape = (*config.ARRAY_SIZE, *config.PATTERN_SHAPE, num_pols)
+    low_res_shape = (*config.ARRAY_SIZE, 10, 20, num_pols)
+
+    key, amp_key, phase_key = jax.random.split(key, 3)
+
+    amp_dist_low_res = jax.random.uniform(
+        amp_key, low_res_shape, minval=0.5, maxval=1.5
+    )
+    amp_distortion = jax.image.resize(amp_dist_low_res, final_shape, method="bicubic")
+
+    phase_dist_low_res = jax.random.uniform(phase_key, low_res_shape, maxval=2 * np.pi)
+    phase_distortion = jax.image.resize(
+        phase_dist_low_res, final_shape, method="bicubic"
+    )
+
+    distorted_amplitude = base_field_amp[None, None, ..., None] * amp_distortion
+    distorted_field = distorted_amplitude * jnp.exp(1j * phase_distortion)
+
+    return distorted_field.astype(jnp.complex64)
+
+
 def steering_angles_sampler(
     key: jax.Array,
     batch_size: int,
@@ -146,40 +174,35 @@ def steering_angles_sampler(
     """
     if limit is None:
         limit = float("inf")
-    for _ in range(limit):
+    i = 0
+    while i < limit:
         key, theta_key, phi_key = jax.random.split(key, num=3)
         thetas = jax.random.uniform(theta_key, shape=(batch_size,), maxval=theta_end)
         phis = jax.random.uniform(phi_key, shape=(batch_size,), maxval=2 * jnp.pi)
         yield jnp.stack([thetas, phis], axis=-1)
+        i += 1
 
 
 @jax.jit
 def normalize_patterns(patterns: jax.Array) -> jax.Array:
     """Performs peak normalization on a batch of radiation patterns."""
     max_vals = jnp.max(patterns, axis=(1, 2), keepdims=True)
-    return patterns / max_vals
+    return patterns / (max_vals + 1e-8)
 
 
 @jax.jit
 def convert_to_db(patterns: jax.Array, floor_db: float = -60) -> jax.Array:
-    """
-    Converts a batch of normalized linear power patterns to a dB scale.
-    The patterns are clipped at a floor to avoid log(0). Using a dB floor
-    is more physically interpretable than clipping with an arbitrary epsilon.
-    """
-    # Convert the user-friendly dB floor to a non-intuitive linear epsilon.
+    """Converts a batch of normalized linear power patterns to a dB scale."""
     linear_floor = 10.0 ** (floor_db / 10.0)
-    # Clip the patterns at the floor and then convert to dB scale.
     clipped_patterns = jnp.maximum(patterns, linear_floor)
-    patterns_db = 10.0 * jnp.log10(clipped_patterns)
-    return patterns_db
+    return 10.0 * jnp.log10(clipped_patterns)
 
 
 @jax.jit
 def calculate_pattern_loss(
     predicted_patterns: jax.Array, target_patterns: jax.Array
-) -> jax.Array:
-    """Calculates the loss between batches of predicted and target radiation patterns."""
+) -> tuple[jax.Array, dict]:
+    """Calculates the loss and metrics between predicted and target patterns."""
     mse = optax.losses.squared_error(predicted_patterns, target_patterns).mean()
     rmse = jnp.sqrt(mse)
     return mse, {"mse": mse, "rmse": rmse}
@@ -230,24 +253,16 @@ def train_pipeline(
     config = ArrayConfig()
     key = jax.random.key(seed)
 
-    print("Performing one-time precomputation...")
+    print("Performing one-time precomputation")
 
-    ideal_shape = (*config.ARRAY_SIZE, *config.PATTERN_SHAPE, 1)
-    ideal_patterns = jnp.ones(ideal_shape, dtype=jnp.complex64)
-
-    key, subkey = jax.random.split(key)
-    embedded_shape = (*config.ARRAY_SIZE, *config.PATTERN_SHAPE, 2)
-    embedded_patterns = jnp.ones(embedded_shape, dtype=jnp.complex64)
-    embedded_patterns *= jax.random.uniform(subkey, embedded_patterns.shape) * 0.5
-
-    synthesize_ideal_pattern = create_pattern_synthesizer(ideal_patterns, config)
-    synthesize_embedded_pattern = create_pattern_synthesizer(embedded_patterns, config)
-    compute_analytical_weights = create_analytical_weight_calculator(config)
+    key, ideal_key, embedded_key = jax.random.split(key, 3)
+    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
+    embedded_patterns = create_element_patterns(config, embedded_key, is_embedded=True)
 
     train_step = create_train_step_fn(
-        synthesize_ideal_pattern,
-        synthesize_embedded_pattern,
-        compute_analytical_weights,
+        create_pattern_synthesizer(ideal_patterns, config),
+        create_pattern_synthesizer(embedded_patterns, config),
+        create_analytical_weight_calculator(config),
     )
 
     key, model_key = jax.random.split(key)
@@ -257,7 +272,7 @@ def train_pipeline(
     key, data_key = jax.random.split(key)
     sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
 
-    print("Starting training...")
+    print("Starting training")
     try:
         for step, batch in enumerate(sampler):
             metrics = train_step(optimizer, batch)
@@ -265,15 +280,14 @@ def train_pipeline(
             if (step + 1) % 100 == 0:
                 print(
                     f"step {step + 1}/{n_steps}, "
-                    f"MSE: {metrics.get('mse').item():.3f}, "
-                    f"RMSE: {metrics.get('rmse').item():.3f}, "
+                    f"MSE: {metrics['mse'].item():.3f}, "
+                    f"RMSE: {metrics['rmse'].item():.3f}"
                 )
     except KeyboardInterrupt:
         print("Training interrupted by user")
-        raise
 
     print("Training completed")
 
 
 if __name__ == "__main__":
-    trained_model = train_pipeline()
+    train_pipeline()
