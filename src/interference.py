@@ -234,9 +234,8 @@ class InterferenceCorrector(nnx.Module):
         phase_shifts = self.final_conv(d3)  # (16,16,1)
 
         phase_shifts = phase_shifts.squeeze(-1)  # Remove channel dimension
-        phase_shifts_std = jnp.std(phase_shifts)
         complex_weights = jnp.exp(-1j * phase_shifts)
-        return complex_weights, phase_shifts_std
+        return complex_weights, phase_shifts
 
 
 def get_wavenumber(freq_hz: float) -> float:
@@ -274,7 +273,7 @@ def create_analytical_weight_calculator(config: ArrayConfig) -> callable:
         x_phase, y_phase = k_pos_x * ux, k_pos_y * uy
 
         phase_shifts = jnp.add.outer(x_phase, y_phase)
-        return jnp.exp(-1j * phase_shifts)
+        return jnp.exp(-1j * phase_shifts), phase_shifts
 
     return calculate
 
@@ -417,12 +416,14 @@ def create_train_step_fn(
     vmapped_embedded_synthesizer = jax.vmap(synthesize_embedded_pattern)
 
     def loss_fn(model: nnx.Module, batch_of_angles_rad: jax.Array):
-        analytical_weights = vmapped_analytical_weights(batch_of_angles_rad)
+        analytical_weights, analytical_phase_shifts = vmapped_analytical_weights(
+            batch_of_angles_rad
+        )
 
         ideal_patterns = vmapped_ideal_synthesizer(analytical_weights)
         normalized_ideal_patterns = normalize_patterns(ideal_patterns)
 
-        corrective_weights, phase_shifts_std = model(normalized_ideal_patterns)
+        corrective_weights, corrective_phase_shifts = model(normalized_ideal_patterns)
 
         embedded_patterns = vmapped_embedded_synthesizer(corrective_weights)
         normalized_embedded_patterns = normalize_patterns(embedded_patterns)
@@ -431,7 +432,16 @@ def create_train_step_fn(
         embedded_patterns_db = convert_to_db(normalized_embedded_patterns)
 
         loss, metrics = calculate_pattern_loss(embedded_patterns_db, ideal_patterns_db)
-        metrics["phase_shifts_std"] = phase_shifts_std
+
+        phase_shifts_mse = optax.losses.squared_error(
+            corrective_phase_shifts, analytical_phase_shifts
+        ).mean()
+        metrics["phase_shifts_mse"] = phase_shifts_mse
+        metrics["phase_shifts_rmse"] = jnp.sqrt(phase_shifts_mse)
+        metrics["phase_shifts_std"] = jnp.std(corrective_phase_shifts)
+
+        loss = loss + phase_shifts_mse  # Combine losses
+
         return loss, metrics
 
     @nnx.jit
@@ -486,7 +496,9 @@ def train_pipeline(
                     f"grad_norm: {metrics['grad_norm'].item():.3f}, "
                     f"MSE: {metrics['mse'].item():.3f}, "
                     f"RMSE: {metrics['rmse'].item():.3f}, "
-                    f"phase_shifts_std: {metrics['phase_shifts_std'].item():.3f}"
+                    f"phase_shifts_std: {metrics['phase_shifts_std'].item():.3f}, "
+                    f"phase_shifts_mse: {metrics['phase_shifts_mse'].item():.3f}, "
+                    f"phase_shifts_rmse: {metrics['phase_shifts_rmse'].item():.3f}"
                 )
     except KeyboardInterrupt:
         print("Training interrupted by user")
