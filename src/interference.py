@@ -118,6 +118,7 @@ class InterferenceCorrector(nnx.Module):
         x = self.bottleneck(x)
         x = self.decoder(x)
         x = x.squeeze(-1)  # Remove channel dimension
+
         x = jnp.exp(-1j * x)  # Convert phase shifts to complex weights
         return x
 
@@ -319,6 +320,7 @@ def create_train_step_fn(
         model = optimizer.model
         (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
         optimizer.update(grads)
+        metrics["grad_norm"] = optax.global_norm(grads)
         return metrics
 
     return train_step_fn
@@ -361,6 +363,7 @@ def train_pipeline(
             if (step + 1) % 100 == 0:
                 print(
                     f"step {step + 1}/{n_steps}, "
+                    f"grad_norm: {metrics['grad_norm'].item():.3f}, "
                     f"MSE: {metrics['mse'].item():.3f}, "
                     f"RMSE: {metrics['rmse'].item():.3f}"
                 )
