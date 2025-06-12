@@ -85,7 +85,8 @@ def create_analytical_weight_calculator(config: ArrayConfig) -> callable:
         uy = jnp.sin(theta_steer) * jnp.sin(phi_steer)
 
         x_phase, y_phase = k_pos_x * ux, k_pos_y * uy
-        phase_shifts = x_phase[:, None] + y_phase[None, :]
+
+        phase_shifts = jnp.add.outer(x_phase, y_phase)
         return jnp.exp(-1j * phase_shifts)
 
     return calculate
@@ -137,6 +138,7 @@ def create_pattern_synthesizer(
 def steering_angles_sampler(
     key: jax.Array,
     batch_size: int,
+    theta_end: float = np.radians(60),
     limit: int | None = None,
 ) -> Iterable[jax.Array]:
     """
@@ -146,7 +148,7 @@ def steering_angles_sampler(
         limit = float("inf")
     for _ in range(limit):
         key, theta_key, phi_key = jax.random.split(key, num=3)
-        thetas = jax.random.uniform(theta_key, shape=(batch_size,), maxval=jnp.pi / 2)
+        thetas = jax.random.uniform(theta_key, shape=(batch_size,), maxval=theta_end)
         phis = jax.random.uniform(phi_key, shape=(batch_size,), maxval=2 * jnp.pi)
         yield jnp.stack([thetas, phis], axis=-1)
 
