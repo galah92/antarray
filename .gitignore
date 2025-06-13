@@ -181,3 +181,4 @@ cython_debug/
 dataset
 experiments
 checkpoints
+flow_matching_checkpoints
