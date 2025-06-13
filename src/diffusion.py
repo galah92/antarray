@@ -654,6 +654,75 @@ def train_diffusion_pipeline(
     return model, scheduler, synthesize_embedded
 
 
+def evaluate_diffusion_model(
+    model: nnx.Module,
+    scheduler: DDPMScheduler,
+    synthesize_embedded: callable,
+    config: ArrayConfig,
+    n_eval_samples: int = 50,
+    seed: int = 123,
+):
+    """Evaluate the trained diffusion model on test steering angles."""
+    key = jax.random.key(seed)
+
+    # Generate test steering angles
+    key, angle_key = jax.random.split(key)
+    test_angles = steering_angles_sampler(angle_key, batch_size=n_eval_samples, limit=1)
+    test_batch = next(test_angles)
+
+    # Compute analytical weights and target patterns
+    compute_analytical = create_analytical_weight_calculator(config)
+    vmapped_analytical_weights = jax.vmap(compute_analytical)
+    analytical_weights, _ = vmapped_analytical_weights(test_batch)
+
+    # Create ideal target patterns
+    key, ideal_key = jax.random.split(key)
+    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
+    synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
+    ideal_target_patterns = jax.vmap(synthesize_ideal)(analytical_weights)
+    ideal_target_patterns = normalize_patterns(ideal_target_patterns)
+
+    # Solve using diffusion for each target pattern
+    key, solve_key = jax.random.split(key)
+    solve_keys = jax.random.split(solve_key, n_eval_samples)
+
+    def solve_single(target_pattern, solve_key):
+        return solve_with_diffusion(
+            model,
+            target_pattern,
+            scheduler,
+            num_inference_steps=200,
+            guidance_scale=1.5,
+            synthesize_embedded_pattern=synthesize_embedded,
+            key=solve_key,
+        )
+
+    logger.info(f"Evaluating on {n_eval_samples} test samples...")
+    predicted_weights = jax.vmap(solve_single)(ideal_target_patterns, solve_keys)
+
+    # Compute evaluation metrics
+    weight_mse = jnp.mean(jnp.abs(predicted_weights - analytical_weights) ** 2)
+
+    # Pattern quality metrics
+    predicted_patterns = jax.vmap(synthesize_embedded)(predicted_weights)
+    predicted_patterns = normalize_patterns(predicted_patterns)
+    pattern_mse = jnp.mean((predicted_patterns - ideal_target_patterns) ** 2)
+
+    logger.info("Evaluation Results:")
+    logger.info(f"  Weight MSE: {weight_mse:.6f}")
+    logger.info(f"  Pattern MSE: {pattern_mse:.6f}")
+
+    return {
+        "weight_mse": weight_mse,
+        "pattern_mse": pattern_mse,
+        "test_angles": test_batch,
+        "predicted_weights": predicted_weights,
+        "analytical_weights": analytical_weights,
+        "predicted_patterns": predicted_patterns,
+        "target_patterns": ideal_target_patterns,
+    }
+
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
@@ -668,4 +737,14 @@ if __name__ == "__main__":
     logging.getLogger("absl").setLevel(logging.CRITICAL)  # Suppress absl logging
 
     logger.info(f"uv run {' '.join(sys.argv)}")  # Log command line args
-    train_diffusion_pipeline()
+
+    # Train the model
+    model, scheduler, synthesize_embedded = train_diffusion_pipeline()
+
+    # Evaluate the trained model
+    config = ArrayConfig()
+    eval_results = evaluate_diffusion_model(
+        model, scheduler, synthesize_embedded, config
+    )
+
+    logger.info("Training and evaluation completed!")
