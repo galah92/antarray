@@ -194,7 +194,6 @@ class InterferenceCorrector(nnx.Module):
         )  # Out: (16,16,1)
 
     def __call__(self, x: jax.Array) -> jax.Array:
-        x_orig_shape = x.shape
         x = x[..., None]  # Add channel dimension
         x = self.pad(x)
 
@@ -469,7 +468,7 @@ def train_pipeline(
 
     key, ideal_key, embedded_key = jax.random.split(key, 3)
     ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
-    embedded_patterns = create_element_patterns(config, embedded_key, is_embedded=True)
+    _embedded_patterns = create_element_patterns(config, embedded_key, is_embedded=True)
 
     train_step = create_train_step_fn(
         create_pattern_synthesizer(ideal_patterns, config),
