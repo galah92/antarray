@@ -14,7 +14,13 @@ from jax.typing import ArrayLike
 
 import data
 import physics
-from training import create_progress_logger, pad_batch, resize_batch
+from training import (
+    create_progress_logger,
+    pad_batch,
+    resize_batch,
+    restore_checkpoint,
+    save_checkpoint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,35 +171,6 @@ class RegressionNet(nnx.Module):
         return x
 
 
-def save_checkpoint(
-    mngr: ocp.CheckpointManager,
-    optimizer: nnx.Optimizer,
-    step: int,
-    overwrite: bool = False,
-):
-    if not overwrite:
-        return
-
-    handler = ocp.args.StandardSave(nnx.state(optimizer))
-    mngr.save(step, args=ocp.args.Composite(state=handler))
-
-
-def restore_checkpoint(
-    mngr: ocp.CheckpointManager,
-    optimizer: nnx.Optimizer,
-    step: int | None,
-) -> int:
-    if step is None:
-        step = mngr.latest_step()
-
-    handler = ocp.args.StandardRestore(nnx.state(optimizer))
-    restored = mngr.restore(step, args=ocp.args.Composite(state=handler))
-    nnx.update(optimizer, restored.state)
-
-    logger.info(f"Restored checkpoint at step {step}")
-    return step
-
-
 def circular_mse_fn(
     batch: data.DataBatch,
     pred_phase_shifts: ArrayLike,
@@ -212,7 +189,7 @@ def create_physics_loss_fn(config: physics.ArrayConfig):
     """Create physics loss function using modern physics setup."""
     # Create physics setup once
     key = jax.random.key(0)  # Deterministic for consistency
-    _, synthesize_embedded, _ = physics.create_physics_setup(config, key)
+    _, synthesize_embedded, _ = physics.create_physics_setup(key, config)
 
     def physics_loss_fn(
         batch: data.DataBatch,

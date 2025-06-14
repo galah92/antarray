@@ -68,7 +68,9 @@ def load_openems_nf2ff(nf2ff_path: Path):
     return OpenEMSData(theta_rad, phi_rad, r, Dmax, freq_hz, E_field, E_norm)
 
 
-def get_wavenumber(freq_hz: float = None, config: ArrayConfig = None) -> float:
+def get_wavenumber(
+    freq_hz: float | None = None, config: ArrayConfig | None = None
+) -> float:
     """Calculate the wavenumber for a given frequency in Hz."""
     if freq_hz is None:
         freq_hz = config.freq_hz if config is not None else ArrayConfig.freq_hz
@@ -81,9 +83,9 @@ def get_wavenumber(freq_hz: float = None, config: ArrayConfig = None) -> float:
 
 @lru_cache(maxsize=1)
 def get_element_positions(
-    array_size: tuple[int, int] = None,
-    spacing_mm: tuple[float, float] = None,
-    config: ArrayConfig = None,
+    array_size: tuple[int, int] | None = None,
+    spacing_mm: tuple[float, float] | None = None,
+    config: ArrayConfig | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Calculate element positions using config or explicit parameters."""
     if config is not None:
@@ -161,9 +163,9 @@ def calc_array_params(
     array_size: tuple[int, int] = ArrayConfig.array_size,
     spacing_mm: tuple[float, float] = ArrayConfig.spacing_mm,
     *,
-    theta_rad: np.ndarray = None,
-    phi_rad: np.ndarray = None,
-    sim_path: Path = None,
+    theta_rad: np.ndarray | None = None,
+    phi_rad: np.ndarray | None = None,
+    sim_path: Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, jax.Array, jax.Array]:
     """Calculate array parameters using explicit parameters or defaults."""
     theta_rad = theta_rad if theta_rad is not None else np.radians(np.arange(180))
@@ -279,18 +281,6 @@ def rad_pattern_from_geo_and_excitations(
     E_total = jnp.sqrt(E_total)
 
     E_norm = normalize_rad_pattern(E_total, Dmax_array)
-    return E_norm
-
-
-@jax.jit
-def rad_pattern_from_geo_and_phase_shifts(
-    taper: ArrayLike,
-    precomputed: ArrayLike,  # Precomputed array exponential terms, shape (2, xn, yn, theta, phi)
-    Dmax_array: float,
-    phase_shifts: ArrayLike = np.array([[0]]),
-) -> tuple[jax.Array, jax.Array]:
-    excitations = taper * jnp.exp(-1j * phase_shifts)
-    E_norm = rad_pattern_from_geo_and_excitations(precomputed, Dmax_array, excitations)
     return E_norm
 
 
@@ -602,7 +592,7 @@ def test_plot_ff_3d():
     logger.info(f"Saved sample plot to {fig_path}")
 
 
-def create_analytical_weight_calculator(config: ArrayConfig = None) -> Callable:
+def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Callable:
     """Factory to create a function for calculating analytical weights."""
     config = config or ArrayConfig()
 
@@ -627,7 +617,8 @@ def create_analytical_weight_calculator(config: ArrayConfig = None) -> Callable:
 
 
 def create_pattern_synthesizer(
-    element_patterns: jax.Array, config: ArrayConfig = None
+    element_patterns: jax.Array,
+    config: ArrayConfig,
 ) -> Callable:
     """Factory to create a pattern synthesis function."""
     config = config or ArrayConfig()
@@ -704,10 +695,9 @@ def create_element_patterns(
     return distorted_field.astype(jnp.complex64)
 
 
-def create_physics_setup(config: ArrayConfig = None, key: jax.Array = None):
+def create_physics_setup(key: jax.Array, config: ArrayConfig | None = None):
     """Creates the physics simulation setup (patterns and synthesizers)."""
     config = config or ArrayConfig()
-    key = key or jax.random.key(0)
 
     key, ideal_key, embedded_key = jax.random.split(key, 3)
 

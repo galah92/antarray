@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from physics import ArrayConfig, create_physics_setup
+from physics import create_physics_setup
 from training import (
     DenoisingUNet,
     create_progress_logger,
@@ -232,7 +232,6 @@ def train_diffusion_pipeline(
     seed: int = 42,
 ):
     """Main training function for the diffusion model."""
-    config = ArrayConfig()
     key = jax.random.key(seed)
 
     logger.info("Setting up diffusion training pipeline")
@@ -240,7 +239,7 @@ def train_diffusion_pipeline(
     # Create physics setup
     key, physics_key = jax.random.split(key)
     synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        config, physics_key
+        physics_key
     )
 
     # Create scheduler and model
@@ -295,7 +294,6 @@ def evaluate_diffusion_model(
     model: DenoisingUNet,
     scheduler: DDPMScheduler,
     synthesize_embedded: Callable,
-    config: ArrayConfig,
     n_eval_samples: int = 50,
     seed: int = 123,
 ):
@@ -309,7 +307,7 @@ def evaluate_diffusion_model(
 
     # Create physics setup for evaluation
     key, physics_key = jax.random.split(key)
-    synthesize_ideal, _, compute_analytical = create_physics_setup(config, physics_key)
+    synthesize_ideal, _, compute_analytical = create_physics_setup(physics_key)
 
     # Compute analytical weights and target patterns
     vmapped_analytical_weights = jax.vmap(compute_analytical)
@@ -379,9 +377,6 @@ if __name__ == "__main__":
     model, scheduler, synthesize_embedded = train_diffusion_pipeline()
 
     # Evaluate the trained model
-    config = ArrayConfig()
-    eval_results = evaluate_diffusion_model(
-        model, scheduler, synthesize_embedded, config
-    )
+    eval_results = evaluate_diffusion_model(model, scheduler, synthesize_embedded)
 
     logger.info("Training and evaluation completed!")

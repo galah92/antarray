@@ -1,19 +1,22 @@
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import optax
-import orbax.checkpoint as ocp
 from flax import nnx
 
-from physics import ArrayConfig, create_physics_setup
+from physics import create_physics_setup
 from training import (
     VelocityNet,
+    create_checkpoint_manager,
     create_progress_logger,
     create_standard_optimizer,
     normalize_patterns,
+    restore_checkpoint,
+    save_checkpoint,
     steering_angles_sampler,
 )
 
@@ -56,7 +59,7 @@ class FlowMatcher:
 
     def compute_loss(
         self,
-        velocity_net: nnx.Module,
+        velocity_net: VelocityNet,
         x0: jax.Array,
         x1: jax.Array,
         target_pattern: jax.Array,
@@ -89,7 +92,7 @@ class ODESolver:
         self.dt = 1.0 / num_steps
 
     def solve(
-        self, velocity_net: nnx.Module, x0: jax.Array, target_pattern: jax.Array
+        self, velocity_net: VelocityNet, x0: jax.Array, target_pattern: jax.Array
     ) -> jax.Array:
         """Solve ODE from t=0 to t=1 using Euler method."""
         x = x0
@@ -108,7 +111,7 @@ class ODESolver:
 
 
 def solve_with_flow_matching(
-    model: nnx.Module,
+    model: VelocityNet,
     target_pattern: jax.Array,
     solver: ODESolver,
     key: jax.Array,
@@ -130,52 +133,17 @@ def solve_with_flow_matching(
     return solution[0]  # Remove batch dimension
 
 
-def save_checkpoint(model: nnx.Module, step: int, checkpoint_dir: Path):
-    """Save model checkpoint using orbax."""
-    checkpoint_dir = checkpoint_dir.resolve()  # Ensure absolute path
-    checkpoint_dir.mkdir(exist_ok=True)
-
-    options = ocp.CheckpointManagerOptions(max_to_keep=3, save_interval_steps=1)
-    with ocp.CheckpointManager(checkpoint_dir, options=options) as mngr:
-        state = nnx.state(model)
-        mngr.save(step, args=ocp.args.StandardSave(state))
-        logger.info(f"Saved checkpoint at step {step}")
-
-
-def load_checkpoint(model: nnx.Module, checkpoint_dir: Path, step: int = None) -> int:
-    """Load model checkpoint using orbax."""
-    checkpoint_dir = checkpoint_dir.resolve()  # Ensure absolute path
-    if not checkpoint_dir.exists():
-        logger.info("No checkpoint directory found, starting from scratch")
-        return 0
-
-    options = ocp.CheckpointManagerOptions(read_only=True)
-    with ocp.CheckpointManager(checkpoint_dir, options=options) as mngr:
-        if step is None:
-            step = mngr.latest_step()
-
-        if step is None:
-            logger.info("No checkpoints found, starting from scratch")
-            return 0
-
-        state = nnx.state(model)
-        restored = mngr.restore(step, args=ocp.args.StandardRestore(state))
-        nnx.update(model, restored)
-        logger.info(f"Restored checkpoint from step {step}")
-        return step
-
-
 def create_train_step_fn(
-    synthesize_ideal_pattern: callable,
-    synthesize_embedded_pattern: callable,
-    compute_analytical_weights: callable,
+    synthesize_ideal_pattern: Callable,
+    synthesize_embedded_pattern: Callable,
+    compute_analytical_weights: Callable,
     flow_matcher: FlowMatcher,
 ):
     """Factory that creates the jitted training step function for flow matching."""
     vmapped_analytical_weights = jax.vmap(compute_analytical_weights)
     vmapped_embedded_synthesizer = jax.vmap(synthesize_embedded_pattern)
 
-    def loss_fn(model: nnx.Module, batch_of_angles_rad: jax.Array, key: jax.Array):
+    def loss_fn(model: VelocityNet, batch_of_angles_rad: jax.Array, key: jax.Array):
         batch_size = batch_of_angles_rad.shape[0]
 
         # Generate analytical weights and target patterns
@@ -240,7 +208,6 @@ def train_flow_matching_pipeline(
     restore: bool = True,
 ):
     """Main training function for the flow matching model."""
-    config = ArrayConfig()
     key = jax.random.key(seed)
     checkpoint_path = Path(checkpoint_dir).resolve()
 
@@ -248,7 +215,7 @@ def train_flow_matching_pipeline(
 
     # Create physics setup
     synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        config, key
+        key
     )
 
     # Create flow matcher and model
@@ -256,10 +223,13 @@ def train_flow_matching_pipeline(
     key, model_key = jax.random.split(key)
     model = VelocityNet(base_channels=64, rngs=nnx.Rngs(model_key))
 
+    # Create checkpoint manager
+    ckpt_mngr = create_checkpoint_manager(checkpoint_path)
+
     # Restore from checkpoint if requested
     start_step = 0
     if restore:
-        start_step = load_checkpoint(model, checkpoint_path)
+        start_step = restore_checkpoint(ckpt_mngr, model, step=None)
 
     # Create optimizer
     optimizer = create_standard_optimizer(model, lr, n_steps)
@@ -289,22 +259,21 @@ def train_flow_matching_pipeline(
 
             # Save checkpoint
             if (step + 1) % save_every == 0:
-                save_checkpoint(model, step + 1, checkpoint_path)
+                save_checkpoint(ckpt_mngr, model, step + 1, overwrite=True)
 
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
 
     # Save final checkpoint
-    save_checkpoint(model, start_step + remaining_steps, checkpoint_path)
+    save_checkpoint(ckpt_mngr, model, start_step + remaining_steps, overwrite=True)
     logger.info("Flow matching training completed")
 
     return model, synthesize_embedded
 
 
 def evaluate_flow_matching_model(
-    model: nnx.Module,
-    synthesize_embedded: callable,
-    config: ArrayConfig,
+    model: VelocityNet,
+    synthesize_embedded: Callable,
     n_eval_samples: int = 50,
     seed: int = 123,
 ):
@@ -323,7 +292,7 @@ def evaluate_flow_matching_model(
 
     # Create physics setup for evaluation
     key, physics_key = jax.random.split(key)
-    synthesize_ideal, _, compute_analytical = create_physics_setup(config, physics_key)
+    synthesize_ideal, _, compute_analytical = create_physics_setup(physics_key)
 
     # Compute analytical weights and target patterns
     vmapped_analytical_weights = jax.vmap(compute_analytical)
@@ -395,7 +364,6 @@ if __name__ == "__main__":
     model, synthesize_embedded = train_flow_matching_pipeline()
 
     # Evaluate the trained model
-    config = ArrayConfig()
-    eval_results = evaluate_flow_matching_model(model, synthesize_embedded, config)
+    eval_results = evaluate_flow_matching_model(model, synthesize_embedded)
 
     logger.info("Flow matching training and evaluation completed!")

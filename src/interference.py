@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from physics import ArrayConfig, create_physics_setup
+from physics import create_physics_setup
 from training import (
     InterferenceCorrector,
     calculate_pattern_loss,
@@ -76,7 +76,6 @@ def train_pipeline(
     seed: int = 42,
 ):
     """Main function to set up and run the training pipeline."""
-    config = ArrayConfig()
     key = jax.random.key(seed)
 
     logger.info("Performing one-time precomputation")
@@ -84,7 +83,7 @@ def train_pipeline(
     # Create physics setup
     key, physics_key = jax.random.split(key)
     synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        config, physics_key
+        physics_key
     )
 
     train_step = create_train_step_fn(

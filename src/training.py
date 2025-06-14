@@ -2,14 +2,16 @@
 
 import logging
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timedelta
 from functools import partial
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import orbax.checkpoint as ocp
 from flax import nnx
 from jax.experimental.compilation_cache import compilation_cache as cc
 from jax.typing import ArrayLike
@@ -347,6 +349,74 @@ class InterferenceCorrector(nnx.Module):
 
 
 # =============================================================================
+# Checkpoint Management
+# =============================================================================
+
+
+def save_checkpoint(
+    mngr: ocp.CheckpointManager,
+    item: nnx.Optimizer | nnx.Module,
+    step: int,
+    overwrite: bool = False,
+):
+    """Save checkpoint using orbax."""
+    if not overwrite:
+        return
+
+    if isinstance(item, nnx.Optimizer):
+        handler = ocp.args.StandardSave(nnx.state(item))
+        mngr.save(step, args=ocp.args.Composite(state=handler))
+    else:  # Module
+        state = nnx.state(item)
+        mngr.save(step, args=ocp.args.StandardSave(state))
+        logger.info(f"Saved checkpoint at step {step}")
+
+
+def restore_checkpoint(
+    mngr: ocp.CheckpointManager,
+    item: nnx.Optimizer | nnx.Module,
+    step: int | None,
+) -> int:
+    """Restore checkpoint using orbax."""
+    if step is None:
+        step = mngr.latest_step()
+
+    if step is None:
+        return 0
+
+    if isinstance(item, nnx.Optimizer):
+        handler = ocp.args.StandardRestore(nnx.state(item))
+        restored = mngr.restore(step, args=ocp.args.Composite(state=handler))
+        nnx.update(item, restored.state)
+    else:  # Module
+        state = nnx.state(item)
+        restored = mngr.restore(step, args=ocp.args.StandardRestore(state))
+        nnx.update(item, restored)
+
+    logger.info(f"Restored checkpoint at step {step}")
+    return step
+
+
+def create_checkpoint_manager(
+    checkpoint_dir: Path,
+    max_to_keep: int = 3,
+    save_interval_steps: int = 1,
+    read_only: bool = False,
+) -> ocp.CheckpointManager:
+    """Create a checkpoint manager with common settings."""
+    checkpoint_dir = checkpoint_dir.resolve()
+    if not read_only:
+        checkpoint_dir.mkdir(exist_ok=True)
+
+    options = ocp.CheckpointManagerOptions(
+        max_to_keep=max_to_keep,
+        save_interval_steps=save_interval_steps,
+        read_only=read_only,
+    )
+    return ocp.CheckpointManager(checkpoint_dir, options=options)
+
+
+# =============================================================================
 # Training Utilities
 # =============================================================================
 
@@ -356,7 +426,7 @@ def steering_angles_sampler(
     batch_size: int,
     limit: int,
     theta_end: float = np.radians(60),
-) -> Iterable[jax.Array]:
+) -> Iterator[jax.Array]:
     """Creates a generator that yields batches of random steering angles."""
     for _ in range(limit):
         key, theta_key, phi_key = jax.random.split(key, num=3)
