@@ -142,7 +142,7 @@ def calc_array_params(
     theta_rad: np.ndarray = np.radians(np.arange(180)),
     phi_rad: np.ndarray = np.radians(np.arange(360)),
     sim_path: Path = DEFAULT_SIM_PATH,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, jax.Array, jax.Array]:
     nf2ff = load_openems_nf2ff(sim_path)
     E_field, Dmax, freq_hz = nf2ff.E_field, nf2ff.Dmax, nf2ff.freq_hz
     E_field = E_field[: theta_rad.size, ...]  # Trim to match theta_rad
@@ -426,7 +426,7 @@ def plot_ff_3d(
     azim: float | None = None,
     title: str = "3D Radiation Pattern",
     ax: plt.Axes | None = None,
-) -> plt.Axes:
+):
     pattern = pattern.clip(min=0)  # Clip negative values to 0
 
     # Calculate cartesian coordinates
@@ -583,7 +583,7 @@ def test_plot_ff_3d():
     steering_str = steering_repr(steering_deg.T)
     phase_shift_title = f"Radiation Pattern with Phase Shifts {steering_str}"
     fig.suptitle(phase_shift_title)
-    fig.set_tight_layout(True)
+    fig.set_layout_engine("tight")
 
     fig_path = "test.png"
     fig.savefig(fig_path, dpi=600, bbox_inches="tight")

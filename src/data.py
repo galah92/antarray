@@ -123,7 +123,7 @@ class Dataset:
     def __init__(
         self,
         batch_size: int = 512,
-        limit: int = None,
+        limit: int | None = None,
         prefetch: bool = True,
         array_size: tuple[int, int] = (16, 16),
         spacing_mm: tuple[float, float] = (60, 60),
@@ -135,7 +135,7 @@ class Dataset:
         radiation_pattern_max: float = 30.0,  # Maximum radiation pattern value in dB observed
         trig_encoding: bool = True,
         front_hemisphere: bool = True,
-        key: jax.Array = None,
+        key: jax.Array | None = None,
     ):
         self.batch_size = batch_size
         self.limit = limit
@@ -229,7 +229,7 @@ def generate_beamforming(
     theta_end: float = 65,  # Degrees
     max_n_beams: int = 1,
     dataset_dir: Path = analyze.DEFAULT_DATASET_DIR,
-    dataset_name: Path = analyze.DEFAULT_DATASET_NAME,
+    dataset_name: str = analyze.DEFAULT_DATASET_NAME,
     overwrite: bool = False,
     seed: int = 42,
 ):
@@ -275,15 +275,15 @@ def generate_beamforming(
 @app.command()
 def plot_dataset_phase_shifts(
     dataset_dir: Path = analyze.DEFAULT_DATASET_DIR,
-    dataset_name: Path = "ff_beamforming.h5",
-    gif_name: Path = "beamforming_phase_shifts.gif",
+    dataset_name: str = "ff_beamforming.h5",
+    gif_name: str = "beamforming_phase_shifts.gif",
 ):
     with h5py.File(dataset_dir / dataset_name, "r") as h5f:
         excitations = h5f["excitations"]
         steering = h5f["steering"]
 
         fig, ax = plt.subplots()
-        fig.set_tight_layout(True)
+        fig.set_layout_engine("tight")
 
         ax.set_xlabel("Element X index")
         ax.set_ylabel("Element Y index")
@@ -329,7 +329,7 @@ def plot_dataset_phase_shifts(
 def plot_sample(
     idx: int,
     dataset_dir: Path = analyze.DEFAULT_DATASET_DIR,
-    dataset_name: Path = analyze.DEFAULT_DATASET_NAME,
+    dataset_name: str = analyze.DEFAULT_DATASET_NAME,
 ):
     """
     Visualize a single sample from the dataset.
@@ -356,7 +356,7 @@ def plot_sample(
     steering_str = analyze.steering_repr(steering)
     phase_shift_title = f"Phase Shifts ({steering_str})"
     fig.suptitle(phase_shift_title)
-    fig.set_tight_layout(True)
+    fig.set_layout_engine("tight")
 
     sample_path = dataset_dir / f"sample_{idx}.png"
     fig.savefig(sample_path, dpi=600, bbox_inches="tight")
@@ -385,7 +385,7 @@ def visualize_dataset(batch_size: int = 4, seed: int = 42):
         analyze.plot_phase_shifts(phase_shifts[i], title=title, ax=axes[i, 1])
 
     fig.suptitle("Batch Overview: Model Inputs")
-    fig.set_tight_layout(True)
+    fig.set_layout_engine("tight")
 
     plot_path = "batch_overview.png"
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
