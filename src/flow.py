@@ -321,7 +321,7 @@ def restore_checkpoint(
 def circular_mse_fn(
     batch: data.DataBatch,
     pred_phase_shifts: jax.Array,
-) -> float:
+) -> jax.Array:
     phase_shifts = batch.phase_shifts
 
     # Circular MSE loss
@@ -360,18 +360,18 @@ def create_physics_loss_fn(dataset: data.Dataset):
 
 
 def loss_fn(
-    model: nnx.Module,
+    model: ConvNet,
     batch: data.DataBatch,
     dataset: data.Dataset,
     *,
     use_physics_loss: bool = False,
     use_circular_mse: bool = True,
-) -> tuple[float, dict]:
+) -> tuple[jax.Array, dict]:
     pred_phase_shifts = model(batch.radiation_patterns)
 
     metrics = {}
 
-    loss = 0
+    loss = jnp.zeros(())
 
     if use_physics_loss:
         physics_loss_fn = create_physics_loss_fn(dataset)
@@ -526,15 +526,15 @@ def pred(
         optimizer.model.eval()
 
         # Use provided steering angles
-        theta_deg, phi_deg = jnp.asarray(theta_deg), jnp.asarray(phi_deg)
-        steering_deg = jnp.stack([theta_deg, phi_deg], axis=-1)
+        theta_d, phi_d = jnp.asarray(theta_deg), jnp.asarray(phi_deg)
+        steering_deg = jnp.stack([theta_d, phi_d], axis=-1)
         steering_angles = jnp.radians(steering_deg)
 
         dataset = data.Dataset(batch_size=1, limit=1, key=dataset_key)
         radiation_pattern, true_excitations = analyze.rad_pattern_from_geo(
             *dataset.array_params, steering_angles
         )
-        true_ps = jnp.angle(true_excitations)
+        true_ps = np.asarray(np.angle(true_excitations))
 
         transformed = dataset.transform_fn(radiation_pattern)
         pred_ps = optimizer.model(transformed[None, ...])[0]
@@ -552,7 +552,7 @@ def pred(
     if clip_rp:
         true_rp, pred_rp = true_rp.clip(min=0), pred_rp.clip(min=0)
 
-    theta, phi = dataset.theta_rad, dataset.phi_rad
+    theta, phi = np.asarray(dataset.theta_rad), np.asarray(dataset.phi_rad)
 
     title = "Ground Truth 2D Radiation Pattern"
     analyze.plot_ff_2d(theta, phi, true_rp, title=title, ax=axs[0, 1])
@@ -574,10 +574,10 @@ def pred(
     title = "Predicted 3D Radiation Pattern"
     analyze.plot_ff_3d(theta, phi, pred_rp, title=title, ax=axs[1, 3])
 
-    steering_str = analyze.steering_repr(jnp.degrees(steering_angles.T))
+    steering_str = analyze.steering_repr(np.degrees(steering_angles.T))
     fig.suptitle(f"Prediction with {steering_str}")
 
-    fig.set_tight_layout(True)
+    fig.set_layout_engine("tight")
 
     fig.savefig(filepath, dpi=300, bbox_inches="tight")
     print(f"Prediction example saved to {filepath}")

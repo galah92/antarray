@@ -1,6 +1,6 @@
 import logging
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from functools import partial
 from pathlib import Path
 
@@ -294,14 +294,14 @@ def get_element_positions(
     return x_pos, y_pos
 
 
-def create_analytical_weight_calculator(config: ArrayConfig) -> callable:
+def create_analytical_weight_calculator(config: ArrayConfig) -> Callable:
     """Factory to create a specialized function for calculating analytical weights."""
     k = get_wavenumber(config.FREQUENCY_HZ)
     x_pos, y_pos = get_element_positions(config.ARRAY_SIZE, config.SPACING_MM)
     k_pos_x, k_pos_y = k * x_pos, k * y_pos
 
     @jax.jit
-    def calculate(steering_angle_rad: jax.Array) -> jax.Array:
+    def calculate(steering_angle_rad: jax.Array) -> tuple[jax.Array, jax.Array]:
         """Calculates ideal, analytical weights for a given steering angle."""
         theta_steer, phi_steer = steering_angle_rad[0], steering_angle_rad[1]
 
@@ -318,7 +318,7 @@ def create_analytical_weight_calculator(config: ArrayConfig) -> callable:
 
 def create_pattern_synthesizer(
     element_patterns: jax.Array, config: ArrayConfig
-) -> callable:
+) -> Callable:
     """Factory to create a specialized pattern synthesis function."""
 
     @jax.jit
@@ -401,21 +401,17 @@ def create_element_patterns(
 def steering_angles_sampler(
     key: jax.Array,
     batch_size: int,
+    limit: int,
     theta_end: float = np.radians(60),
-    limit: int | None = None,
 ) -> Iterable[jax.Array]:
     """
     Creates a Python generator that yields batches of random steering angles.
     """
-    if limit is None:
-        limit = float("inf")
-    i = 0
-    while i < limit:
+    for _ in range(limit):
         key, theta_key, phi_key = jax.random.split(key, num=3)
         thetas = jax.random.uniform(theta_key, shape=(batch_size,), maxval=theta_end)
         phis = jax.random.uniform(phi_key, shape=(batch_size,), maxval=2 * jnp.pi)
         yield jnp.stack([thetas, phis], axis=-1)
-        i += 1
 
 
 @jax.jit
@@ -444,16 +440,16 @@ def calculate_pattern_loss(
 
 
 def create_train_step_fn(
-    synthesize_ideal_pattern: callable,
-    synthesize_embedded_pattern: callable,
-    compute_analytical_weights: callable,
+    synthesize_ideal_pattern: Callable,
+    synthesize_embedded_pattern: Callable,
+    compute_analytical_weights: Callable,
     scheduler: DDPMScheduler,
 ):
     """Factory that creates the jitted training step function for diffusion."""
     vmapped_analytical_weights = jax.vmap(compute_analytical_weights)
     vmapped_embedded_synthesizer = jax.vmap(synthesize_embedded_pattern)
 
-    def loss_fn(model: nnx.Module, batch_of_angles_rad: jax.Array, key: jax.Array):
+    def loss_fn(model: DenoisingUNet, batch_of_angles_rad: jax.Array, key: jax.Array):
         batch_size = batch_of_angles_rad.shape[0]
 
         # Generate analytical weights and target patterns
@@ -525,13 +521,13 @@ def create_train_step_fn(
 
 
 def solve_with_diffusion(
-    model: nnx.Module,
+    model: DenoisingUNet,
     target_pattern: jax.Array,
     scheduler: DDPMScheduler,
     num_inference_steps: int = 200,
     guidance_scale: float = 1.0,
-    synthesize_embedded_pattern: callable = None,
-    key: jax.Array = None,
+    synthesize_embedded_pattern: Callable | None = None,
+    key: jax.Array | None = None,
 ) -> jax.Array:
     """Phase 2: Use trained model to solve for corrective weights."""
 
@@ -655,9 +651,9 @@ def train_diffusion_pipeline(
 
 
 def evaluate_diffusion_model(
-    model: nnx.Module,
+    model: DenoisingUNet,
     scheduler: DDPMScheduler,
-    synthesize_embedded: callable,
+    synthesize_embedded: Callable,
     config: ArrayConfig,
     n_eval_samples: int = 50,
     seed: int = 123,

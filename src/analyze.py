@@ -94,7 +94,7 @@ DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_DATASET_NAME = "farfield_dataset.h5"
 
 
-def check_grating_lobes(freq, dx, dy, verbose=False):
+def check_grating_lobes(freq, spacing_mm, verbose=False):
     """Check for potential grating lobes in an antenna array based on element spacing."""
 
     # Calculate wavelength
@@ -103,6 +103,7 @@ def check_grating_lobes(freq, dx, dy, verbose=False):
     wavelength_mm = wavelength * 1000  # Wavelength in mm
 
     # Check spacing in terms of wavelength
+    dx, dy = spacing_mm
     dx_lambda = dx / wavelength_mm
     dy_lambda = dy / wavelength_mm
 
@@ -148,7 +149,7 @@ def calc_array_params(
     E_field = E_field[: theta_rad.size, ...]  # Trim to match theta_rad
     Dmax_array = Dmax * np.prod(array_size)  # Scale Dmax for the array size
 
-    check_grating_lobes(freq_hz, *spacing_mm)
+    check_grating_lobes(freq_hz, spacing_mm)
 
     k = get_wavenumber(freq_hz)
     x_pos, y_pos = get_element_positions(array_size, spacing_mm)
@@ -464,7 +465,7 @@ def plot_ff_2d(
         _, ax = plt.subplots(1, 1, figsize=(8, 6))
 
     theta_deg, phi_deg = np.rad2deg(theta_rad), np.rad2deg(phi_rad)
-    extent = [np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg)]
+    extent = (np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg))
     aspect = theta_deg.size / phi_deg.size
     im = ax.imshow(pattern, extent=extent, origin="lower", aspect=aspect)
     ax.set_xlabel("θ°")
@@ -472,7 +473,7 @@ def plot_ff_2d(
     ax.set_title(title)
 
     if colorbar:
-        ax.get_figure().colorbar(im, fraction=0.046, pad=0.04, label="Normalized Dbi")
+        ax.figure.colorbar(im, fraction=0.046, pad=0.04, label="Normalized Dbi")
 
 
 def plot_sine_space(
@@ -501,29 +502,29 @@ def plot_sine_space(
             radius = np.sin(theta_rad)
             ax.add_patch(plt.Circle((0, 0), radius, fill=False, **axis_args))
             label_offset = np.radians(45)
-            loc = radius * np.array([np.cos(label_offset), np.sin(label_offset)])
-            ax.text(*loc, f"{theta_deg}°", ha="center", va="center", color="gray")
+            x, y = radius * np.cos(label_offset), radius * np.sin(label_offset)
+            ax.text(x, y, f"{theta_deg}°", ha="center", va="center", color="gray")
 
     if phi_lines:
         for phi_deg in np.arange(0, 360, 30):
             phi_rad = np.radians(phi_deg)
-            phi_sine = np.array([np.cos(phi_rad), np.sin(phi_rad)])
-            ax.plot(*np.vstack(([0, 0], phi_sine)).T, **axis_args)
+            x, y = np.cos(phi_rad), np.sin(phi_rad)
+            ax.plot(*np.vstack(([0, 0], [x, y])).T, **axis_args)
             if phi_deg in [0, 90]:
                 continue  # Avoid label overlap with the title and colorbar
-            ax.text(*(1.1 * phi_sine), f"{phi_deg}°", ha="center", va="center")
+            ax.text(1.1 * x, 1.1 * y, f"{phi_deg}°", ha="center", va="center")
 
     ax.add_patch(plt.Circle((0, 0), 1, linewidth=1, fill=False))
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlim([-1.0, 1.0])
-    ax.set_ylim([-1.0, 1.0])
+    ax.set_xlim((-1.0, 1.0))
+    ax.set_ylim((-1.0, 1.0))
     ax.axis("off")
     ax.set_xlabel("u = sin($\\theta$)cos($\\phi$)")
     ax.set_ylabel("v = sin($\\theta$)sin($\\phi$)")
     ax.set_title(title)
 
     if colorbar:
-        ax.get_figure().colorbar(im, fraction=0.046, pad=0.04, label="Normalized Dbi")
+        ax.figure.colorbar(im, fraction=0.046, pad=0.04, label="Normalized Dbi")
 
     return ax
 
@@ -550,7 +551,7 @@ def plot_phase_shifts(
     ax.set_title(title)
 
     if colorbar:
-        ax.get_figure().colorbar(im, fraction=0.046, pad=0.04, label="Degrees")
+        ax.figure.colorbar(im, fraction=0.046, pad=0.04, label="Degrees")
 
 
 def steering_repr(steering_angles: np.ndarray):
