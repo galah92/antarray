@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 
 import jax
@@ -10,9 +11,12 @@ from shared import (
     InterferenceCorrector,
     calculate_pattern_loss,
     convert_to_db,
+    create_progress_logger,
     normalize_patterns,
     steering_angles_sampler,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_train_step_fn(
@@ -75,7 +79,7 @@ def train_pipeline(
     config = ArrayConfig()
     key = jax.random.key(seed)
 
-    print("Performing one-time precomputation")
+    logger.info("Performing one-time precomputation")
 
     # Create physics setup
     key, physics_key = jax.random.split(key)
@@ -96,25 +100,18 @@ def train_pipeline(
     key, data_key = jax.random.split(key)
     sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
 
-    print("Starting training")
+    logger.info("Starting training")
+    log_progress = create_progress_logger(n_steps, log_every=100)
+
     try:
         for step, batch in enumerate(sampler):
             metrics = train_step(optimizer, batch)
 
-            if (step + 1) % 100 == 0:
-                print(
-                    f"step {step + 1}/{n_steps}, "
-                    f"grad_norm: {metrics['grad_norm'].item():.3f}, "
-                    f"MSE: {metrics['mse'].item():.3f}, "
-                    f"RMSE: {metrics['rmse'].item():.3f}, "
-                    f"phase_shifts_std: {metrics['phase_shifts_std'].item():.3f}, "
-                    f"phase_shifts_mse: {metrics['phase_shifts_mse'].item():.3f}, "
-                    f"phase_shifts_rmse: {metrics['phase_shifts_rmse'].item():.3f}"
-                )
+            log_progress(step, metrics)
     except KeyboardInterrupt:
-        print("Training interrupted by user")
+        logger.info("Training interrupted by user")
 
-    print("Training completed")
+    logger.info("Training completed")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from flax import nnx
 from physics import ArrayConfig, create_physics_setup
 from shared import (
     DenoisingUNet,
+    create_progress_logger,
     normalize_patterns,
     steering_angles_sampler,
 )
@@ -274,19 +275,14 @@ def train_diffusion_pipeline(
     sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
 
     logger.info("Starting diffusion training")
+    log_progress = create_progress_logger(n_steps, log_every=100)
+
     try:
         for step, batch in enumerate(sampler):
             key, step_key = jax.random.split(key)
             metrics = train_step(optimizer, batch, step_key)
 
-            if (step + 1) % 100 == 0:
-                logger.info(
-                    f"step {step + 1}/{n_steps}, "
-                    f"grad_norm: {metrics['grad_norm'].item():.3f}, "
-                    f"total_loss: {metrics['total_loss'].item():.3f}, "
-                    f"denoising_loss: {metrics['denoising_loss'].item():.3f}, "
-                    f"physics_loss: {metrics['physics_loss'].item():.3f}"
-                )
+            log_progress(step, metrics)
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
 

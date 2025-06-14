@@ -1,7 +1,5 @@
 import logging
 import sys
-import time
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import jax
@@ -13,6 +11,7 @@ from flax import nnx
 from physics import ArrayConfig, create_physics_setup
 from shared import (
     VelocityNet,
+    create_progress_logger,
     create_standard_optimizer,
     normalize_patterns,
     steering_angles_sampler,
@@ -276,25 +275,17 @@ def train_flow_matching_pipeline(
     sampler = steering_angles_sampler(data_key, batch_size, limit=remaining_steps)
 
     logger.info(f"Starting flow matching training from step {start_step}")
-    start_time = time.perf_counter()
+    log_progress = create_progress_logger(
+        total_steps=n_steps, log_every=100, start_step=start_step
+    )
+
     try:
         for step_offset, batch in enumerate(sampler):
             step = start_step + step_offset
             key, step_key = jax.random.split(key)
             metrics = train_step(optimizer, batch, step_key)
 
-            if (step + 1) % 100 == 0:
-                elapsed = time.perf_counter() - start_time
-                avg_time = elapsed / (step + 1 - start_step)
-                elapsed = datetime.min + timedelta(seconds=elapsed)
-                logger.info(
-                    f"step {step + 1}/{n_steps}, "
-                    f"time: {avg_time * 1000:.1f}ms/step, "
-                    f"grad_norm: {metrics['grad_norm'].item():.3f}, "
-                    f"total_loss: {metrics['total_loss'].item():.3f}, "
-                    f"flow_matching_loss: {metrics['flow_matching_loss'].item():.3f}, "
-                    f"physics_loss: {metrics['physics_loss'].item():.3f}"
-                )
+            log_progress(step, metrics)
 
             # Save checkpoint
             if (step + 1) % save_every == 0:

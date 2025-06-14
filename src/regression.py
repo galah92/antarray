@@ -1,7 +1,5 @@
 import logging
 import sys
-import time
-from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Sequence
@@ -16,7 +14,7 @@ from jax.typing import ArrayLike
 
 import data
 import physics
-from shared import pad_batch, resize_batch
+from shared import create_progress_logger, pad_batch, resize_batch
 
 logger = logging.getLogger(__name__)
 
@@ -334,27 +332,17 @@ def train(
     train_step = create_train_step(loss_fn=partial(loss_fn, config=config))
     warmup_step(dataset, optimizer, train_step)
 
-    logger.info("Starting development run")
-    start_time = time.perf_counter()
+    logger.info("Starting training")
+    log_progress = create_progress_logger(
+        total_steps=n_steps, log_every=10, start_step=start_step
+    )
 
     try:
         for step, batch in enumerate(dataset, start=start_step):
             metrics = train_step(optimizer, batch)
             save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
 
-            if (step + 1) % 10 == 0:
-                elapsed = time.perf_counter() - start_time
-                avg_time = elapsed / (step + 1 - start_step)
-
-                elapsed = datetime.min + timedelta(seconds=elapsed)
-                logger.info(
-                    f"Step: {step + 1:04d} ({elapsed.strftime('%H:%M:%S')}) | "
-                    f"Time: {avg_time * 1000:.1f}ms/step | "
-                    f"Loss: {metrics['loss']:.3f} | "
-                    f"Grad Norm: {metrics['grad_norm']:.3f} | "
-                    f"Circular MSE: {metrics.get('circular_mse', 0):.3f} | "
-                    f"Physics Loss: {metrics.get('physics_loss', 0):.3f} | "
-                )
+            log_progress(step, metrics)
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
         raise

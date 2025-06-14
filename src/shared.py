@@ -1,7 +1,9 @@
 """Shared utilities, neural network components, and model architectures."""
 
 import logging
+import time
 from collections.abc import Iterable, Sequence
+from datetime import datetime, timedelta
 from functools import partial
 
 import jax
@@ -391,3 +393,40 @@ def create_standard_optimizer(
     return nnx.Optimizer(
         model, optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay)
     )
+
+
+def create_progress_logger(
+    total_steps: int,
+    log_every: int = 100,
+    start_step: int = 0,
+):
+    """Factory function that creates a specialized progress logger."""
+
+    start_time = time.perf_counter()
+
+    def log_progress(step: int, metrics: dict):
+        """Log training progress with timing and metrics."""
+        if (step + 1) % log_every != 0:
+            return
+
+        # Calculate timing based on steps since start
+        steps_elapsed = step - start_step + 1
+        elapsed = time.perf_counter() - start_time
+        avg_time = elapsed / steps_elapsed
+        elapsed_str = (datetime.min + timedelta(seconds=elapsed)).strftime("%H:%M:%S")
+
+        # Base progress info
+        progress_str = f"Step: {step + 1:04d}/{total_steps + start_step} ({elapsed_str}) | Time: {avg_time * 1000:.1f}ms/step"
+
+        # Format metrics
+        metric_strs = []
+        for key, value in metrics.items():
+            if hasattr(value, "item"):  # JAX array
+                value = value.item()
+            metric_strs.append(f"{key}: {value:.3f}")
+
+        full_message = progress_str + " | " + " | ".join(metric_strs)
+
+        logger.info(full_message)
+
+    return log_progress
