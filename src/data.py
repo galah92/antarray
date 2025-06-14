@@ -10,10 +10,11 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import typer
+from jax.typing import ArrayLike
 from matplotlib import animation
 from tqdm import tqdm
 
-import analyze
+import physics
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +94,9 @@ def create_radiation_pattern_transform(
 
     @jax.jit
     def transform(
-        radiation_pattern: jax.Array,
-        sin_phi: jax.Array,
-        cos_phi: jax.Array,
+        radiation_pattern: ArrayLike,
+        sin_phi: ArrayLike,
+        cos_phi: ArrayLike,
     ) -> jax.Array:
         if clip:
             radiation_pattern = jnp.clip(radiation_pattern, a_min=0.0)
@@ -128,7 +129,7 @@ class Dataset:
         array_size: tuple[int, int] = (16, 16),
         spacing_mm: tuple[float, float] = (60, 60),
         theta_end: float = 65.0,
-        sim_path: Path = analyze.DEFAULT_SIM_PATH,
+        sim_path: Path = physics.DEFAULT_SIM_PATH,
         max_n_beams: int = 4,
         clip: bool = True,
         normalize: bool = True,
@@ -161,7 +162,7 @@ class Dataset:
         self.key = key
 
         # Load and prepare array parameters
-        array_params = analyze.calc_array_params(
+        array_params = physics.calc_array_params(
             array_size=array_size,
             spacing_mm=spacing_mm,
             theta_rad=self.theta_rad,
@@ -176,7 +177,7 @@ class Dataset:
         self.n_beams_prob = get_beams_prob(max_n_beams)
 
         self.rad_pattern_from_steering = partial(
-            analyze.rad_pattern_from_geo,
+            physics.rad_pattern_from_geo,
             *self.array_params,
         )
 
@@ -228,8 +229,8 @@ def generate_beamforming(
     n_samples: int = 1_000,
     theta_end: float = 65,  # Degrees
     max_n_beams: int = 1,
-    dataset_dir: Path = analyze.DEFAULT_DATASET_DIR,
-    dataset_name: str = analyze.DEFAULT_DATASET_NAME,
+    dataset_dir: Path = physics.DEFAULT_DATASET_DIR,
+    dataset_name: str = physics.DEFAULT_DATASET_NAME,
     overwrite: bool = False,
     seed: int = 42,
 ):
@@ -274,7 +275,7 @@ def generate_beamforming(
 
 @app.command()
 def plot_dataset_phase_shifts(
-    dataset_dir: Path = analyze.DEFAULT_DATASET_DIR,
+    dataset_dir: Path = physics.DEFAULT_DATASET_DIR,
     dataset_name: str = "ff_beamforming.h5",
     gif_name: str = "beamforming_phase_shifts.gif",
 ):
@@ -328,8 +329,8 @@ def plot_dataset_phase_shifts(
 @app.command()
 def plot_sample(
     idx: int,
-    dataset_dir: Path = analyze.DEFAULT_DATASET_DIR,
-    dataset_name: str = analyze.DEFAULT_DATASET_NAME,
+    dataset_dir: Path = physics.DEFAULT_DATASET_DIR,
+    dataset_name: str = physics.DEFAULT_DATASET_NAME,
 ):
     """
     Visualize a single sample from the dataset.
@@ -345,15 +346,15 @@ def plot_sample(
 
     pattern = pattern.clip(min=0)
 
-    analyze.plot_phase_shifts(phase_shifts, ax=axs[0])
+    physics.plot_phase_shifts(phase_shifts, ax=axs[0])
 
-    analyze.plot_ff_2d(theta, phi, pattern, ax=axs[1])
+    physics.plot_ff_2d(theta, phi, pattern, ax=axs[1])
 
     axs[2].remove()
     axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
-    analyze.plot_ff_3d(theta, phi, pattern, ax=axs[2])
+    physics.plot_ff_3d(theta, phi, pattern, ax=axs[2])
 
-    steering_str = analyze.steering_repr(steering)
+    steering_str = physics.steering_repr(steering)
     phase_shift_title = f"Phase Shifts ({steering_str})"
     fig.suptitle(phase_shift_title)
     fig.set_layout_engine("tight")
@@ -378,11 +379,11 @@ def visualize_dataset(batch_size: int = 4, seed: int = 42):
         axes = axes.reshape(1, -1)
 
     for i in range(batch_size):
-        steering_str = analyze.steering_repr(np.degrees(steering_angles[i].T))
+        steering_str = physics.steering_repr(np.degrees(steering_angles[i].T))
         title = f"Radiation Pattern\n{steering_str}"
-        analyze.plot_ff_2d(theta_rad, phi_rad, patterns[i], title=title, ax=axes[i, 0])
+        physics.plot_ff_2d(theta_rad, phi_rad, patterns[i], title=title, ax=axes[i, 0])
         title = "Phase Shifts\n"
-        analyze.plot_phase_shifts(phase_shifts[i], title=title, ax=axes[i, 1])
+        physics.plot_phase_shifts(phase_shifts[i], title=title, ax=axes[i, 1])
 
     fig.suptitle("Batch Overview: Model Inputs")
     fig.set_layout_engine("tight")
@@ -390,27 +391,6 @@ def visualize_dataset(batch_size: int = 4, seed: int = 42):
     plot_path = "batch_overview.png"
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
     logger.info(f"Saved batch overview {plot_path}")
-
-
-def ff_from_phase_shifts(
-    phase_shifts: np.ndarray,
-    sim_dir_path: Path = analyze.DEFAULT_SIM_DIR,
-    single_antenna_filename: str = analyze.DEFAULT_SINGLE_ANT_FILENAME,
-):
-    _, _, taper, percomputed, Dmax_array = analyze.calc_array_params(
-        array_size=(16, 16),
-        spacing_mm=(60, 60),
-        sim_path=sim_dir_path / single_antenna_filename,
-    )
-
-    E_norm = analyze.rad_pattern_from_geo_and_phase_shifts(
-        taper,
-        percomputed,
-        Dmax_array,
-        phase_shifts,
-    )
-
-    return E_norm
 
 
 if __name__ == "__main__":

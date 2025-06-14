@@ -8,15 +8,15 @@ from typing import Sequence
 
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
-import numpy as np
 import optax
 import orbax.checkpoint as ocp
 import typer
 from flax import nnx
+from jax.typing import ArrayLike
 
-import analyze
 import data
+import physics
+from shared import pad_batch, resize_batch
 
 logger = logging.getLogger(__name__)
 
@@ -27,130 +27,6 @@ app = typer.Typer(
 )
 
 
-class ConvBlock(nnx.Module):
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        kernel_size: int | Sequence[int],
-        padding: str = "SAME",
-        *,
-        rngs: nnx.Rngs,
-    ):
-        self.conv1 = nnx.Conv(
-            in_features,
-            in_features,
-            kernel_size=kernel_size,
-            padding=padding,
-            use_bias=False,
-            rngs=rngs,
-        )
-        self.norm1 = nnx.BatchNorm(in_features, rngs=rngs)
-        self.conv2 = nnx.Conv(
-            in_features,
-            out_features,
-            kernel_size=kernel_size,
-            padding=padding,
-            use_bias=False,
-            rngs=rngs,
-        )
-        self.norm2 = nnx.BatchNorm(out_features, rngs=rngs)
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        x = self.conv1(x)
-        x = self.norm1(x)
-        x = nnx.relu(x)
-        x = self.conv2(x)
-        x = self.norm2(x)
-        x = nnx.relu(x)
-        return x
-
-
-def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMethod):
-    shape = (image.shape[0], *shape)  # Add batch dimension
-    return jax.image.resize(image, shape=shape, method=method)
-
-
-class ResidualBlock(nnx.Module):
-    def __init__(
-        self,
-        features: int,
-        kernel_size: int | Sequence[int],
-        padding: str = "SAME",
-        *,
-        rngs: nnx.Rngs,
-    ):
-        self.conv1 = nnx.Conv(
-            features,
-            features,
-            kernel_size=kernel_size,
-            padding=padding,
-            use_bias=False,
-            rngs=rngs,
-        )
-        self.norm1 = nnx.BatchNorm(features, rngs=rngs)
-        self.conv2 = nnx.Conv(
-            features,
-            features,
-            kernel_size=kernel_size,
-            padding=padding,
-            use_bias=False,
-            rngs=rngs,
-        )
-        self.norm2 = nnx.BatchNorm(features, rngs=rngs)
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        residual = x
-        x = self.conv1(x)
-        x = self.norm1(x)
-        x = nnx.relu(x)
-        x = self.conv2(x)
-        x = self.norm2(x)
-        x = x + residual  # Residual connection
-        x = nnx.relu(x)
-        return x
-
-
-class AttentionBlock(nnx.Module):
-    def __init__(self, features: int, *, rngs: nnx.Rngs):
-        self.query_conv = nnx.Conv(
-            features, features // 8, kernel_size=(1, 1), rngs=rngs
-        )
-        self.key_conv = nnx.Conv(features, features // 8, kernel_size=(1, 1), rngs=rngs)
-        self.value_conv = nnx.Conv(features, features, kernel_size=(1, 1), rngs=rngs)
-        self.output_conv = nnx.Conv(features, features, kernel_size=(1, 1), rngs=rngs)
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        batch_size, height, width, channels = x.shape
-
-        # Compute attention
-        query = self.query_conv(x).reshape(batch_size, height * width, -1)
-        key = self.key_conv(x).reshape(batch_size, height * width, -1)
-        value = self.value_conv(x).reshape(batch_size, height * width, -1)
-
-        # Attention weights
-        attention = jax.nn.softmax(
-            jnp.matmul(query, key.transpose(0, 2, 1)) / jnp.sqrt(key.shape[-1]), axis=-1
-        )
-        attended = jnp.matmul(attention, value)
-        attended = attended.reshape(batch_size, height, width, channels)
-
-        # Output projection
-        output = self.output_conv(attended)
-        return x + output  # Residual connection
-
-
-def pad_batch(
-    image: jax.Array,
-    pad_width: Sequence[int | Sequence[int]],
-    mode: str = "constant",
-) -> jax.Array:
-    pad_width = np.asarray(pad_width, dtype=np.int32)
-    if pad_width.shape[0] == 3:  # Add batch dimension
-        pad_width = np.pad(pad_width, ((1, 0), (0, 0)))
-    return jnp.pad(image, pad_width=pad_width, mode=mode)
-
-
 class SEBlock(nnx.Module):
     """Squeeze-and-Excitation block"""
 
@@ -158,7 +34,7 @@ class SEBlock(nnx.Module):
         self.fc1 = nnx.Linear(channels, channels // reduction, rngs=rngs)
         self.fc2 = nnx.Linear(channels // reduction, channels, rngs=rngs)
 
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: ArrayLike) -> jax.Array:
         # Global average pooling
         se = jnp.mean(x, axis=(1, 2), keepdims=True)  # (batch, 1, 1, channels)
         se = se.squeeze((1, 2))  # (batch, channels)
@@ -198,7 +74,7 @@ class SEConvBlock(nnx.Module):
         self.activation = nnx.gelu
         self.se = SEBlock(out_channels, rngs=rngs)
 
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: ArrayLike) -> jax.Array:
         x = self.conv(x)
         x = self.norm(x)
         x = self.activation(x)
@@ -228,11 +104,11 @@ class SEResidualBlock(nnx.Module):
         self.norm2 = nnx.BatchNorm(features, rngs=rngs)
         self.se = SEBlock(features, rngs=rngs)
 
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: ArrayLike) -> jax.Array:
         residual = x
         x = self.conv1(x)
         x = self.norm1(x)
-        x = nnx.gelu(x)  # Changed from relu to match SEConvBlock
+        x = nnx.gelu(x)
         x = self.conv2(x)
         x = self.norm2(x)
         x = self.se(x)
@@ -241,7 +117,9 @@ class SEResidualBlock(nnx.Module):
         return x
 
 
-class ConvNet(nnx.Module):
+class RegressionNet(nnx.Module):
+    """ConvNet for direct regression from radiation patterns to phase shifts."""
+
     def __init__(
         self,
         enc_pad="SAME",
@@ -280,7 +158,7 @@ class ConvNet(nnx.Module):
             nnx.Conv(16, 1, (1, 1), padding="SAME", rngs=rngs),  # (16, 16, 1)
         )
 
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: ArrayLike) -> jax.Array:
         x = self.pad(x)
         x = self.encoder(x)
         x = self.bottleneck(x)
@@ -320,7 +198,7 @@ def restore_checkpoint(
 
 def circular_mse_fn(
     batch: data.DataBatch,
-    pred_phase_shifts: jax.Array,
+    pred_phase_shifts: ArrayLike,
 ) -> jax.Array:
     phase_shifts = batch.phase_shifts
 
@@ -332,27 +210,37 @@ def circular_mse_fn(
     return circular_mse
 
 
-def create_physics_loss_fn(dataset: data.Dataset):
-    array_params = dataset.array_params
-    f = partial(analyze.rad_pattern_from_geo_and_phase_shifts, *array_params[2:])
-    pattern_from_phase_shifts = jax.vmap(f)
-    transform_fn = jax.vmap(dataset.transform_fn)
+def create_physics_loss_fn(config: physics.ArrayConfig):
+    """Create physics loss function using modern physics setup."""
+    # Create physics setup once
+    key = jax.random.key(0)  # Deterministic for consistency
+    _, synthesize_embedded, _ = physics.create_physics_setup(config, key)
 
     def physics_loss_fn(
         batch: data.DataBatch,
-        pred_phase_shifts: jax.Array,
+        pred_phase_shifts: ArrayLike,
     ):
         radiation_patterns = batch.radiation_patterns
 
-        pred_patterns = pattern_from_phase_shifts(pred_phase_shifts)
-        pred_patterns = transform_fn(pred_patterns)
+        # Convert predicted phase shifts to complex weights
+        pred_weights = jnp.exp(-1j * pred_phase_shifts)
 
-        # Remove trig encoding dimensions
-        radiation_patterns = radiation_patterns[:, :, :, 0]
-        pred_patterns = pred_patterns[:, :, :, 0]
+        # Synthesize patterns using embedded physics
+        pred_patterns = jax.vmap(synthesize_embedded)(pred_weights)
 
+        # Remove trig encoding dimensions if present
+        if radiation_patterns.shape[-1] > 1:
+            radiation_patterns = radiation_patterns[:, :, :, 0]
+        if len(pred_patterns.shape) > 3:
+            pred_patterns = (
+                pred_patterns[:, :, 0]
+                if pred_patterns.shape[-1] > 1
+                else pred_patterns.squeeze(-1)
+            )
+
+        # Compute loss between predicted and target patterns
         loss = jnp.mean((pred_patterns - radiation_patterns) ** 2)
-        loss = loss * (30.0**2)  # Scale by max_dB^2
+        loss = loss * (30.0**2)
 
         return loss
 
@@ -360,9 +248,9 @@ def create_physics_loss_fn(dataset: data.Dataset):
 
 
 def loss_fn(
-    model: ConvNet,
+    model: RegressionNet,
     batch: data.DataBatch,
-    dataset: data.Dataset,
+    config: physics.ArrayConfig,
     *,
     use_physics_loss: bool = False,
     use_circular_mse: bool = True,
@@ -370,11 +258,10 @@ def loss_fn(
     pred_phase_shifts = model(batch.radiation_patterns)
 
     metrics = {}
-
     loss = jnp.zeros(())
 
     if use_physics_loss:
-        physics_loss_fn = create_physics_loss_fn(dataset)
+        physics_loss_fn = create_physics_loss_fn(config)
         physics_loss = physics_loss_fn(batch, pred_phase_shifts)
         loss += physics_loss
         metrics["physics_loss"] = physics_loss
@@ -410,7 +297,7 @@ def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer, train_step):
 
 
 def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimizer:
-    model = ConvNet(rngs=nnx.Rngs(key))
+    model = RegressionNet(rngs=nnx.Rngs(key))
     schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
     optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
     return optimizer
@@ -439,10 +326,12 @@ def train(
         start_step = restore_checkpoint(ckpt_mngr, optimizer, step=None)
         logger.info(f"Resuming from step {start_step}")
 
-    n_steps -= start_step  # Adjust n_steps based on the restored step
+    n_steps -= start_step
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
-    train_step = create_train_step(loss_fn=partial(loss_fn, dataset=dataset))
+    config = physics.ArrayConfig()
+
+    train_step = create_train_step(loss_fn=partial(loss_fn, config=config))
     warmup_step(dataset, optimizer, train_step)
 
     logger.info("Starting development run")
@@ -499,88 +388,6 @@ def eval(seed: int = 42):
     #     f"Phase RMSE: {metrics['phase_rmse']:.3f} | "
     #     f"Grad Norm: {metrics['grad_norm']:.3f}"
     # )
-
-
-@app.command()
-def pred(
-    theta_deg: list[float] = [],
-    phi_deg: list[float] = [],
-    filepath: str = "prediction.png",
-    seed: int = 42,
-):
-    key = jax.random.key(seed)
-    key, dataset_key, model_key = jax.random.split(key, num=3)
-
-    cpu = jax.devices("cpu")[0]
-    with jax.default_device(cpu):
-        logger.info("Running prediction on CPU")
-
-        optimizer = create_trainables(n_steps=1, lr=0.0, key=model_key)
-
-        # Get and load latest checkpoint
-        ckpt_path = Path.cwd() / "checkpoints"
-        ckpt_options = ocp.CheckpointManagerOptions(read_only=True)
-        with ocp.CheckpointManager(ckpt_path, options=ckpt_options) as ckpt_mngr:
-            _ = restore_checkpoint(ckpt_mngr, optimizer, step=None)
-
-        optimizer.model.eval()
-
-        # Use provided steering angles
-        theta_d, phi_d = jnp.asarray(theta_deg), jnp.asarray(phi_deg)
-        steering_deg = jnp.stack([theta_d, phi_d], axis=-1)
-        steering_angles = jnp.radians(steering_deg)
-
-        dataset = data.Dataset(batch_size=1, limit=1, key=dataset_key)
-        radiation_pattern, true_excitations = analyze.rad_pattern_from_geo(
-            *dataset.array_params, steering_angles
-        )
-        true_ps = np.asarray(np.angle(true_excitations))
-
-        transformed = dataset.transform_fn(radiation_pattern)
-        pred_ps = optimizer.model(transformed[None, ...])[0]
-
-        true_rp = data.ff_from_phase_shifts(true_ps)
-        pred_rp = data.ff_from_phase_shifts(pred_ps)
-        true_rp, pred_rp = true_rp[:90], pred_rp[:90]  # Limit to zenith angles
-
-    fig, axs = plt.subplots(2, 4, figsize=(18, 8))
-
-    analyze.plot_phase_shifts(true_ps, title="Ground Truth Phase Shifts", ax=axs[0, 0])
-    analyze.plot_phase_shifts(pred_ps, title="Predicted Phase Shifts", ax=axs[1, 0])
-
-    clip_rp = True  # Clip ratiation patterns to non-negative values
-    if clip_rp:
-        true_rp, pred_rp = true_rp.clip(min=0), pred_rp.clip(min=0)
-
-    theta, phi = np.asarray(dataset.theta_rad), np.asarray(dataset.phi_rad)
-
-    title = "Ground Truth 2D Radiation Pattern"
-    analyze.plot_ff_2d(theta, phi, true_rp, title=title, ax=axs[0, 1])
-    title = "Predicted 2D Radiation Pattern"
-    analyze.plot_ff_2d(theta, phi, pred_rp, title=title, ax=axs[1, 1])
-
-    title = "Ground Truth Sine-Space Radiation Pattern"
-    analyze.plot_sine_space(theta, phi, true_rp, title=title, ax=axs[0, 2])
-    title = "Predicted Sine-Space Radiation Pattern"
-    analyze.plot_sine_space(theta, phi, pred_rp, title=title, ax=axs[1, 2])
-
-    axs[0, 3].remove()
-    axs[0, 3] = fig.add_subplot(2, 4, 4, projection="3d")
-    title = "Ground Truth 3D Radiation Pattern"
-    analyze.plot_ff_3d(theta, phi, true_rp, title=title, ax=axs[0, 3])
-
-    axs[1, 3].remove()
-    axs[1, 3] = fig.add_subplot(2, 4, 8, projection="3d")
-    title = "Predicted 3D Radiation Pattern"
-    analyze.plot_ff_3d(theta, phi, pred_rp, title=title, ax=axs[1, 3])
-
-    steering_str = analyze.steering_repr(np.degrees(steering_angles.T))
-    fig.suptitle(f"Prediction with {steering_str}")
-
-    fig.set_layout_engine("tight")
-
-    fig.savefig(filepath, dpi=300, bbox_inches="tight")
-    print(f"Prediction example saved to {filepath}")
 
 
 if __name__ == "__main__":

@@ -1,130 +1,21 @@
 import logging
 import sys
 from collections.abc import Callable
-from functools import partial
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 from flax import nnx
 
+from physics import ArrayConfig, create_physics_setup
 from shared import (
-    ArrayConfig,
-    ConvBlock,
-    create_analytical_weight_calculator,
-    create_element_patterns,
-    create_pattern_synthesizer,
+    DenoisingUNet,
     normalize_patterns,
-    pad_batch,
-    resize_batch,
     steering_angles_sampler,
 )
 
 logger = logging.getLogger(__name__)
-
-
-class DenoisingUNet(nnx.Module):
-    """UNet for denoising complex antenna weights with pattern conditioning."""
-
-    def __init__(
-        self,
-        base_channels: int = 64,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        # Pattern encoder - encodes target pattern to conditioning features
-        self.pattern_pad = nnx.Sequential(
-            partial(pad_batch, pad_width=((6, 6), (0, 0), (0, 0)), mode="reflect"),
-            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
-        )
-        self.pattern_encoder = nnx.Sequential(
-            ConvBlock(1, base_channels // 4, (3, 3), rngs=rngs),
-            partial(nnx.max_pool, window_shape=(3, 6), strides=(3, 6)),
-            ConvBlock(base_channels // 4, base_channels // 2, (3, 3), rngs=rngs),
-            partial(nnx.max_pool, window_shape=(4, 4), strides=(4, 4)),
-            ConvBlock(base_channels // 2, base_channels, (3, 3), rngs=rngs),
-        )
-
-        # Time embedding for diffusion timestep - match concatenated feature size
-        self.time_mlp = nnx.Sequential(
-            nnx.Linear(1, base_channels, rngs=rngs),
-            nnx.relu,
-            nnx.Linear(base_channels, base_channels * 2, rngs=rngs),
-        )
-
-        # UNet encoder
-        self.weights_input = ConvBlock(2, base_channels, (3, 3), rngs=rngs)
-
-        self.down1 = ConvBlock(base_channels * 2, base_channels * 2, (3, 3), rngs=rngs)
-        self.down2 = ConvBlock(base_channels * 2, base_channels * 4, (3, 3), rngs=rngs)
-        self.down3 = ConvBlock(base_channels * 4, base_channels * 8, (3, 3), rngs=rngs)
-
-        # Bottleneck
-        self.bottleneck = ConvBlock(
-            base_channels * 8, base_channels * 8, (3, 3), rngs=rngs
-        )
-
-        # UNet decoder
-        self.up3 = ConvBlock(base_channels * 16, base_channels * 4, (3, 3), rngs=rngs)
-        self.up2 = ConvBlock(base_channels * 8, base_channels * 2, (3, 3), rngs=rngs)
-        self.up1 = ConvBlock(base_channels * 4, base_channels, (3, 3), rngs=rngs)
-
-        # Output
-        self.output = nnx.Conv(base_channels, 2, (1, 1), rngs=rngs)
-
-    def __call__(
-        self, noisy_weights: jax.Array, target_pattern: jax.Array, timestep: jax.Array
-    ) -> jax.Array:
-        # Encode target pattern
-        pattern_input = target_pattern[..., None]
-        pattern_features = self.pattern_pad(pattern_input)
-        pattern_features = self.pattern_encoder(pattern_features)
-
-        # Time embedding
-        time_emb = self.time_mlp(timestep[..., None])
-        time_emb = time_emb[:, None, None, :]
-
-        # Process noisy weights (convert complex to real/imag channels)
-        weights_real = jnp.real(noisy_weights)[..., None]
-        weights_imag = jnp.imag(noisy_weights)[..., None]
-        weights_input = jnp.concatenate([weights_real, weights_imag], axis=-1)
-        weights_features = self.weights_input(weights_input)
-
-        # Combine pattern and weights features
-        x = jnp.concatenate([pattern_features, weights_features], axis=-1)
-
-        # Add time embedding
-        x = x + time_emb
-
-        # Encoder path
-        x1 = self.down1(x)
-        x2 = self.down2(nnx.max_pool(x1, (2, 2), (2, 2)))
-        x3 = self.down3(nnx.max_pool(x2, (2, 2), (2, 2)))
-
-        # Bottleneck
-        bottleneck = self.bottleneck(nnx.max_pool(x3, (2, 2), (2, 2)))
-
-        # Decoder path with skip connections
-        up3 = resize_batch(bottleneck, (4, 4, bottleneck.shape[-1]), "bilinear")
-        up3 = jnp.concatenate([up3, x3], axis=-1)
-        up3 = self.up3(up3)
-
-        up2 = resize_batch(up3, (8, 8, up3.shape[-1]), "bilinear")
-        up2 = jnp.concatenate([up2, x2], axis=-1)
-        up2 = self.up2(up2)
-
-        up1 = resize_batch(up2, (16, 16, up2.shape[-1]), "bilinear")
-        up1 = jnp.concatenate([up1, x1], axis=-1)
-        up1 = self.up1(up1)
-
-        # Output (real/imag channels)
-        output = self.output(up1)
-
-        # Convert back to complex
-        output_complex = output[..., 0] + 1j * output[..., 1]
-        return output_complex
 
 
 class DDPMScheduler:
@@ -202,42 +93,6 @@ class DDPMScheduler:
         return pred_prev_sample
 
 
-def get_wavenumber(freq_hz: float) -> float:
-    """Calculate the wavenumber for a given frequency in Hz."""
-    c = 299792458
-    wavelength = c / freq_hz
-    return 2 * np.pi / wavelength
-
-
-def get_element_positions(
-    array_size: tuple[int, int], spacing_mm: tuple[float, float]
-) -> tuple[jax.Array, jax.Array]:
-    """Calculates element positions in meters, centered at the origin."""
-    xn, yn = array_size
-    dx_m, dy_m = spacing_mm[0] / 1000, spacing_mm[1] / 1000
-    x_pos = (jnp.arange(xn) - (xn - 1) / 2) * dx_m
-    y_pos = (jnp.arange(yn) - (yn - 1) / 2) * dy_m
-    return x_pos, y_pos
-
-
-@jax.jit
-def convert_to_db(patterns: jax.Array, floor_db: float = -60) -> jax.Array:
-    """Converts a batch of normalized linear power patterns to a dB scale."""
-    linear_floor = 10.0 ** (floor_db / 10.0)
-    clipped_patterns = jnp.maximum(patterns, linear_floor)
-    return 10.0 * jnp.log10(clipped_patterns)
-
-
-@jax.jit
-def calculate_pattern_loss(
-    predicted_patterns: jax.Array, target_patterns: jax.Array
-) -> tuple[jax.Array, dict]:
-    """Calculates the loss and metrics between predicted and target patterns."""
-    mse = optax.losses.squared_error(predicted_patterns, target_patterns).mean()
-    rmse = jnp.sqrt(mse)
-    return mse, {"mse": mse, "rmse": rmse}
-
-
 def create_train_step_fn(
     synthesize_ideal_pattern: Callable,
     synthesize_embedded_pattern: Callable,
@@ -286,16 +141,10 @@ def create_train_step_fn(
         predicted_patterns = vmapped_embedded_synthesizer(predicted_clean_weights)
         predicted_patterns = normalize_patterns(predicted_patterns)
 
-        # Combined loss: denoising + physics (ensure real values)
-        denoising_loss = jnp.mean(
-            jnp.abs(predicted_noise - noise) ** 2
-        )  # Use abs for complex
-        physics_loss = jnp.mean(
-            (predicted_patterns - target_patterns) ** 2
-        )  # Already real
+        denoising_loss = jnp.mean(jnp.abs(predicted_noise - noise) ** 2)
+        physics_loss = jnp.mean((predicted_patterns - target_patterns) ** 2)
 
-        # Adaptive physics weight - start smaller and increase over time
-        physics_weight = 0.05  # Reduced from 0.1
+        physics_weight = 0.05
         total_loss = denoising_loss + physics_weight * physics_loss
 
         metrics = {
@@ -387,14 +236,11 @@ def train_diffusion_pipeline(
 
     logger.info("Setting up diffusion training pipeline")
 
-    # Create element patterns and synthesizers
-    key, ideal_key, embedded_key = jax.random.split(key, 3)
-    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
-    embedded_patterns = create_element_patterns(config, embedded_key, is_embedded=True)
-
-    synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
-    synthesize_embedded = create_pattern_synthesizer(embedded_patterns, config)
-    compute_analytical = create_analytical_weight_calculator(config)
+    # Create physics setup
+    key, physics_key = jax.random.split(key)
+    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
+        config, physics_key
+    )
 
     # Create scheduler and model
     scheduler = DDPMScheduler(num_train_timesteps=1000)
@@ -465,15 +311,15 @@ def evaluate_diffusion_model(
     test_angles = steering_angles_sampler(angle_key, batch_size=n_eval_samples, limit=1)
     test_batch = next(test_angles)
 
+    # Create physics setup for evaluation
+    key, physics_key = jax.random.split(key)
+    synthesize_ideal, _, compute_analytical = create_physics_setup(config, physics_key)
+
     # Compute analytical weights and target patterns
-    compute_analytical = create_analytical_weight_calculator(config)
     vmapped_analytical_weights = jax.vmap(compute_analytical)
     analytical_weights, _ = vmapped_analytical_weights(test_batch)
 
     # Create ideal target patterns
-    key, ideal_key = jax.random.split(key)
-    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
-    synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
     ideal_target_patterns = jax.vmap(synthesize_ideal)(analytical_weights)
     ideal_target_patterns = normalize_patterns(ideal_target_patterns)
 

@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache, partial
 from pathlib import Path
@@ -12,6 +13,15 @@ import numpy as np
 from jax.typing import ArrayLike
 
 logger = logging.getLogger(__name__)
+
+
+class ArrayConfig:
+    """Configuration for antenna array parameters and simulation settings."""
+
+    array_size: tuple[int, int] = (16, 16)
+    spacing_mm: tuple[float, float] = (60.0, 60.0)
+    freq_hz: float = 2.45e9
+    pattern_shape: tuple[int, int] = (180, 360)  # (theta, phi)
 
 
 @dataclass(frozen=True)
@@ -58,12 +68,11 @@ def load_openems_nf2ff(nf2ff_path: Path):
     return OpenEMSData(theta_rad, phi_rad, r, Dmax, freq_hz, E_field, E_norm)
 
 
-def get_wavenumber(freq_hz: float) -> float:
-    """
-    Calculate the wavenumber for a given frequency in Hz.
-    The wavenumber is defined as k = 2π/λ, where λ is the wavelength.
-    The wavelength is calculated as λ = c/f, where c is the speed of light.
-    """
+def get_wavenumber(freq_hz: float = None, config: ArrayConfig = None) -> float:
+    """Calculate the wavenumber for a given frequency in Hz."""
+    if freq_hz is None:
+        freq_hz = config.freq_hz if config is not None else ArrayConfig.freq_hz
+
     c = 299792458  # Speed of light in m/s
     wavelength = c / freq_hz  # Wavelength in meters
     k = 2 * np.pi / wavelength  # Wavenumber in radians/meter
@@ -72,9 +81,19 @@ def get_wavenumber(freq_hz: float) -> float:
 
 @lru_cache(maxsize=1)
 def get_element_positions(
-    array_size: tuple[int, int],
-    spacing_mm: tuple[float, float],
+    array_size: tuple[int, int] = None,
+    spacing_mm: tuple[float, float] = None,
+    config: ArrayConfig = None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Calculate element positions using config or explicit parameters."""
+    if config is not None:
+        array_size = config.array_size
+        spacing_mm = config.spacing_mm
+    elif array_size is None or spacing_mm is None:
+        # Use defaults from ArrayConfig
+        array_size = ArrayConfig.array_size
+        spacing_mm = ArrayConfig.spacing_mm
+
     xn, yn = array_size
     dx_mm, dy_mm = spacing_mm
     # Calculate the x and y positions of the elements in the array in meters, centered around (0, 0)
@@ -94,28 +113,30 @@ DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_DATASET_NAME = "farfield_dataset.h5"
 
 
-def check_grating_lobes(freq, spacing_mm, verbose=False):
+def check_grating_lobes(freq=None, spacing_mm=None, config=None, verbose=False):
     """Check for potential grating lobes in an antenna array based on element spacing."""
+    if config is not None:
+        freq = config.freq_hz
+        spacing_mm = config.spacing_mm
+    elif freq is None or spacing_mm is None:
+        freq = ArrayConfig.freq_hz if freq is None else freq
+        spacing_mm = ArrayConfig.spacing_mm if spacing_mm is None else spacing_mm
 
-    # Calculate wavelength
-    c = 299792458  # Speed of light in m/s
-    wavelength = c / freq  # Wavelength in meters
-    wavelength_mm = wavelength * 1000  # Wavelength in mm
+    c = 299792458
+    wavelength = c / freq
+    wavelength_mm = wavelength * 1000
 
-    # Check spacing in terms of wavelength
     dx, dy = spacing_mm
     dx_lambda = dx / wavelength_mm
     dy_lambda = dy / wavelength_mm
 
-    # Calculate critical angles where grating lobes start to appear
-    # For visible grating lobes: d/λ > 1/(1+|sin(θ)|)
     if dx_lambda <= 0.5:
-        dx_critical = 90  # No grating lobes for spacing <= λ/2
+        dx_critical = 90
     else:
         dx_critical = np.rad2deg(np.arcsin(1 / dx_lambda - 1))
 
     if dy_lambda <= 0.5:
-        dy_critical = 90  # No grating lobes for spacing <= λ/2
+        dy_critical = 90
     else:
         dy_critical = np.rad2deg(np.arcsin(1 / dy_lambda - 1))
 
@@ -125,41 +146,45 @@ def check_grating_lobes(freq, spacing_mm, verbose=False):
 
     if verbose:
         logger.info("Array spacing check:")
-        logger.info(f"Wavelength: {'wavelength_mm':.2f} mm")
-        logger.info(f"Element spacing: {'dx_lambda':.1f}λ x {'dy_lambda':.1f}λ")
+        logger.info(f"Wavelength: {wavelength_mm:.2f} mm")
+        logger.info(f"Element spacing: {dx_lambda:.1f}λ x {dy_lambda:.1f}λ")
 
     if has_grating_lobes:
         logger.info("WARNING: Grating lobes will be visible when steering beyond:")
         if dx_critical_angle is not None:
-            logger.info(f"  - {'dx_critical_angle':.1f}° in the X direction")
+            logger.info(f"  - {dx_critical_angle:.1f}° in the X direction")
         if dy_critical_angle is not None:
-            logger.info(f"  - {'dy_critical_angle':.1f}° in the Y direction")
+            logger.info(f"  - {dy_critical_angle:.1f}° in the Y direction")
 
 
 def calc_array_params(
-    array_size: tuple[int, int] = (16, 16),
-    spacing_mm: tuple[float, float] = (60, 60),
+    array_size: tuple[int, int] = ArrayConfig.array_size,
+    spacing_mm: tuple[float, float] = ArrayConfig.spacing_mm,
     *,
-    theta_rad: np.ndarray = np.radians(np.arange(180)),
-    phi_rad: np.ndarray = np.radians(np.arange(360)),
-    sim_path: Path = DEFAULT_SIM_PATH,
+    theta_rad: np.ndarray = None,
+    phi_rad: np.ndarray = None,
+    sim_path: Path = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, jax.Array, jax.Array]:
+    """Calculate array parameters using explicit parameters or defaults."""
+    theta_rad = theta_rad if theta_rad is not None else np.radians(np.arange(180))
+    phi_rad = phi_rad if phi_rad is not None else np.radians(np.arange(360))
+    sim_path = sim_path or DEFAULT_SIM_PATH
+
     nf2ff = load_openems_nf2ff(sim_path)
     E_field, Dmax, freq_hz = nf2ff.E_field, nf2ff.Dmax, nf2ff.freq_hz
-    E_field = E_field[: theta_rad.size, ...]  # Trim to match theta_rad
-    Dmax_array = Dmax * np.prod(array_size)  # Scale Dmax for the array size
+    E_field = E_field[: theta_rad.size, ...]
+    Dmax_array = Dmax * np.prod(array_size)
 
     check_grating_lobes(freq_hz, spacing_mm)
 
     k = get_wavenumber(freq_hz)
     x_pos, y_pos = get_element_positions(array_size, spacing_mm)
-    kx, ky = k * x_pos, k * y_pos  # Wavenumber-scaled positions
+    kx, ky = k * x_pos, k * y_pos
 
     geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
 
-    # Precompute array contributions
     precomputed = jnp.einsum("tpc,tpxy->tpcxy", E_field, geo_exp)
-    precomputed = precomputed / np.prod(array_size)  # Normalize by number of elements
+    precomputed = precomputed / np.prod(array_size)
 
     taper = calc_taper(array_size)
     return kx, ky, taper, precomputed, Dmax_array
@@ -185,28 +210,22 @@ def calc_taper(
 
 @jax.jit
 def calc_phase_shifts(
-    kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
-    ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
-    steering_rad: ArrayLike,  # Steering angles in radians, (n_angles, 2) for (theta, phi)
+    kx: ArrayLike,
+    ky: ArrayLike,
+    steering_rad: ArrayLike,
 ) -> jax.Array:
-    """
-    Calculate phase shifts for each element in the array based on steering angles.
-    Computes the phase shifts for each element based on the steering angles
-    and the positions of the elements in the array.
-    """
-    theta_steering, phi_steering = steering_rad.T  # (n_angles, 2)
+    """Calculate phase shifts for each element in the array based on steering angles."""
+    theta_steering, phi_steering = steering_rad.T
 
-    # Calculate steering vector components
     sin_theta = jnp.sin(theta_steering)
     ux = sin_theta * jnp.cos(phi_steering)
     uy = sin_theta * jnp.sin(phi_steering)
 
-    x_phase = kx[:, None] * ux[None, :]  # (xn,), (n_angles,) -> (xn, n_angles)
-    y_phase = ky[:, None] * uy[None, :]  # (yn,), (n_angles,) -> (yn, n_angles)
+    x_phase = kx[:, None] * ux[None, :]
+    y_phase = ky[:, None] * uy[None, :]
 
-    # Combine phases: (xn, n_angles), (yn, n_angles) -> (xn, yn, n_angles)
     phase_shifts = x_phase[:, None, :] + y_phase[None, :, :]
-    phase_shifts = phase_shifts % (2 * jnp.pi)  # Normalize to [0, 2π)
+    phase_shifts = phase_shifts % (2 * jnp.pi)
 
     return phase_shifts
 
@@ -249,20 +268,14 @@ def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> jax.Array:
 
 @jax.jit
 def rad_pattern_from_geo_and_excitations(
-    precomputed: ArrayLike,  # Precomputed array exponential terms, shape (2, xn, yn, theta, phi)
+    precomputed: ArrayLike,
     Dmax_array: float,
-    w: ArrayLike,  # Element excitations, shape (xn, yn, n_angles)
+    w: ArrayLike,
 ) -> jax.Array:
     E_total = jnp.einsum("xy,tpcxy->tpc", w, precomputed)
 
     E_total = jnp.abs(E_total) ** 2
-
-    # E_total.shape == (theta, phi, 2) or (theta, phi, 1).
-    # If it's the former, E_total_theta & E_total_phi are the theta and phi components of the electric field.
-    # In both cases, we want the norm and can sum.
     E_total = jnp.sum(E_total, axis=-1)
-
-    # TODO: this is probably not needed because the power density is proportional to the magnitude of the E-field *squared*.
     E_total = jnp.sqrt(E_total)
 
     E_norm = normalize_rad_pattern(E_total, Dmax_array)
@@ -295,8 +308,6 @@ def rad_pattern_from_geo(
     """
     phase_shifts = calc_phase_shifts(kx, ky, steering_rad)
 
-    # This assumes the taper is constant across all angles.
-    # If taper is a 2D array, it should match the shape of phase_shifts.
     excitations = jnp.einsum("xy,xys->xy", taper, jnp.exp(-1j * phase_shifts))
 
     E_norm = rad_pattern_from_geo_and_excitations(precomputed, Dmax_array, excitations)
@@ -591,4 +602,120 @@ def test_plot_ff_3d():
     logger.info(f"Saved sample plot to {fig_path}")
 
 
-# test_plot_ff_3d()
+def create_analytical_weight_calculator(config: ArrayConfig = None) -> Callable:
+    """Factory to create a function for calculating analytical weights."""
+    config = config or ArrayConfig()
+
+    k = get_wavenumber(config=config)
+    x_pos, y_pos = get_element_positions(config=config)
+    k_pos_x, k_pos_y = k * x_pos, k * y_pos
+
+    @jax.jit
+    def calculate(steering_angle_rad: ArrayLike) -> tuple[jax.Array, jax.Array]:
+        """Calculates ideal, analytical weights for a given steering angle."""
+        theta_steer, phi_steer = steering_angle_rad[0], steering_angle_rad[1]
+
+        ux = jnp.sin(theta_steer) * jnp.cos(phi_steer)
+        uy = jnp.sin(theta_steer) * jnp.sin(phi_steer)
+
+        x_phase, y_phase = k_pos_x * ux, k_pos_y * uy
+        phase_shifts = jnp.add.outer(x_phase, y_phase)
+
+        return jnp.exp(-1j * phase_shifts), phase_shifts
+
+    return calculate
+
+
+def create_pattern_synthesizer(
+    element_patterns: jax.Array, config: ArrayConfig = None
+) -> Callable:
+    """Factory to create a pattern synthesis function."""
+    config = config or ArrayConfig()
+
+    @jax.jit
+    def precompute_basis(raw_patterns):
+        k = get_wavenumber(config=config)
+        x_pos, y_pos = get_element_positions(config=config)
+        k_pos_x, k_pos_y = k * x_pos, k * y_pos
+
+        theta_size, phi_size = config.pattern_shape
+        theta_rad = jnp.radians(jnp.arange(theta_size))
+        phi_rad = jnp.radians(jnp.arange(phi_size))
+
+        sin_theta = jnp.sin(theta_rad)
+        ux = sin_theta[:, None] * jnp.cos(phi_rad)[None, :]
+        uy = sin_theta[:, None] * jnp.sin(phi_rad)[None, :]
+
+        phase_x, phase_y = ux[..., None] * k_pos_x, uy[..., None] * k_pos_y
+        geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
+        geo_factor = jnp.exp(1j * geo_phase)
+
+        return jnp.einsum("xytpz,tpxy->tpzxy", raw_patterns, geo_factor)
+
+    element_field_basis = precompute_basis(element_patterns)
+
+    @jax.jit
+    def synthesize(weights: ArrayLike) -> jax.Array:
+        """Synthesizes a pattern from weights using the precomputed basis."""
+        total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_field_basis)
+        power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
+        return power_pattern
+
+    return synthesize
+
+
+def create_element_patterns(
+    config: ArrayConfig, key: jax.Array, is_embedded: bool
+) -> jax.Array:
+    """Simulates element patterns for either ideal or embedded array."""
+    theta_size, phi_size = config.pattern_shape
+    theta = jnp.radians(jnp.arange(theta_size))
+
+    # Base cosine model for field amplitude
+    base_field_amp = jnp.cos(theta)
+    base_field_amp = base_field_amp.at[theta > np.pi / 2].set(0)
+    base_field_amp = base_field_amp[:, None] * jnp.ones((theta_size, phi_size))
+
+    if not is_embedded:
+        ideal_field = base_field_amp[None, None, :, :, None]
+        ideal_field = jnp.tile(ideal_field, (*config.array_size, 1, 1, 1))
+        return ideal_field.astype(jnp.complex64)
+
+    # Embedded case: simulate distortion
+    num_pols = 2
+    final_shape = (*config.array_size, *config.pattern_shape, num_pols)
+    low_res_shape = (*config.array_size, 10, 20, num_pols)
+
+    key, amp_key, phase_key = jax.random.split(key, 3)
+
+    amp_dist_low_res = jax.random.uniform(
+        amp_key, low_res_shape, minval=0.5, maxval=1.5
+    )
+    amp_distortion = jax.image.resize(amp_dist_low_res, final_shape, method="bicubic")
+
+    phase_dist_low_res = jax.random.uniform(phase_key, low_res_shape, maxval=2 * np.pi)
+    phase_distortion = jax.image.resize(
+        phase_dist_low_res, final_shape, method="bicubic"
+    )
+
+    distorted_amplitude = base_field_amp[None, None, ..., None] * amp_distortion
+    distorted_field = distorted_amplitude * jnp.exp(1j * phase_distortion)
+
+    return distorted_field.astype(jnp.complex64)
+
+
+def create_physics_setup(config: ArrayConfig = None, key: jax.Array = None):
+    """Creates the physics simulation setup (patterns and synthesizers)."""
+    config = config or ArrayConfig()
+    key = key or jax.random.key(0)
+
+    key, ideal_key, embedded_key = jax.random.split(key, 3)
+
+    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
+    embedded_patterns = create_element_patterns(config, embedded_key, is_embedded=True)
+
+    synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
+    synthesize_embedded = create_pattern_synthesizer(embedded_patterns, config)
+    compute_analytical = create_analytical_weight_calculator(config)
+
+    return synthesize_ideal, synthesize_embedded, compute_analytical

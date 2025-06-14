@@ -2,7 +2,6 @@ import logging
 import sys
 import time
 from datetime import datetime, timedelta
-from functools import partial
 from pathlib import Path
 
 import jax
@@ -11,114 +10,15 @@ import optax
 import orbax.checkpoint as ocp
 from flax import nnx
 
+from physics import ArrayConfig, create_physics_setup
 from shared import (
-    ArrayConfig,
-    ConvBlock,
-    create_analytical_weight_calculator,
-    create_element_patterns,
-    create_pattern_synthesizer,
+    VelocityNet,
+    create_standard_optimizer,
     normalize_patterns,
-    pad_batch,
-    resize_batch,
     steering_angles_sampler,
 )
 
 logger = logging.getLogger(__name__)
-
-
-class VelocityNet(nnx.Module):
-    """Neural network that predicts the velocity field for flow matching."""
-
-    def __init__(
-        self,
-        base_channels: int = 64,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        # Pattern encoder - same as diffusion model
-        self.pattern_pad = nnx.Sequential(
-            partial(pad_batch, pad_width=((6, 6), (0, 0), (0, 0)), mode="reflect"),
-            partial(pad_batch, pad_width=((0, 0), (12, 12), (0, 0)), mode="wrap"),
-        )
-        self.pattern_encoder = nnx.Sequential(
-            ConvBlock(1, base_channels // 4, (3, 3), rngs=rngs),
-            partial(nnx.max_pool, window_shape=(3, 6), strides=(3, 6)),
-            ConvBlock(base_channels // 4, base_channels // 2, (3, 3), rngs=rngs),
-            partial(nnx.max_pool, window_shape=(4, 4), strides=(4, 4)),
-            ConvBlock(base_channels // 2, base_channels, (3, 3), rngs=rngs),
-        )
-
-        # Time embedding for flow time t ∈ [0, 1]
-        self.time_mlp = nnx.Sequential(
-            nnx.Linear(1, base_channels, rngs=rngs),
-            nnx.relu,
-            nnx.Linear(base_channels, base_channels * 2, rngs=rngs),
-        )
-
-        # UNet for processing current state
-        self.weights_input = ConvBlock(2, base_channels, (3, 3), rngs=rngs)
-
-        self.down1 = ConvBlock(base_channels * 2, base_channels * 2, (3, 3), rngs=rngs)
-        self.down2 = ConvBlock(base_channels * 2, base_channels * 4, (3, 3), rngs=rngs)
-        self.down3 = ConvBlock(base_channels * 4, base_channels * 8, (3, 3), rngs=rngs)
-
-        self.bottleneck = ConvBlock(
-            base_channels * 8, base_channels * 8, (3, 3), rngs=rngs
-        )
-
-        self.up3 = ConvBlock(base_channels * 16, base_channels * 4, (3, 3), rngs=rngs)
-        self.up2 = ConvBlock(base_channels * 8, base_channels * 2, (3, 3), rngs=rngs)
-        self.up1 = ConvBlock(base_channels * 4, base_channels, (3, 3), rngs=rngs)
-
-        # Output velocity field (real/imag channels)
-        self.output = nnx.Conv(base_channels, 2, (1, 1), rngs=rngs)
-
-    def __call__(
-        self, weights: jax.Array, target_pattern: jax.Array, time: jax.Array
-    ) -> jax.Array:
-        # Encode target pattern
-        pattern_input = target_pattern[..., None]
-        pattern_features = self.pattern_pad(pattern_input)
-        pattern_features = self.pattern_encoder(pattern_features)
-
-        # Time embedding
-        time_emb = self.time_mlp(time[..., None])
-        time_emb = time_emb[:, None, None, :]
-
-        # Process current weights
-        weights_real = jnp.real(weights)[..., None]
-        weights_imag = jnp.imag(weights)[..., None]
-        weights_input = jnp.concatenate([weights_real, weights_imag], axis=-1)
-        weights_features = self.weights_input(weights_input)
-
-        # Combine features
-        x = jnp.concatenate([pattern_features, weights_features], axis=-1)
-        x = x + time_emb
-
-        # UNet forward pass
-        x1 = self.down1(x)
-        x2 = self.down2(nnx.max_pool(x1, (2, 2), (2, 2)))
-        x3 = self.down3(nnx.max_pool(x2, (2, 2), (2, 2)))
-
-        bottleneck = self.bottleneck(nnx.max_pool(x3, (2, 2), (2, 2)))
-
-        up3 = resize_batch(bottleneck, (4, 4, bottleneck.shape[-1]), "bilinear")
-        up3 = jnp.concatenate([up3, x3], axis=-1)
-        up3 = self.up3(up3)
-
-        up2 = resize_batch(up3, (8, 8, up3.shape[-1]), "bilinear")
-        up2 = jnp.concatenate([up2, x2], axis=-1)
-        up2 = self.up2(up2)
-
-        up1 = resize_batch(up2, (16, 16, up2.shape[-1]), "bilinear")
-        up1 = jnp.concatenate([up1, x1], axis=-1)
-        up1 = self.up1(up1)
-
-        output = self.output(up1)
-
-        # Convert to complex velocity
-        velocity_complex = output[..., 0] + 1j * output[..., 1]
-        return velocity_complex
 
 
 class FlowMatcher:
@@ -208,71 +108,6 @@ class ODESolver:
         return x
 
 
-def create_train_step_fn(
-    synthesize_ideal_pattern: callable,
-    synthesize_embedded_pattern: callable,
-    compute_analytical_weights: callable,
-    flow_matcher: FlowMatcher,
-):
-    """Factory that creates the jitted training step function for flow matching."""
-    vmapped_analytical_weights = jax.vmap(compute_analytical_weights)
-    vmapped_embedded_synthesizer = jax.vmap(synthesize_embedded_pattern)
-
-    def loss_fn(model: nnx.Module, batch_of_angles_rad: jax.Array, key: jax.Array):
-        batch_size = batch_of_angles_rad.shape[0]
-
-        # Generate analytical weights and target patterns
-        analytical_weights, _ = vmapped_analytical_weights(batch_of_angles_rad)
-        ideal_patterns = jax.vmap(synthesize_ideal_pattern)(analytical_weights)
-        target_patterns = normalize_patterns(ideal_patterns)
-
-        # Sample noise as starting point (x0)
-        key, noise_key = jax.random.split(key)
-        x0 = jax.random.normal(
-            noise_key, analytical_weights.shape, dtype=analytical_weights.dtype
-        )
-
-        # Use analytical weights as target (x1)
-        x1 = analytical_weights
-
-        # Compute flow matching loss
-        fm_loss, fm_metrics = flow_matcher.compute_loss(
-            model, x0, x1, target_patterns, key
-        )
-
-        # Optional: Add physics-based regularization
-        key, eval_key = jax.random.split(key)
-        t_eval = jax.random.uniform(eval_key, (batch_size,))
-        x_t, _ = flow_matcher.optimal_transport_path(x0, x1, t_eval)
-
-        # Evaluate physics at intermediate points
-        predicted_patterns = vmapped_embedded_synthesizer(x_t)
-        predicted_patterns = normalize_patterns(predicted_patterns)
-        physics_loss = jnp.mean((predicted_patterns - target_patterns) ** 2)
-
-        total_loss = fm_loss + 10.0 * physics_loss  # Increased from 0.01 to 10.0
-
-        metrics = {
-            "flow_matching_loss": fm_loss,
-            "physics_loss": physics_loss,
-            "total_loss": total_loss,
-        }
-
-        return total_loss, metrics
-
-    @nnx.jit
-    def train_step_fn(optimizer: nnx.Optimizer, batch: jax.Array, key: jax.Array):
-        model = optimizer.model
-        (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
-            model, batch, key
-        )
-        optimizer.update(grads)
-        metrics["grad_norm"] = optax.global_norm(grads)
-        return metrics
-
-    return train_step_fn
-
-
 def solve_with_flow_matching(
     model: nnx.Module,
     target_pattern: jax.Array,
@@ -331,6 +166,71 @@ def load_checkpoint(model: nnx.Module, checkpoint_dir: Path, step: int = None) -
         return step
 
 
+def create_train_step_fn(
+    synthesize_ideal_pattern: callable,
+    synthesize_embedded_pattern: callable,
+    compute_analytical_weights: callable,
+    flow_matcher: FlowMatcher,
+):
+    """Factory that creates the jitted training step function for flow matching."""
+    vmapped_analytical_weights = jax.vmap(compute_analytical_weights)
+    vmapped_embedded_synthesizer = jax.vmap(synthesize_embedded_pattern)
+
+    def loss_fn(model: nnx.Module, batch_of_angles_rad: jax.Array, key: jax.Array):
+        batch_size = batch_of_angles_rad.shape[0]
+
+        # Generate analytical weights and target patterns
+        analytical_weights, _ = vmapped_analytical_weights(batch_of_angles_rad)
+        ideal_patterns = jax.vmap(synthesize_ideal_pattern)(analytical_weights)
+        target_patterns = normalize_patterns(ideal_patterns)
+
+        # Sample noise as starting point (x0)
+        key, noise_key = jax.random.split(key)
+        x0 = jax.random.normal(
+            noise_key, analytical_weights.shape, dtype=analytical_weights.dtype
+        )
+
+        # Use analytical weights as target (x1)
+        x1 = analytical_weights
+
+        # Compute flow matching loss
+        fm_loss, fm_metrics = flow_matcher.compute_loss(
+            model, x0, x1, target_patterns, key
+        )
+
+        # Optional: Add physics-based regularization
+        key, eval_key = jax.random.split(key)
+        t_eval = jax.random.uniform(eval_key, (batch_size,))
+        x_t, _ = flow_matcher.optimal_transport_path(x0, x1, t_eval)
+
+        # Evaluate physics at intermediate points
+        predicted_patterns = vmapped_embedded_synthesizer(x_t)
+        predicted_patterns = normalize_patterns(predicted_patterns)
+        physics_loss = jnp.mean((predicted_patterns - target_patterns) ** 2)
+
+        total_loss = fm_loss + 10.0 * physics_loss
+
+        metrics = {
+            "flow_matching_loss": fm_loss,
+            "physics_loss": physics_loss,
+            "total_loss": total_loss,
+        }
+
+        return total_loss, metrics
+
+    @nnx.jit
+    def train_step_fn(optimizer: nnx.Optimizer, batch: jax.Array, key: jax.Array):
+        model = optimizer.model
+        (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
+            model, batch, key
+        )
+        optimizer.update(grads)
+        metrics["grad_norm"] = optax.global_norm(grads)
+        return metrics
+
+    return train_step_fn
+
+
 def train_flow_matching_pipeline(
     n_steps: int = 10_000,
     batch_size: int = 256,
@@ -343,22 +243,17 @@ def train_flow_matching_pipeline(
     """Main training function for the flow matching model."""
     config = ArrayConfig()
     key = jax.random.key(seed)
-    checkpoint_path = Path(checkpoint_dir).resolve()  # Make path absolute
+    checkpoint_path = Path(checkpoint_dir).resolve()
 
     logger.info("Setting up flow matching training pipeline")
 
-    # Create element patterns and synthesizers
-    key, ideal_key, embedded_key = jax.random.split(key, 3)
-    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
-    embedded_patterns = create_element_patterns(config, embedded_key, is_embedded=True)
-
-    synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
-    synthesize_embedded = create_pattern_synthesizer(embedded_patterns, config)
-    compute_analytical = create_analytical_weight_calculator(config)
+    # Create physics setup
+    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
+        config, key
+    )
 
     # Create flow matcher and model
     flow_matcher = FlowMatcher()
-
     key, model_key = jax.random.split(key)
     model = VelocityNet(base_channels=64, rngs=nnx.Rngs(model_key))
 
@@ -367,25 +262,12 @@ def train_flow_matching_pipeline(
     if restore:
         start_step = load_checkpoint(model, checkpoint_path)
 
-    # Learning rate schedule
-    lr_schedule = optax.warmup_cosine_decay_schedule(
-        init_value=lr * 0.1,
-        peak_value=lr,
-        warmup_steps=500,
-        decay_steps=n_steps - 500,
-        end_value=lr * 0.01,
-    )
-
-    optimizer = nnx.Optimizer(
-        model, optax.adamw(learning_rate=lr_schedule, weight_decay=1e-6)
-    )
+    # Create optimizer
+    optimizer = create_standard_optimizer(model, lr, n_steps)
 
     # Create training step
     train_step = create_train_step_fn(
-        synthesize_ideal,
-        synthesize_embedded,
-        compute_analytical,
-        flow_matcher,
+        synthesize_ideal, synthesize_embedded, compute_analytical, flow_matcher
     )
 
     # Training data generator
@@ -448,15 +330,15 @@ def evaluate_flow_matching_model(
     test_angles = steering_angles_sampler(angle_key, batch_size=n_eval_samples, limit=1)
     test_batch = next(test_angles)
 
+    # Create physics setup for evaluation
+    key, physics_key = jax.random.split(key)
+    synthesize_ideal, _, compute_analytical = create_physics_setup(config, physics_key)
+
     # Compute analytical weights and target patterns
-    compute_analytical = create_analytical_weight_calculator(config)
     vmapped_analytical_weights = jax.vmap(compute_analytical)
     analytical_weights, _ = vmapped_analytical_weights(test_batch)
 
     # Create ideal target patterns
-    key, ideal_key = jax.random.split(key)
-    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
-    synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
     ideal_target_patterns = jax.vmap(synthesize_ideal)(analytical_weights)
     ideal_target_patterns = normalize_patterns(ideal_target_patterns)
 
