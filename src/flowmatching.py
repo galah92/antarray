@@ -1,93 +1,29 @@
 import logging
 import sys
 import time
-from collections.abc import Sequence
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 import orbax.checkpoint as ocp
 from flax import nnx
-from jax.experimental.compilation_cache import compilation_cache as cc
 
-from diffusion import (
+from shared import (
+    ArrayConfig,
+    ConvBlock,
     create_analytical_weight_calculator,
     create_element_patterns,
     create_pattern_synthesizer,
     normalize_patterns,
+    pad_batch,
+    resize_batch,
     steering_angles_sampler,
 )
 
 logger = logging.getLogger(__name__)
-
-# Persistent Jax compilation cache
-cc.set_cache_dir("/tmp/jax_cache")
-
-
-class ArrayConfig:
-    ARRAY_SIZE: tuple[int, int] = (16, 16)
-    SPACING_MM: tuple[float, float] = (60.0, 60.0)
-    FREQUENCY_HZ: float = 2.45e9
-    PATTERN_SHAPE: tuple[int, int] = (180, 360)  # (theta, phi)
-
-
-def pad_batch(
-    image: jax.Array,
-    pad_width: Sequence[int | Sequence[int]],
-    mode: str = "constant",
-) -> jax.Array:
-    pad_width = np.asarray(pad_width, dtype=np.int32)
-    if pad_width.shape[0] == 3:  # Add batch dimension
-        pad_width = np.pad(pad_width, ((1, 0), (0, 0)))
-    return jnp.pad(image, pad_width=pad_width, mode=mode)
-
-
-class ConvBlock(nnx.Module):
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        kernel_size: int | Sequence[int],
-        padding: str = "SAME",
-        *,
-        rngs: nnx.Rngs,
-    ):
-        self.conv1 = nnx.Conv(
-            in_features,
-            out_features,
-            kernel_size=kernel_size,
-            padding=padding,
-            use_bias=False,
-            rngs=rngs,
-        )
-        self.norm1 = nnx.BatchNorm(out_features, rngs=rngs)
-        self.conv2 = nnx.Conv(
-            out_features,
-            out_features,
-            kernel_size=kernel_size,
-            padding=padding,
-            use_bias=False,
-            rngs=rngs,
-        )
-        self.norm2 = nnx.BatchNorm(out_features, rngs=rngs)
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        x = self.conv1(x)
-        x = self.norm1(x)
-        x = nnx.relu(x)
-        x = self.conv2(x)
-        x = self.norm2(x)
-        x = nnx.relu(x)
-        return x
-
-
-def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMethod):
-    shape = (image.shape[0], *shape)  # Add batch dimension
-    return jax.image.resize(image, shape=shape, method=method)
 
 
 class VelocityNet(nnx.Module):
