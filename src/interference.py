@@ -7,7 +7,7 @@ import optax
 from flax import nnx
 
 from physics import ArrayConfig, create_physics_setup
-from shared import (
+from training import (
     InterferenceCorrector,
     calculate_pattern_loss,
     convert_to_db,

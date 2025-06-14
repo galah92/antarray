@@ -9,7 +9,7 @@ import orbax.checkpoint as ocp
 from flax import nnx
 
 from physics import ArrayConfig, create_physics_setup
-from shared import (
+from training import (
     VelocityNet,
     create_progress_logger,
     create_standard_optimizer,

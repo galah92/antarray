@@ -9,7 +9,7 @@ import optax
 from flax import nnx
 
 from physics import ArrayConfig, create_physics_setup
-from shared import (
+from training import (
     DenoisingUNet,
     create_progress_logger,
     normalize_patterns,

@@ -14,7 +14,7 @@ from jax.typing import ArrayLike
 
 import data
 import physics
-from shared import create_progress_logger, pad_batch, resize_batch
+from training import create_progress_logger, pad_batch, resize_batch
 
 logger = logging.getLogger(__name__)
 
