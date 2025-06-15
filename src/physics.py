@@ -499,7 +499,7 @@ def plot_sine_space(
 
     u = np.sin(theta_rad)[:, None] * np.cos(phi_rad)
     v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)
-    im = ax.contourf(u, v, pattern, levels=128, cmap="magma_r")
+    im = ax.contourf(u, v, pattern, levels=128, cmap="viridis")
 
     axis_args = dict(color="gray", linestyle="--", linewidth=0.9)
 
@@ -573,15 +573,15 @@ def steering_repr(steering_angles: np.ndarray):
     return f"[θ°, φ°] = {formatted}"
 
 
-def test_plot_ff_3d():
-    steering_deg = np.array([[15, 15], [30, 120], [45, 210]])
+def demo_openems_patterns():
+    steering_deg = np.array([[30, 45]])
 
     array_params = calc_array_params(array_size=(16, 16), spacing_mm=(60, 60))
     E_norm, _ = rad_pattern_from_geo(*array_params, np.radians(steering_deg))
     E_norm = np.asarray(E_norm)
 
     theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
-    fig, axs = plt.subplots(1, 3, figsize=[18, 6], layout="constrained")
+    fig, axs = plt.subplots(1, 3, figsize=[18, 6], layout="compressed")
 
     plot_ff_2d(theta_rad, phi_rad, E_norm, ax=axs[0])
     plot_sine_space(theta_rad, phi_rad, E_norm, ax=axs[1])
@@ -804,7 +804,7 @@ def demo_simple_patterns():
         logger.info(f"Saved {filename}")
 
 
-def demo_physics_functions():
+def demo_physics_patterns():
     """Demonstrate the physics simulation functions."""
     steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
 
@@ -816,8 +816,10 @@ def demo_physics_functions():
     ideal_pattern = synthesize_ideal(weights)
     embedded_pattern = synthesize_embedded(weights)
 
-    ideal_pattern = 10 * jnp.log10(jnp.abs(ideal_pattern))
-    embedded_pattern = 10 * jnp.log10(jnp.abs(embedded_pattern))
+    floor_db = -60.0  # dB floor for clipping
+    linear_floor = 10.0 ** (floor_db / 10.0)
+    ideal_pattern = 10.0 * jnp.log10(jnp.maximum(ideal_pattern, linear_floor))
+    embedded_pattern = 10.0 * jnp.log10(jnp.maximum(embedded_pattern, linear_floor))
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 12), layout="compressed")
 
@@ -868,4 +870,5 @@ if __name__ == "__main__":
         demo_phase_shifts()
         demo_tapers()
         # demo_simple_patterns()
-        demo_physics_functions()
+        demo_physics_patterns()
+        demo_openems_patterns()
