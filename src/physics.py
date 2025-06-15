@@ -25,7 +25,8 @@ class ArrayConfig:
     array_size: tuple[int, int] = (16, 16)
     spacing_mm: tuple[float, float] = (60.0, 60.0)
     freq_hz: float = 2.45e9
-    pattern_shape: tuple[int, int] = (180, 360)  # (theta, phi)
+    theta_rad: np.ndarray = np.radians(np.arange(180))
+    phi_rad: np.ndarray = np.radians(np.arange(360))
 
 
 @dataclass(frozen=True)
@@ -635,13 +636,9 @@ def create_pattern_synthesizer(
         x_pos, y_pos = get_element_positions(config=config)
         k_pos_x, k_pos_y = k * x_pos, k * y_pos
 
-        theta_size, phi_size = config.pattern_shape
-        theta_rad = jnp.radians(jnp.arange(theta_size))
-        phi_rad = jnp.radians(jnp.arange(phi_size))
-
-        sin_theta = jnp.sin(theta_rad)
-        ux = sin_theta[:, None] * jnp.cos(phi_rad)[None, :]
-        uy = sin_theta[:, None] * jnp.sin(phi_rad)[None, :]
+        sin_theta = jnp.sin(config.theta_rad)
+        ux = sin_theta[:, None] * jnp.cos(config.phi_rad)[None, :]
+        uy = sin_theta[:, None] * jnp.sin(config.phi_rad)[None, :]
 
         phase_x, phase_y = ux[..., None] * k_pos_x, uy[..., None] * k_pos_y
         geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
@@ -665,12 +662,11 @@ def create_element_patterns(
     config: ArrayConfig, key: jax.Array, is_embedded: bool
 ) -> jax.Array:
     """Simulates element patterns for either ideal or embedded array."""
-    theta_size, phi_size = config.pattern_shape
-    theta = jnp.radians(jnp.arange(theta_size))
+    theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
 
     # Base cosine model for field amplitude
-    base_field_amp = jnp.cos(theta)
-    base_field_amp = base_field_amp.at[theta > np.pi / 2].set(0)
+    base_field_amp = jnp.cos(config.theta_rad)
+    base_field_amp = base_field_amp.at[config.theta_rad > np.pi / 2].set(0)
     base_field_amp = base_field_amp[:, None] * jnp.ones((theta_size, phi_size))
 
     if not is_embedded:
@@ -680,7 +676,7 @@ def create_element_patterns(
 
     # Embedded case: simulate distortion
     num_pols = 2
-    final_shape = (*config.array_size, *config.pattern_shape, num_pols)
+    final_shape = (*config.array_size, theta_size, phi_size, num_pols)
     low_res_shape = (*config.array_size, 10, 20, num_pols)
 
     key, amp_key, phase_key = jax.random.split(key, 3)
