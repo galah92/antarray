@@ -779,8 +779,6 @@ def demo_tapers():
 
 def demo_simple_patterns():
     """Create simple synthetic patterns for demonstration."""
-    logger.info("=== Demo: Simple Radiation Patterns ===")
-
     # Create simple test patterns
     theta_rad = np.linspace(0, np.pi, 91)
     phi_rad = np.linspace(0, 2 * np.pi, 181)
@@ -798,24 +796,18 @@ def demo_simple_patterns():
     titles = ["Cosine² Pattern", "Directional Pattern"]
 
     for i, (pattern, title) in enumerate(zip(patterns, titles)):
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6), layout="constrained")
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5), layout="compressed")
+        plot_ff_2d(theta_rad, phi_rad, pattern, ax=axes[0])
+        plot_sine_space(theta_rad, phi_rad, pattern, ax=axes[1])
 
-        # 2D plot
-        plot_ff_2d(theta_rad, phi_rad, pattern, title=f"{title} (2D)", ax=axes[0])
-
-        # Sine space plot
-        plot_sine_space(
-            theta_rad, phi_rad, pattern, title=f"{title} (Sine Space)", ax=axes[1]
-        )
-
-        # 3D plot
         axes[2].remove()
         axes[2] = fig.add_subplot(1, 3, 3, projection="3d")
-        plot_ff_3d(theta_rad, phi_rad, pattern, title=f"{title} (3D)", ax=axes[2])
+        plot_ff_3d(theta_rad, phi_rad, pattern, ax=axes[2])
 
-        fig.suptitle(f"Demo Pattern {i + 1}: {title}")
-        fig.savefig(f"demo_pattern_{i + 1}.png", dpi=150, bbox_inches="tight")
-        logger.info(f"Saved demo_pattern_{i + 1}.png")
+        fig.suptitle(title)
+        filename = f"demo_pattern_{i + 1}.png"
+        fig.savefig(filename, dpi=250)
+        logger.info(f"Saved {filename}")
 
 
 def demo_physics_functions():
@@ -900,7 +892,7 @@ def demo_physics_functions():
         fig.suptitle(
             f"Physics Demo: Ideal vs Embedded Patterns (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)"
         )
-        fig.savefig("demo_physics.png", dpi=150, bbox_inches="tight")
+        fig.savefig("demo_physics.png", dpi=250, bbox_inches="tight")
         logger.info("Saved demo_physics.png")
 
         # Plot phase shifts
@@ -910,7 +902,7 @@ def demo_physics_functions():
             title=f"Analytical Phase Shifts (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)",
             ax=ax,
         )
-        fig.savefig("demo_phase_shifts_analytical.png", dpi=150, bbox_inches="tight")
+        fig.savefig("demo_phase_shifts_analytical.png", dpi=250, bbox_inches="tight")
         logger.info("Saved demo_phase_shifts_analytical.png")
 
     except Exception as e:
@@ -923,5 +915,5 @@ if __name__ == "__main__":
     with jax.default_device(cpu):
         demo_phase_shifts()
         demo_tapers()
-        # demo_simple_patterns()
+        demo_simple_patterns()
         # demo_physics_functions()
