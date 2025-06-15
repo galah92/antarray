@@ -18,8 +18,6 @@ from mpl_toolkits.mplot3d import Axes3D
 
 logger = logging.getLogger(__name__)
 
-plt.rcParams["figure.constrained_layout.use"] = True
-
 
 class ArrayConfig:
     """Configuration for antenna array parameters and simulation settings."""
@@ -787,15 +785,10 @@ def demo_simple_patterns():
     theta_grid, phi_grid = np.meshgrid(theta_rad, phi_rad, indexing="ij")
     pattern1 = 20 * np.cos(theta_grid) ** 2
     pattern1[theta_grid > np.pi / 2] = 0  # Set values beyond 90° to 0
-    # pattern1 = 20 * np.log10(np.maximum(pattern1, 1e-4))
-    # pattern1 = np.maximum(pattern1, -40)  # Floor at -40 dB
-    # Convert to dB scale
-    pattern1 = 20 * np.log10(np.maximum(pattern1, 1e-4)) + 20  # Add 20 dB offset
 
     # Pattern 2: Directional pattern
     pattern2 = 25 * np.cos(theta_grid) ** 4 * (1 + 0.5 * np.cos(2 * phi_grid))
     pattern2[theta_grid > np.pi / 2] = 0  # Set values beyond 90° to 0
-    # pattern2 = np.maximum(pattern2, -40)
 
     patterns = [pattern1, pattern2]
     titles = ["Cosine² Pattern", "Directional Pattern"]
@@ -826,6 +819,9 @@ def demo_physics_functions():
     weights, phase_shifts = compute_analytical(steering_angle)
     ideal_pattern = synthesize_ideal(weights)
     embedded_pattern = synthesize_embedded(weights)
+
+    ideal_pattern = 10 * jnp.log10(jnp.abs(ideal_pattern))
+    embedded_pattern = 10 * jnp.log10(jnp.abs(embedded_pattern))
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 12), layout="compressed")
 
