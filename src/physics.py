@@ -757,25 +757,24 @@ def demo_phase_shifts():
 
 def demo_tapers():
     """Demonstrate different taper functions."""
-    logger.info("=== Demo: Array Tapers ===")
-
-    array_size = (8, 8)  # Smaller for clarity
+    array_size = ArrayConfig().array_size
     taper_types = ["uniform", "hamming", "taylor"]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5), layout="constrained")
+    kw = dict(figsize=(15, 5), sharex=True, sharey=True, layout="compressed")
+    fig, axes = plt.subplots(1, len(taper_types), **kw)
 
     for i, taper_type in enumerate(taper_types):
         taper = calc_taper(array_size, taper_type)
-
         im = axes[i].imshow(np.abs(taper), cmap="viridis", origin="lower")
         axes[i].set_title(f"{taper_type.capitalize()} Taper")
         axes[i].set_xlabel("Element X")
         axes[i].set_ylabel("Element Y")
-        fig.colorbar(im, ax=axes[i], fraction=0.046, pad=0.04)
 
+    fig.colorbar(im, ax=axes, label="Taper Amplitude")
     fig.suptitle("Different Array Taper Functions")
-    fig.savefig("demo_tapers.png", dpi=150, bbox_inches="tight")
-    logger.info("Saved demo_tapers.png")
+    filename = "demo_tapers.png"
+    fig.savefig(filename, dpi=250)
+    logger.info(f"Saved {filename}")
 
 
 def demo_simple_patterns():
@@ -923,6 +922,6 @@ if __name__ == "__main__":
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
         demo_phase_shifts()
-        # demo_tapers()
+        demo_tapers()
         # demo_simple_patterns()
         # demo_physics_functions()
