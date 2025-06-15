@@ -1,7 +1,5 @@
 import logging
-import sys
 from collections.abc import Callable
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -359,20 +357,6 @@ def evaluate_diffusion_model(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="{asctime} {levelname} {filename}:{lineno} {message}",
-        style="{",
-        handlers=[
-            logging.FileHandler(Path("app.log"), mode="w+"),  # Overwrite log
-            logging.StreamHandler(),
-        ],
-        force=True,  # https://github.com/google/orbax/issues/1248
-    )
-    logging.getLogger("absl").setLevel(logging.CRITICAL)  # Suppress absl logging
-
-    logger.info(f"uv run {' '.join(sys.argv)}")  # Log command line args
-
     # Train the model
     model, scheduler, synthesize_embedded = train_diffusion_pipeline()
 

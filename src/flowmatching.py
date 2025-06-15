@@ -1,5 +1,4 @@
 import logging
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -346,20 +345,6 @@ def evaluate_flow_matching_model(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="{asctime} {levelname} {filename}:{lineno} {message}",
-        style="{",
-        handlers=[
-            logging.FileHandler(Path("app.log"), mode="w+"),
-            logging.StreamHandler(),
-        ],
-        force=True,
-    )
-    logging.getLogger("absl").setLevel(logging.CRITICAL)
-
-    logger.info(f"uv run {' '.join(sys.argv)}")
-
     # Train the model
     model, synthesize_embedded = train_flow_matching_pipeline()
 

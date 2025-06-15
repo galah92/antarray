@@ -1,5 +1,4 @@
 import logging
-import sys
 from functools import partial
 from pathlib import Path
 from typing import Sequence
@@ -356,17 +355,4 @@ def eval(seed: int = 42):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="{asctime} {levelname} {filename}:{lineno} {message}",
-        style="{",
-        handlers=[
-            logging.FileHandler(Path("app.log"), mode="w+"),  # Overwrite log
-            logging.StreamHandler(),
-        ],
-        force=True,  # https://github.com/google/orbax/issues/1248
-    )
-    logging.getLogger("absl").setLevel(logging.CRITICAL)  # Suppress absl logging
-
-    logger.info(f"uv run {' '.join(sys.argv)}")  # Log command line args
     app()
