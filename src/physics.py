@@ -577,7 +577,7 @@ def test_plot_ff_3d():
     E_norm = np.asarray(E_norm)
 
     theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
-    fig, axs = plt.subplots(1, 3, figsize=[18, 6])
+    fig, axs = plt.subplots(1, 3, figsize=[18, 6], layout="constrained")
 
     plot_ff_2d(theta_rad, phi_rad, E_norm, ax=axs[0])
     plot_sine_space(theta_rad, phi_rad, E_norm, ax=axs[1])
@@ -589,7 +589,6 @@ def test_plot_ff_3d():
     steering_str = steering_repr(steering_deg.T)
     phase_shift_title = f"Radiation Pattern with Phase Shifts {steering_str}"
     fig.suptitle(phase_shift_title)
-    fig.set_layout_engine("tight")
 
     fig_path = "test.png"
     fig.savefig(fig_path, dpi=600, bbox_inches="tight")
@@ -732,7 +731,7 @@ def demo_phase_shifts():
         [60, 180],  # 60° elevation, 180° azimuth
     ]
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10), layout="constrained")
     axes = axes.flatten()
 
     for i, (theta_deg, phi_deg) in enumerate(steering_angles):
@@ -750,7 +749,6 @@ def demo_phase_shifts():
         )
 
     fig.suptitle("Phase Shifts for Different Steering Angles")
-    fig.tight_layout()
     fig.savefig("demo_phase_shifts.png", dpi=150, bbox_inches="tight")
     logger.info("Saved demo_phase_shifts.png")
     plt.close(fig)
@@ -763,7 +761,7 @@ def demo_tapers():
     array_size = (8, 8)  # Smaller for clarity
     taper_types = ["uniform", "hamming", "taylor"]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5), layout="constrained")
 
     for i, taper_type in enumerate(taper_types):
         taper = calc_taper(array_size, taper_type)
@@ -775,7 +773,6 @@ def demo_tapers():
         fig.colorbar(im, ax=axes[i], fraction=0.046, pad=0.04)
 
     fig.suptitle("Different Array Taper Functions")
-    fig.tight_layout()
     fig.savefig("demo_tapers.png", dpi=150, bbox_inches="tight")
     logger.info("Saved demo_tapers.png")
     plt.close(fig)
@@ -802,7 +799,7 @@ def demo_simple_patterns():
     titles = ["Cosine² Pattern", "Directional Pattern"]
 
     for i, (pattern, title) in enumerate(zip(patterns, titles)):
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6), layout="constrained")
 
         # 2D plot
         plot_ff_2d(theta_rad, phi_rad, pattern, title=f"{title} (2D)", ax=axes[0])
@@ -818,7 +815,6 @@ def demo_simple_patterns():
         plot_ff_3d(theta_rad, phi_rad, pattern, title=f"{title} (3D)", ax=axes[2])
 
         fig.suptitle(f"Demo Pattern {i + 1}: {title}")
-        fig.tight_layout()
         fig.savefig(f"demo_pattern_{i + 1}.png", dpi=150, bbox_inches="tight")
         logger.info(f"Saved demo_pattern_{i + 1}.png")
         plt.close(fig)
@@ -856,7 +852,7 @@ def demo_physics_functions():
         )
 
         # Plot comparison
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12), layout="constrained")
 
         theta_rad = jnp.linspace(0, jnp.pi, ideal_pattern.shape[0])
         phi_rad = jnp.linspace(0, 2 * jnp.pi, ideal_pattern.shape[1])
@@ -906,13 +902,12 @@ def demo_physics_functions():
         fig.suptitle(
             f"Physics Demo: Ideal vs Embedded Patterns (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)"
         )
-        fig.tight_layout()
         fig.savefig("demo_physics.png", dpi=150, bbox_inches="tight")
         logger.info("Saved demo_physics.png")
         plt.close(fig)
 
         # Plot phase shifts
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
         plot_phase_shifts(
             phase_shifts,
             title=f"Analytical Phase Shifts (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)",
