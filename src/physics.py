@@ -419,9 +419,9 @@ def extend_pattern_to_360_theta(pattern: np.ndarray) -> np.ndarray:
 
 
 def plot_ff_3d(
-    theta_rad: np.ndarray,
-    phi_rad: np.ndarray,
-    pattern: np.ndarray,
+    theta_rad: ArrayLike,
+    phi_rad: ArrayLike,
+    pattern: ArrayLike,
     *,
     hide_backlobe: bool = True,
     elev: float | None = None,
@@ -454,9 +454,9 @@ def plot_ff_3d(
 
 
 def plot_ff_2d(
-    theta_rad: np.ndarray,
-    phi_rad: np.ndarray,
-    pattern: np.ndarray,
+    theta_rad: ArrayLike,
+    phi_rad: ArrayLike,
+    pattern: ArrayLike,
     *,
     title: str = "2D Radiation Pattern",
     colorbar: bool = True,
@@ -478,9 +478,9 @@ def plot_ff_2d(
 
 
 def plot_sine_space(
-    theta_rad: np.ndarray,
-    phi_rad: np.ndarray,
-    pattern: np.ndarray,
+    theta_rad: ArrayLike,
+    phi_rad: ArrayLike,
+    pattern: ArrayLike,
     *,
     title: str = "Sine-Space Radiation Pattern",
     theta_circles: bool = True,
