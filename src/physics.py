@@ -1,4 +1,5 @@
 import logging
+import typing
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache, partial
@@ -11,6 +12,8 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from jax.typing import ArrayLike
+from matplotlib.projections import PolarAxes
+from mpl_toolkits.mplot3d import Axes3D
 
 logger = logging.getLogger(__name__)
 
@@ -374,11 +377,12 @@ def plot_E_plane(
     normalize: bool = False,
     label: str | None = None,
     title: str | None = None,
-    ax: plt.Axes | None = None,
+    ax: PolarAxes | None = None,
     filename: str | None = None,
 ):
     if ax is None:
-        fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+        fig = plt.figure(constrained_layout=True)
+        ax = typing.cast(PolarAxes, fig.add_subplot(projection="polar"))
 
     E_norm_cut = extract_E_plane_cut(E_norm, phi_idx=0)
     theta_rad = np.linspace(0, 2 * np.pi, E_norm_cut.size)
@@ -427,7 +431,7 @@ def plot_ff_3d(
     elev: float | None = None,
     azim: float | None = None,
     title: str = "3D Radiation Pattern",
-    ax: plt.Axes | None = None,
+    ax: Axes3D | None = None,
 ):
     pattern = pattern.clip(min=0)  # Clip negative values to 0
 
@@ -442,7 +446,7 @@ def plot_ff_3d(
 
     if ax is None:
         fig = plt.figure(constrained_layout=True)
-        ax = fig.add_subplot(projection="3d")
+        ax = typing.cast(Axes3D, fig.add_subplot(projection="3d"))
 
     ax.plot_surface(x, y, z, cmap="Spectral_r")
     ax.view_init(elev=elev, azim=azim)
