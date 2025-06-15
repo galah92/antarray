@@ -715,38 +715,8 @@ def create_physics_setup(key: jax.Array, config: ArrayConfig | None = None):
     return synthesize_ideal, synthesize_embedded, compute_analytical
 
 
-# =============================================================================
-# Demo and Test Functions
-# =============================================================================
-
-
-def demo_array_basics():
-    """Demonstrate basic array calculations and visualization."""
-    logger.info("=== Demo: Array Basics ===")
-
-    config = ArrayConfig()
-
-    # Show array configuration
-    logger.info(f"Array size: {config.array_size}")
-    logger.info(f"Element spacing: {config.spacing_mm} mm")
-    logger.info(f"Frequency: {config.freq_hz / 1e9:.2f} GHz")
-
-    # Calculate wavelength and check grating lobes
-    wavelength_mm = 299792458 / config.freq_hz * 1000
-    logger.info(f"Wavelength: {wavelength_mm:.2f} mm")
-
-    check_grating_lobes(config=config, verbose=True)
-
-    # Show element positions
-    x_pos, y_pos = get_element_positions(config=config)
-    logger.info(f"Element positions range: X=[{x_pos[0]:.3f}, {x_pos[-1]:.3f}] m")
-    logger.info(f"Element positions range: Y=[{y_pos[0]:.3f}, {y_pos[-1]:.3f}] m")
-
-
 def demo_phase_shifts():
     """Demonstrate phase shift calculations and visualization."""
-    logger.info("=== Demo: Phase Shifts ===")
-
     config = ArrayConfig()
 
     # Calculate basic parameters
@@ -779,11 +749,11 @@ def demo_phase_shifts():
             ax=axes[i],
         )
 
-    plt.suptitle("Phase Shifts for Different Steering Angles")
-    plt.tight_layout()
-    plt.savefig("demo_phase_shifts.png", dpi=150, bbox_inches="tight")
+    fig.suptitle("Phase Shifts for Different Steering Angles")
+    fig.tight_layout()
+    fig.savefig("demo_phase_shifts.png", dpi=150, bbox_inches="tight")
     logger.info("Saved demo_phase_shifts.png")
-    plt.close()
+    plt.close(fig)
 
 
 def demo_tapers():
@@ -802,13 +772,13 @@ def demo_tapers():
         axes[i].set_title(f"{taper_type.capitalize()} Taper")
         axes[i].set_xlabel("Element X")
         axes[i].set_ylabel("Element Y")
-        plt.colorbar(im, ax=axes[i], fraction=0.046, pad=0.04)
+        fig.colorbar(im, ax=axes[i], fraction=0.046, pad=0.04)
 
-    plt.suptitle("Different Array Taper Functions")
-    plt.tight_layout()
-    plt.savefig("demo_tapers.png", dpi=150, bbox_inches="tight")
+    fig.suptitle("Different Array Taper Functions")
+    fig.tight_layout()
+    fig.savefig("demo_tapers.png", dpi=150, bbox_inches="tight")
     logger.info("Saved demo_tapers.png")
-    plt.close()
+    plt.close(fig)
 
 
 def demo_simple_patterns():
@@ -847,11 +817,11 @@ def demo_simple_patterns():
         axes[2] = fig.add_subplot(1, 3, 3, projection="3d")
         plot_ff_3d(theta_rad, phi_rad, pattern, title=f"{title} (3D)", ax=axes[2])
 
-        plt.suptitle(f"Demo Pattern {i + 1}: {title}")
-        plt.tight_layout()
-        plt.savefig(f"demo_pattern_{i + 1}.png", dpi=150, bbox_inches="tight")
+        fig.suptitle(f"Demo Pattern {i + 1}: {title}")
+        fig.tight_layout()
+        fig.savefig(f"demo_pattern_{i + 1}.png", dpi=150, bbox_inches="tight")
         logger.info(f"Saved demo_pattern_{i + 1}.png")
-        plt.close()
+        plt.close(fig)
 
 
 def demo_physics_functions():
@@ -933,13 +903,13 @@ def demo_physics_functions():
             ax=axes[1, 2],
         )
 
-        plt.suptitle(
+        fig.suptitle(
             f"Physics Demo: Ideal vs Embedded Patterns (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)"
         )
-        plt.tight_layout()
-        plt.savefig("demo_physics.png", dpi=150, bbox_inches="tight")
+        fig.tight_layout()
+        fig.savefig("demo_physics.png", dpi=150, bbox_inches="tight")
         logger.info("Saved demo_physics.png")
-        plt.close()
+        plt.close(fig)
 
         # Plot phase shifts
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -948,41 +918,17 @@ def demo_physics_functions():
             title=f"Analytical Phase Shifts (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)",
             ax=ax,
         )
-        plt.savefig("demo_phase_shifts_analytical.png", dpi=150, bbox_inches="tight")
+        fig.savefig("demo_phase_shifts_analytical.png", dpi=150, bbox_inches="tight")
         logger.info("Saved demo_phase_shifts_analytical.png")
-        plt.close()
+        plt.close(fig)
 
     except Exception as e:
         logger.warning(f"Physics demo failed (likely missing simulation data): {e}")
         logger.info("Skipping physics demonstration - requires simulation data files")
 
 
-def demo_comprehensive():
-    """Run all demonstrations."""
-    logger.info("🚀 Starting comprehensive physics demonstrations...")
-
-    try:
-        demo_array_basics()
-        demo_phase_shifts()
-        demo_tapers()
-        demo_simple_patterns()
-        demo_physics_functions()
-
-        logger.info("✅ All demonstrations completed successfully!")
-        logger.info("📁 Check the generated PNG files for visualizations:")
-        logger.info("   - demo_phase_shifts.png")
-        logger.info("   - demo_tapers.png")
-        logger.info("   - demo_pattern_1.png")
-        logger.info("   - demo_pattern_2.png")
-        logger.info("   - demo_physics.png (if simulation data available)")
-        logger.info(
-            "   - demo_phase_shifts_analytical.png (if simulation data available)"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ Demo failed: {e}")
-        raise
-
-
 if __name__ == "__main__":
-    demo_comprehensive()
+    demo_phase_shifts()
+    demo_tapers()
+    demo_simple_patterns()
+    demo_physics_functions()
