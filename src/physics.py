@@ -596,7 +596,7 @@ def test_plot_ff_3d():
     fig.suptitle(phase_shift_title)
 
     fig_path = "test.png"
-    fig.savefig(fig_path, dpi=600, bbox_inches="tight")
+    fig.savefig(fig_path, dpi=600)
     logger.info(f"Saved sample plot to {fig_path}")
 
 
@@ -780,17 +780,22 @@ def demo_tapers():
 def demo_simple_patterns():
     """Create simple synthetic patterns for demonstration."""
     # Create simple test patterns
-    theta_rad = np.linspace(0, np.pi, 91)
-    phi_rad = np.linspace(0, 2 * np.pi, 181)
+    theta_rad = np.linspace(0, np.pi, 180)
+    phi_rad = np.linspace(0, 2 * np.pi, 360)
 
     # Pattern 1: Simple cosine pattern
     theta_grid, phi_grid = np.meshgrid(theta_rad, phi_rad, indexing="ij")
     pattern1 = 20 * np.cos(theta_grid) ** 2
-    pattern1 = np.maximum(pattern1, -40)  # Floor at -40 dB
+    pattern1[theta_grid > np.pi / 2] = 0  # Set values beyond 90° to 0
+    # pattern1 = 20 * np.log10(np.maximum(pattern1, 1e-4))
+    # pattern1 = np.maximum(pattern1, -40)  # Floor at -40 dB
+    # Convert to dB scale
+    pattern1 = 20 * np.log10(np.maximum(pattern1, 1e-4)) + 20  # Add 20 dB offset
 
     # Pattern 2: Directional pattern
     pattern2 = 25 * np.cos(theta_grid) ** 4 * (1 + 0.5 * np.cos(2 * phi_grid))
-    pattern2 = np.maximum(pattern2, -40)
+    pattern2[theta_grid > np.pi / 2] = 0  # Set values beyond 90° to 0
+    # pattern2 = np.maximum(pattern2, -40)
 
     patterns = [pattern1, pattern2]
     titles = ["Cosine² Pattern", "Directional Pattern"]
@@ -812,102 +817,57 @@ def demo_simple_patterns():
 
 def demo_physics_functions():
     """Demonstrate the physics simulation functions."""
-    logger.info("=== Demo: Physics Functions ===")
+    steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
 
-    config = ArrayConfig()
     key = jax.random.key(42)
+    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
+        key
+    )
+    weights, phase_shifts = compute_analytical(steering_angle)
+    ideal_pattern = synthesize_ideal(weights)
+    embedded_pattern = synthesize_embedded(weights)
 
-    try:
-        # Create physics setup
-        synthesize_ideal, synthesize_embedded, compute_analytical = (
-            create_physics_setup(key, config)
-        )
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12), layout="compressed")
 
-        # Test with a steering angle
-        steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
+    theta_rad = jnp.linspace(0, jnp.pi, ideal_pattern.shape[0])
+    phi_rad = jnp.linspace(0, 2 * jnp.pi, ideal_pattern.shape[1])
 
-        # Compute analytical weights
-        weights, phase_shifts = compute_analytical(steering_angle)
-        logger.info(f"Computed weights shape: {weights.shape}")
-        logger.info(f"Computed phase shifts shape: {phase_shifts.shape}")
+    # Ideal pattern plots
+    title = "Ideal Pattern (2D)"
+    plot_ff_2d(theta_rad, phi_rad, ideal_pattern, title=title, ax=axes[0, 0])
+    title = "Ideal Pattern (Sine Space)"
+    plot_sine_space(theta_rad, phi_rad, ideal_pattern, title=title, ax=axes[0, 1])
+    axes[0, 2].remove()
+    axes[0, 2] = fig.add_subplot(2, 3, 3, projection="3d")
+    title = "Ideal Pattern (3D)"
+    plot_ff_3d(theta_rad, phi_rad, ideal_pattern, title=title, ax=axes[0, 2])
 
-        # Synthesize patterns
-        ideal_pattern = synthesize_ideal(weights)
-        embedded_pattern = synthesize_embedded(weights)
+    # Embedded pattern plots
+    title = "Embedded Pattern (2D)"
+    plot_ff_2d(theta_rad, phi_rad, embedded_pattern, title=title, ax=axes[1, 0])
+    title = "Embedded Pattern (Sine Space)"
+    plot_sine_space(theta_rad, phi_rad, embedded_pattern, title=title, ax=axes[1, 1])
+    axes[1, 2].remove()
+    axes[1, 2] = fig.add_subplot(2, 3, 6, projection="3d")
+    title = "Embedded Pattern (3D)"
+    plot_ff_3d(theta_rad, phi_rad, embedded_pattern, title=title, ax=axes[1, 2])
 
-        logger.info(f"Ideal pattern shape: {ideal_pattern.shape}")
-        logger.info(f"Embedded pattern shape: {embedded_pattern.shape}")
-        logger.info(
-            f"Pattern difference (RMS): {jnp.sqrt(jnp.mean((ideal_pattern - embedded_pattern) ** 2)):.3f}"
-        )
+    fig.suptitle(
+        f"Physics Demo: Ideal vs Embedded Patterns (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)"
+    )
+    filename = "demo_physics.png"
+    fig.savefig(filename, dpi=250)
+    logger.info(f"Saved {filename}")
 
-        # Plot comparison
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12), layout="constrained")
-
-        theta_rad = jnp.linspace(0, jnp.pi, ideal_pattern.shape[0])
-        phi_rad = jnp.linspace(0, 2 * jnp.pi, ideal_pattern.shape[1])
-
-        # Ideal pattern plots
-        plot_ff_2d(
-            theta_rad, phi_rad, ideal_pattern, title="Ideal Pattern (2D)", ax=axes[0, 0]
-        )
-        plot_sine_space(
-            theta_rad,
-            phi_rad,
-            ideal_pattern,
-            title="Ideal Pattern (Sine Space)",
-            ax=axes[0, 1],
-        )
-        axes[0, 2].remove()
-        axes[0, 2] = fig.add_subplot(2, 3, 3, projection="3d")
-        plot_ff_3d(
-            theta_rad, phi_rad, ideal_pattern, title="Ideal Pattern (3D)", ax=axes[0, 2]
-        )
-
-        # Embedded pattern plots
-        plot_ff_2d(
-            theta_rad,
-            phi_rad,
-            embedded_pattern,
-            title="Embedded Pattern (2D)",
-            ax=axes[1, 0],
-        )
-        plot_sine_space(
-            theta_rad,
-            phi_rad,
-            embedded_pattern,
-            title="Embedded Pattern (Sine Space)",
-            ax=axes[1, 1],
-        )
-        axes[1, 2].remove()
-        axes[1, 2] = fig.add_subplot(2, 3, 6, projection="3d")
-        plot_ff_3d(
-            theta_rad,
-            phi_rad,
-            embedded_pattern,
-            title="Embedded Pattern (3D)",
-            ax=axes[1, 2],
-        )
-
-        fig.suptitle(
-            f"Physics Demo: Ideal vs Embedded Patterns (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)"
-        )
-        fig.savefig("demo_physics.png", dpi=250, bbox_inches="tight")
-        logger.info("Saved demo_physics.png")
-
-        # Plot phase shifts
-        fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
-        plot_phase_shifts(
-            phase_shifts,
-            title=f"Analytical Phase Shifts (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)",
-            ax=ax,
-        )
-        fig.savefig("demo_phase_shifts_analytical.png", dpi=250, bbox_inches="tight")
-        logger.info("Saved demo_phase_shifts_analytical.png")
-
-    except Exception as e:
-        logger.warning(f"Physics demo failed (likely missing simulation data): {e}")
-        logger.info("Skipping physics demonstration - requires simulation data files")
+    # Plot phase shifts
+    fig, ax = plt.subplots(figsize=(8, 6), layout="compressed")
+    plot_phase_shifts(
+        phase_shifts,
+        title=f"Analytical Phase Shifts (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)",
+        ax=ax,
+    )
+    fig.savefig("demo_phase_shifts_analytical.png", dpi=250)
+    logger.info("Saved demo_phase_shifts_analytical.png")
 
 
 if __name__ == "__main__":
@@ -915,5 +875,5 @@ if __name__ == "__main__":
     with jax.default_device(cpu):
         demo_phase_shifts()
         demo_tapers()
-        demo_simple_patterns()
-        # demo_physics_functions()
+        # demo_simple_patterns()
+        demo_physics_functions()
