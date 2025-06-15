@@ -13,7 +13,7 @@ from flax import nnx
 from jax.typing import ArrayLike
 
 import data
-import physics
+from physics import ArrayConfig, create_physics_setup
 from training import (
     create_progress_logger,
     pad_batch,
@@ -185,11 +185,11 @@ def circular_mse_fn(
     return circular_mse
 
 
-def create_physics_loss_fn(config: physics.ArrayConfig):
+def create_physics_loss_fn(config: ArrayConfig):
     """Create physics loss function using modern physics setup."""
     # Create physics setup once
     key = jax.random.key(0)  # Deterministic for consistency
-    _, synthesize_embedded, _ = physics.create_physics_setup(key, config)
+    _, synthesize_embedded, _ = create_physics_setup(key, config)
 
     def physics_loss_fn(
         batch: data.DataBatch,
@@ -225,7 +225,7 @@ def create_physics_loss_fn(config: physics.ArrayConfig):
 def loss_fn(
     model: RegressionNet,
     batch: data.DataBatch,
-    config: physics.ArrayConfig,
+    config: ArrayConfig,
     *,
     use_physics_loss: bool = False,
     use_circular_mse: bool = True,
@@ -304,7 +304,7 @@ def train(
     n_steps -= start_step
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
-    config = physics.ArrayConfig()
+    config = ArrayConfig()
 
     train_step = create_train_step(loss_fn=partial(loss_fn, config=config))
     warmup_step(dataset, optimizer, train_step)
