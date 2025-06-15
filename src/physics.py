@@ -12,10 +12,13 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from jax.typing import ArrayLike
+from matplotlib.image import AxesImage
 from matplotlib.projections import PolarAxes
 from mpl_toolkits.mplot3d import Axes3D
 
 logger = logging.getLogger(__name__)
+
+plt.rcParams["figure.constrained_layout.use"] = True
 
 
 class ArrayConfig:
@@ -539,7 +542,7 @@ def plot_phase_shifts(
     title: str = "Phase Shifts",
     colorbar: bool = True,
     ax: plt.Axes | None = None,
-):
+) -> AxesImage:
     if not ax:
         _, ax = plt.subplots(1, 1, figsize=(8, 6))
 
@@ -557,6 +560,8 @@ def plot_phase_shifts(
 
     if colorbar:
         ax.figure.colorbar(im, fraction=0.046, pad=0.04, label="Degrees")
+
+    return im
 
 
 def steering_repr(steering_angles: np.ndarray):
@@ -717,41 +722,37 @@ def create_physics_setup(key: jax.Array, config: ArrayConfig | None = None):
 def demo_phase_shifts():
     """Demonstrate phase shift calculations and visualization."""
     config = ArrayConfig()
-
-    # Calculate basic parameters
     k = get_wavenumber(config=config)
     x_pos, y_pos = get_element_positions(config=config)
     kx, ky = k * x_pos, k * y_pos
 
-    # Test different steering angles
     steering_angles = [
         [0, 0],  # Broadside
         [30, 0],  # 30° elevation
+        [30, 45],  # 30° elevation, 45° azimuth
+        [30, 60],  # 30° elevation, 60° azimuth
         [45, 90],  # 45° elevation, 90° azimuth
         [60, 180],  # 60° elevation, 180° azimuth
     ]
+    steering_angles = np.array(steering_angles)
+    nrows = 2
+    ncols = np.ceil(steering_angles.shape[0] / 2).astype(np.int32)
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10), layout="constrained")
-    axes = axes.flatten()
+    phase_shifts = calc_phase_shifts(kx, ky, np.radians(steering_angles))
+    phase_shifts = phase_shifts.transpose(2, 0, 1)  # (n_steering, n_theta, n_phi)
 
-    for i, (theta_deg, phi_deg) in enumerate(steering_angles):
-        theta_rad, phi_rad = np.radians(theta_deg), np.radians(phi_deg)
-        steering_rad = jnp.array([[theta_rad, phi_rad]])
+    kw = dict(figsize=(15, 10), sharex=True, sharey=True, layout="compressed")
+    fig, axes = plt.subplots(nrows, ncols, **kw)
 
-        phase_shifts = calc_phase_shifts(kx, ky, steering_rad)
-        phase_shifts_2d = phase_shifts[:, :, 0]  # Remove beam dimension
+    for i, ax in enumerate(axes.flat[: steering_angles.shape[0]]):
+        title = f"θ={steering_angles[i][0]}°, φ={steering_angles[i][1]}°"
+        im = plot_phase_shifts(phase_shifts[i], title=title, colorbar=False, ax=ax)
 
-        plot_phase_shifts(
-            phase_shifts_2d,
-            title=f"θ={theta_deg}°, φ={phi_deg}°",
-            colorbar=(i == 3),  # Only show colorbar on last plot
-            ax=axes[i],
-        )
-
+    fig.colorbar(im, ax=axes, shrink=0.6, label="Degrees")
     fig.suptitle("Phase Shifts for Different Steering Angles")
-    fig.savefig("demo_phase_shifts.png", dpi=150, bbox_inches="tight")
-    logger.info("Saved demo_phase_shifts.png")
-    plt.close(fig)
+    filename = "demo_phase_shifts.png"
+    fig.savefig(filename, dpi=250)
+    logger.info(f"Saved {filename}")
 
 
 def demo_tapers():
@@ -775,7 +776,6 @@ def demo_tapers():
     fig.suptitle("Different Array Taper Functions")
     fig.savefig("demo_tapers.png", dpi=150, bbox_inches="tight")
     logger.info("Saved demo_tapers.png")
-    plt.close(fig)
 
 
 def demo_simple_patterns():
@@ -817,7 +817,6 @@ def demo_simple_patterns():
         fig.suptitle(f"Demo Pattern {i + 1}: {title}")
         fig.savefig(f"demo_pattern_{i + 1}.png", dpi=150, bbox_inches="tight")
         logger.info(f"Saved demo_pattern_{i + 1}.png")
-        plt.close(fig)
 
 
 def demo_physics_functions():
@@ -904,7 +903,6 @@ def demo_physics_functions():
         )
         fig.savefig("demo_physics.png", dpi=150, bbox_inches="tight")
         logger.info("Saved demo_physics.png")
-        plt.close(fig)
 
         # Plot phase shifts
         fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
@@ -915,7 +913,6 @@ def demo_physics_functions():
         )
         fig.savefig("demo_phase_shifts_analytical.png", dpi=150, bbox_inches="tight")
         logger.info("Saved demo_phase_shifts_analytical.png")
-        plt.close(fig)
 
     except Exception as e:
         logger.warning(f"Physics demo failed (likely missing simulation data): {e}")
@@ -923,7 +920,9 @@ def demo_physics_functions():
 
 
 if __name__ == "__main__":
-    demo_phase_shifts()
-    demo_tapers()
-    demo_simple_patterns()
-    demo_physics_functions()
+    cpu = jax.devices("cpu")[0]
+    with jax.default_device(cpu):
+        demo_phase_shifts()
+        # demo_tapers()
+        # demo_simple_patterns()
+        # demo_physics_functions()
