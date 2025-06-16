@@ -188,7 +188,9 @@ def create_physics_loss_fn(config: ArrayConfig, openems_path: Path | None = None
     """Create physics loss function using modern physics setup."""
     # Create physics setup once with optional OpenEMS support
     key = jax.random.key(0)  # Deterministic for consistency
-    _, synthesize_embedded, _ = create_physics_setup(key, config, openems_path=openems_path)
+    _, synthesize_embedded, _ = create_physics_setup(
+        key, config, openems_path=openems_path
+    )
 
     def physics_loss_fn(
         batch: data.DataBatch,
@@ -306,7 +308,9 @@ def train(
 
     config = ArrayConfig()
 
-    train_step = create_train_step(loss_fn=partial(loss_fn, config=config, openems_path=openems_path))
+    train_step = create_train_step(
+        loss_fn=partial(loss_fn, config=config, openems_path=openems_path)
+    )
     warmup_step(dataset, optimizer, train_step)
 
     logger.info("Starting training")
