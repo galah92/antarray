@@ -349,17 +349,11 @@ def normalize_patterns(patterns: ArrayLike) -> jax.Array:
 
 @jax.jit
 def convert_to_db(patterns: ArrayLike, floor_db: float = -60) -> jax.Array:
-    """Converts normalized linear power patterns to dB scale."""
+    """Converts linear power patterns to normalized dB scale."""
+    normalized = patterns / jnp.max(patterns)  # Normalize first
     linear_floor = 10.0 ** (floor_db / 10.0)
-    clipped_patterns = jnp.maximum(patterns, linear_floor)
-    return 10.0 * jnp.log10(clipped_patterns)
-
-
-@jax.jit
-def convert_to_dbi(pattern: ArrayLike, Dmax: float) -> jax.Array:
-    """Convert power pattern to dBi scale with directivity."""
-    normalized = pattern / jnp.max(pattern)  # Now power pattern, not field
-    return 10 * jnp.log10(normalized) + 10.0 * jnp.log10(Dmax)
+    clipped = jnp.maximum(normalized, linear_floor)  # Then clip
+    return 10.0 * jnp.log10(clipped)
 
 
 # =============================================================================
@@ -380,10 +374,8 @@ def extract_E_plane_cut(pattern: np.ndarray, phi_idx: int = 0) -> np.ndarray:
 
 def plot_E_plane(
     pattern: np.ndarray,
-    Dmax: float,
     fmt: str = "r-",
     *,
-    normalize: bool = False,
     label: str | None = None,
     title: str | None = None,
     ax: PolarAxes | None = None,
@@ -395,9 +387,6 @@ def plot_E_plane(
 
     pattern_cut = extract_E_plane_cut(pattern, phi_idx=0)
     theta_rad = np.linspace(0, 2 * np.pi, pattern_cut.size)
-
-    if normalize:
-        pattern_cut = convert_to_dbi(pattern_cut, Dmax)
 
     ax.plot(theta_rad, pattern_cut, fmt, linewidth=1, label=label)
     ax.set_thetagrids(np.arange(0, 360, 30))
@@ -436,33 +425,32 @@ def plot_ff_3d(
     phi_rad: ArrayLike,
     pattern: ArrayLike,
     *,
-    hide_backlobe: bool = True,
     elev: float | None = None,
     azim: float | None = None,
+    scale_factor: float = 1.0,
     title: str = "3D Radiation Pattern",
     ax: Axes3D | None = None,
 ):
-    pattern = pattern.clip(min=0)  # Clip negative values to 0
+    pattern = pattern / np.max(pattern) * scale_factor
 
     # Calculate cartesian coordinates
     x = pattern * np.sin(theta_rad)[:, None] * np.cos(phi_rad)[None, :]
     y = pattern * np.sin(theta_rad)[:, None] * np.sin(phi_rad)[None, :]
     z = pattern * np.cos(theta_rad)[:, None]
 
-    if hide_backlobe:
-        z = np.array(z)  # Ensure z is a NumPy array and thus writable
-        z[z < 0] = np.nan  # Set backlobe values to NaN
-
     if ax is None:
-        fig = plt.figure(constrained_layout=True)
+        fig = plt.figure(layout="compressed")
         ax = typing.cast(Axes3D, fig.add_subplot(projection="3d"))
 
     ax.plot_surface(x, y, z, cmap="Spectral_r")
     ax.view_init(elev=elev, azim=azim)
     ax.set_box_aspect(None, zoom=1.2)
-    ax.set_xlim(-25, 25)
-    ax.set_ylim(-25, 25)
-    ax.set_zlim(0, 30)
+    ax.set_xlim(-scale_factor, scale_factor)
+    ax.set_ylim(-scale_factor, scale_factor)
+    ax.set_zlim(0, scale_factor * 1.2)
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_zticklabels([])
     ax.set_title(title)
 
 
@@ -609,7 +597,7 @@ def demo_openems_patterns():
 
     axs[2].remove()
     axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
-    plot_ff_3d(theta_rad, phi_rad, power_dB, ax=axs[2])
+    plot_ff_3d(theta_rad, phi_rad, power_pattern, ax=axs[2])
 
     steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
     phase_shift_title = f"OpenEMS Radiation Pattern ({steering_str})"
