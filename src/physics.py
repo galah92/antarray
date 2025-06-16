@@ -864,11 +864,17 @@ def demo_physics_patterns():
     logger.info("Saved demo_phase_shifts_analytical.png")
 
 
-if __name__ == "__main__":
-    cpu = jax.devices("cpu")[0]
-    with jax.default_device(cpu):
-        demo_phase_shifts()
-        demo_tapers()
-        # demo_simple_patterns()
-        demo_physics_patterns()
-        demo_openems_patterns()
+# ...existing code...
+@jax.jit
+def normalize_patterns(patterns: ArrayLike) -> jax.Array:
+    """Performs peak normalization on a batch of radiation patterns."""
+    max_vals = jnp.max(patterns, axis=(1, 2), keepdims=True)
+    return patterns / (max_vals + 1e-8)
+
+
+@jax.jit
+def convert_to_db(patterns: ArrayLike, floor_db: float = -60) -> jax.Array:
+    """Converts normalized linear power patterns to dB scale."""
+    linear_floor = 10.0 ** (floor_db / 10.0)
+    clipped_patterns = jnp.maximum(patterns, linear_floor)
+    return 10.0 * jnp.log10(clipped_patterns)

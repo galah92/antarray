@@ -6,13 +6,11 @@ import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from physics import create_physics_setup
+from physics import convert_to_db, create_physics_setup, normalize_patterns
 from training import (
     InterferenceCorrector,
     calculate_pattern_loss,
-    convert_to_db,
     create_progress_logger,
-    normalize_patterns,
     steering_angles_sampler,
 )
 

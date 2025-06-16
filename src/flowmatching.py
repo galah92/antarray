@@ -7,13 +7,12 @@ import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from physics import create_physics_setup
+from physics import create_physics_setup, normalize_patterns
 from training import (
     VelocityNet,
     create_checkpoint_manager,
     create_progress_logger,
     create_standard_optimizer,
-    normalize_patterns,
     restore_checkpoint,
     save_checkpoint,
     steering_angles_sampler,

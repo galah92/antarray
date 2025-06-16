@@ -45,21 +45,6 @@ def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMeth
     return jax.image.resize(image, shape=shape, method=method)
 
 
-@jax.jit
-def normalize_patterns(patterns: ArrayLike) -> jax.Array:
-    """Performs peak normalization on a batch of radiation patterns."""
-    max_vals = jnp.max(patterns, axis=(1, 2), keepdims=True)
-    return patterns / (max_vals + 1e-8)
-
-
-@jax.jit
-def convert_to_db(patterns: ArrayLike, floor_db: float = -60) -> jax.Array:
-    """Converts normalized linear power patterns to dB scale."""
-    linear_floor = 10.0 ** (floor_db / 10.0)
-    clipped_patterns = jnp.maximum(patterns, linear_floor)
-    return 10.0 * jnp.log10(clipped_patterns)
-
-
 # =============================================================================
 # Basic Neural Network Components
 # =============================================================================
