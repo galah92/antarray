@@ -326,7 +326,9 @@ def create_physics_setup(
     key, ideal_key, embedded_key = jax.random.split(key, 3)
 
     # Always use synthetic for ideal patterns (clean reference)
-    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
+    ideal_patterns = create_element_patterns(
+        config, ideal_key, is_embedded=False, openems_path=openems_path
+    )
 
     # Use OpenEMS or synthetic for embedded patterns based on parameter
     embedded_patterns = create_element_patterns(
@@ -579,15 +581,16 @@ def demo_openems_patterns():
     config = ArrayConfig()
 
     # Use new unified interface
-    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
+    synthesize_ideal, _, compute_analytical = create_physics_setup(
         key, config, openems_path=DEFAULT_SIM_PATH
     )
 
     # Test steering angle
-    steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
+    steering_deg = jnp.array([30, 45])
+    steering_angle = jnp.radians(steering_deg)
     weights, _ = compute_analytical(steering_angle)
-    power_pattern = synthesize_embedded(weights)
-    power_dB = convert_to_db(power_pattern)
+    power_pattern = synthesize_ideal(weights)
+    power_dB = convert_to_db(power_pattern, floor_db=-180.0)
 
     theta_rad, phi_rad = config.theta_rad, config.phi_rad
     fig, axs = plt.subplots(1, 3, figsize=[18, 6], layout="compressed")
@@ -741,5 +744,5 @@ def demo_physics_patterns():
 if __name__ == "__main__":
     demo_phase_shifts()
     demo_simple_patterns()
-    demo_physics_patterns()
     demo_openems_patterns()
+    # demo_physics_patterns()
