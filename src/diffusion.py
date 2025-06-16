@@ -171,9 +171,9 @@ def solve_with_diffusion(
     model: DenoisingUNet,
     target_pattern: jax.Array,
     scheduler: DDPMScheduler,
+    synthesize_embedded_pattern: Callable,
     num_inference_steps: int = 200,
     guidance_scale: float = 1.0,
-    synthesize_embedded_pattern: Callable | None = None,
     key: jax.Array | None = None,
 ) -> jax.Array:
     """Phase 2: Use trained model to solve for corrective weights."""
@@ -198,8 +198,8 @@ def solve_with_diffusion(
 
         model_output = model(sample_batch, target_pattern_batch, timestep_batch)[0]
 
-        # Optional physics guidance
-        if synthesize_embedded_pattern is not None and guidance_scale > 1.0:
+        # Physics guidance
+        if guidance_scale > 1.0:
             # Predict clean sample
             alpha_cumprod = scheduler.alphas_cumprod[timestep]
             predicted_clean = (
@@ -324,9 +324,9 @@ def evaluate_diffusion_model(
             model,
             target_pattern,
             scheduler,
+            synthesize_embedded_pattern=synthesize_embedded,
             num_inference_steps=200,
             guidance_scale=1.5,
-            synthesize_embedded_pattern=synthesize_embedded,
             key=solve_key,
         )
 
