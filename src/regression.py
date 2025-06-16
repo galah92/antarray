@@ -184,11 +184,11 @@ def circular_mse_fn(
     return circular_mse
 
 
-def create_physics_loss_fn(config: ArrayConfig):
+def create_physics_loss_fn(config: ArrayConfig, openems_path: Path | None = None):
     """Create physics loss function using modern physics setup."""
-    # Create physics setup once
+    # Create physics setup once with optional OpenEMS support
     key = jax.random.key(0)  # Deterministic for consistency
-    _, synthesize_embedded, _ = create_physics_setup(key, config)
+    _, synthesize_embedded, _ = create_physics_setup(key, config, openems_path=openems_path)
 
     def physics_loss_fn(
         batch: data.DataBatch,
@@ -285,6 +285,7 @@ def train(
     seed: int = 42,
     restore: bool = True,
     overwrite: bool = False,
+    openems_path: Path | None = None,
 ):
     key = jax.random.key(seed)
     key, dataset_key, model_key = jax.random.split(key, num=3)
@@ -305,7 +306,7 @@ def train(
 
     config = ArrayConfig()
 
-    train_step = create_train_step(loss_fn=partial(loss_fn, config=config))
+    train_step = create_train_step(loss_fn=partial(loss_fn, config=config, openems_path=openems_path))
     warmup_step(dataset, optimizer, train_step)
 
     logger.info("Starting training")

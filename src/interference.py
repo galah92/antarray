@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Callable
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -72,16 +73,17 @@ def train_pipeline(
     batch_size: int = 512,
     lr: float = 5e-4,
     seed: int = 42,
+    openems_path: Path | None = None,
 ):
     """Main function to set up and run the training pipeline."""
     key = jax.random.key(seed)
 
     logger.info("Performing one-time precomputation")
 
-    # Create physics setup
+    # Create physics setup with optional OpenEMS support
     key, physics_key = jax.random.split(key)
     synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        physics_key
+        physics_key, openems_path=openems_path
     )
 
     train_step = create_train_step_fn(

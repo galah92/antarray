@@ -204,6 +204,7 @@ def train_flow_matching_pipeline(
     checkpoint_dir: str = "flow_matching_checkpoints",
     save_every: int = 1000,
     restore: bool = True,
+    openems_path: Path | None = None,
 ):
     """Main training function for the flow matching model."""
     key = jax.random.key(seed)
@@ -211,9 +212,9 @@ def train_flow_matching_pipeline(
 
     logger.info("Setting up flow matching training pipeline")
 
-    # Create physics setup
+    # Create physics setup with optional OpenEMS support
     synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        key
+        key, openems_path=openems_path
     )
 
     # Create flow matcher and model
@@ -274,6 +275,7 @@ def evaluate_flow_matching_model(
     synthesize_embedded: Callable,
     n_eval_samples: int = 50,
     seed: int = 123,
+    openems_path: Path | None = None,
 ):
     """Evaluate the trained flow matching model on test steering angles."""
 
@@ -288,9 +290,11 @@ def evaluate_flow_matching_model(
     test_angles = steering_angles_sampler(angle_key, batch_size=n_eval_samples, limit=1)
     test_batch = next(test_angles)
 
-    # Create physics setup for evaluation
+    # Create physics setup for evaluation with optional OpenEMS support
     key, physics_key = jax.random.split(key)
-    synthesize_ideal, _, compute_analytical = create_physics_setup(physics_key)
+    synthesize_ideal, _, compute_analytical = create_physics_setup(
+        physics_key, openems_path=openems_path
+    )
 
     # Compute analytical weights and target patterns
     vmapped_analytical_weights = jax.vmap(compute_analytical)

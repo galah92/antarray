@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Callable
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -227,16 +228,17 @@ def train_diffusion_pipeline(
     batch_size: int = 256,
     lr: float = 1e-4,
     seed: int = 42,
+    openems_path: Path | None = None,
 ):
     """Main training function for the diffusion model."""
     key = jax.random.key(seed)
 
     logger.info("Setting up diffusion training pipeline")
 
-    # Create physics setup
+    # Create physics setup with optional OpenEMS support
     key, physics_key = jax.random.split(key)
     synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        physics_key
+        physics_key, openems_path=openems_path
     )
 
     # Create scheduler and model
@@ -293,6 +295,7 @@ def evaluate_diffusion_model(
     synthesize_embedded: Callable,
     n_eval_samples: int = 50,
     seed: int = 123,
+    openems_path: Path | None = None,
 ):
     """Evaluate the trained diffusion model on test steering angles."""
     key = jax.random.key(seed)
@@ -302,9 +305,11 @@ def evaluate_diffusion_model(
     test_angles = steering_angles_sampler(angle_key, batch_size=n_eval_samples, limit=1)
     test_batch = next(test_angles)
 
-    # Create physics setup for evaluation
+    # Create physics setup for evaluation with optional OpenEMS support
     key, physics_key = jax.random.split(key)
-    synthesize_ideal, _, compute_analytical = create_physics_setup(physics_key)
+    synthesize_ideal, _, compute_analytical = create_physics_setup(
+        physics_key, openems_path=openems_path
+    )
 
     # Compute analytical weights and target patterns
     vmapped_analytical_weights = jax.vmap(compute_analytical)

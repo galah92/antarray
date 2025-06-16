@@ -2,9 +2,8 @@ import logging
 import typing
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache, partial
+from functools import lru_cache
 from pathlib import Path
-from typing import Literal
 
 import h5py
 import jax
@@ -19,6 +18,7 @@ from mpl_toolkits.mplot3d import Axes3D
 logger = logging.getLogger(__name__)
 
 
+# @dataclass(frozen=True)
 class ArrayConfig:
     """Configuration for antenna array parameters and simulation settings."""
 
@@ -27,6 +27,24 @@ class ArrayConfig:
     freq_hz: float = 2.45e9
     theta_rad: np.ndarray = np.radians(np.arange(180))
     phi_rad: np.ndarray = np.radians(np.arange(360))
+
+    def __init__(
+        self,
+        array_size: tuple[int, int] = (16, 16),
+        spacing_mm: tuple[float, float] = (60.0, 60.0),
+        freq_hz: float = 2.45e9,
+        theta_rad: np.ndarray | None = None,
+        phi_rad: np.ndarray | None = None,
+    ):
+        self.array_size = array_size
+        self.spacing_mm = spacing_mm
+        self.freq_hz = freq_hz
+        if theta_rad is None:
+            theta_rad = np.radians(np.arange(180))
+        if phi_rad is None:
+            phi_rad = np.radians(np.arange(360))
+        self.theta_rad = np.asarray(theta_rad, dtype=np.float32)
+        self.phi_rad = np.asarray(phi_rad, dtype=np.float32)
 
 
 @dataclass(frozen=True)
@@ -115,10 +133,6 @@ DEFAULT_SIM_DIR = root_dir / "openems" / "sim" / "antenna_array"
 DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
 DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
 
-DEFAULT_DATASET_DIR = root_dir / "dataset"
-DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
-DEFAULT_DATASET_NAME = "farfield_dataset.h5"
-
 
 def check_grating_lobes(freq=None, spacing_mm=None, config=None, verbose=False):
     """Check for potential grating lobes in an antenna array based on element spacing."""
@@ -164,200 +178,193 @@ def check_grating_lobes(freq=None, spacing_mm=None, config=None, verbose=False):
             logger.info(f"  - {dy_critical_angle:.1f}° in the Y direction")
 
 
-def calc_array_params(
-    array_size: tuple[int, int] = ArrayConfig.array_size,
-    spacing_mm: tuple[float, float] = ArrayConfig.spacing_mm,
-    *,
-    theta_rad: np.ndarray | None = None,
-    phi_rad: np.ndarray | None = None,
-    sim_path: Path | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, jax.Array, jax.Array]:
-    """Calculate array parameters using explicit parameters or defaults."""
-    theta_rad = theta_rad if theta_rad is not None else np.radians(np.arange(180))
-    phi_rad = phi_rad if phi_rad is not None else np.radians(np.arange(360))
-    sim_path = sim_path or DEFAULT_SIM_PATH
+def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Callable:
+    """Factory to create a function for calculating analytical weights."""
+    config = config or ArrayConfig()
 
-    nf2ff = load_openems_nf2ff(sim_path)
-    E_field, Dmax, freq_hz = nf2ff.E_field, nf2ff.Dmax, nf2ff.freq_hz
-    E_field = E_field[: theta_rad.size, ...]
-    Dmax_array = Dmax * np.prod(array_size)
+    k = get_wavenumber(config=config)
+    x_pos, y_pos = get_element_positions(config=config)
+    k_pos_x, k_pos_y = k * x_pos, k * y_pos
 
-    check_grating_lobes(freq_hz, spacing_mm)
+    @jax.jit
+    def calculate(steering_angle_rad: ArrayLike) -> tuple[jax.Array, jax.Array]:
+        """Calculates ideal, analytical weights for a given steering angle."""
+        theta_steer, phi_steer = steering_angle_rad[0], steering_angle_rad[1]
 
-    k = get_wavenumber(freq_hz)
-    x_pos, y_pos = get_element_positions(array_size, spacing_mm)
-    kx, ky = k * x_pos, k * y_pos
+        ux = jnp.sin(theta_steer) * jnp.cos(phi_steer)
+        uy = jnp.sin(theta_steer) * jnp.sin(phi_steer)
 
-    geo_exp = calc_geo_exp(theta_rad, phi_rad, kx, ky)
+        x_phase, y_phase = k_pos_x * ux, k_pos_y * uy
+        phase_shifts = jnp.add.outer(x_phase, y_phase)
 
-    precomputed = jnp.einsum("tpc,tpxy->tpcxy", E_field, geo_exp)
-    precomputed = precomputed / np.prod(array_size)
+        return jnp.exp(-1j * phase_shifts), phase_shifts
 
-    taper = calc_taper(array_size)
-    return kx, ky, taper, precomputed, Dmax_array
+    return calculate
 
 
-@lru_cache(maxsize=1)
-def calc_taper(
-    array_size: tuple[int, int] = (16, 16),
-    taper_type: Literal["uniform", "hamming", "taylor"] = "uniform",
-) -> np.ndarray:
-    if taper_type == "hamming":
-        window_func = np.hamming
-    elif taper_type == "taylor":
-        # Simple approximation of Taylor window using Kaiser
-        window_func = partial(np.kaiser, beta=3)
-    else:
-        window_func = np.ones  # Uniform taper
+def create_pattern_synthesizer(
+    element_patterns: jax.Array,
+    config: ArrayConfig,
+) -> Callable:
+    """Factory to create a pattern synthesis function."""
 
-    window_x, window_y = window_func(array_size[0]), window_func(array_size[1])
-    taper = np.outer(window_x, window_y)  # Multiply the 1D windows
-    return taper.astype(np.complex64)
+    @jax.jit
+    def precompute_basis(raw_patterns):
+        k = get_wavenumber(config=config)
+        x_pos, y_pos = get_element_positions(config=config)
+        k_pos_x, k_pos_y = k * x_pos, k * y_pos
 
+        sin_theta = jnp.sin(config.theta_rad)
+        ux = sin_theta[:, None] * jnp.cos(config.phi_rad)[None, :]
+        uy = sin_theta[:, None] * jnp.sin(config.phi_rad)[None, :]
 
-@jax.jit
-def calc_phase_shifts(
-    kx: ArrayLike,
-    ky: ArrayLike,
-    steering_rad: ArrayLike,
-) -> jax.Array:
-    """Calculate phase shifts for each element in the array based on steering angles."""
-    theta_steering, phi_steering = steering_rad.T
+        phase_x, phase_y = ux[..., None] * k_pos_x, uy[..., None] * k_pos_y
+        geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
+        geo_factor = jnp.exp(1j * geo_phase)
 
-    sin_theta = jnp.sin(theta_steering)
-    ux = sin_theta * jnp.cos(phi_steering)
-    uy = sin_theta * jnp.sin(phi_steering)
+        return jnp.einsum("xytpz,tpxy->tpzxy", raw_patterns, geo_factor)
 
-    x_phase = kx[:, None] * ux[None, :]
-    y_phase = ky[:, None] * uy[None, :]
+    element_field_basis = precompute_basis(element_patterns)
 
-    phase_shifts = x_phase[:, None, :] + y_phase[None, :, :]
-    phase_shifts = phase_shifts % (2 * jnp.pi)
+    @jax.jit
+    def synthesize(weights: ArrayLike) -> jax.Array:
+        """Synthesizes a pattern from weights using the precomputed basis."""
+        total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_field_basis)
+        power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
+        return power_pattern
 
-    return phase_shifts
+    return synthesize
 
 
-@jax.jit
-def calc_geo_exp(
-    theta_rad: ArrayLike,
-    phi_rad: ArrayLike,
-    kx: ArrayLike,  # Wavenumber-scaled x-positions of array elements
-    ky: ArrayLike,  # Wavenumber-scaled y-positions of array elements
-) -> jax.Array:
-    """
-    Calculate the geometric phase terms for the array factor calculation.
-    """
-    # x and y components of the geometric phase: (len(theta_rad), len(phi_rad))
-    sin_theta = jnp.sin(theta_rad)[:, None]
-    ux = sin_theta * jnp.cos(phi_rad)
-    uy = sin_theta * jnp.sin(phi_rad)
+def add_embedding_effects(base_patterns: jax.Array, key: jax.Array) -> jax.Array:
+    """Add realistic element-to-element variations to OpenEMS base patterns."""
+    # Apply small random amplitude/phase distortions to simulate embedding effects
+    key, amp_key, phase_key = jax.random.split(key, 3)
 
-    # Geometric phase terms for each element and angle: (len(theta), len(phi), xn, yn)
-    x_geo_phase = kx[None, None, :, None] * ux[:, :, None, None]
-    y_geo_phase = ky[None, None, None, :] * uy[:, :, None, None]
-
-    geo_phase = x_geo_phase + y_geo_phase  # Geometric phase terms
-    geo_exp = jnp.exp(1j * geo_phase)  # Complex exponential of the geometric phases
-
-    geo_exp = jnp.asarray(geo_exp)  # Convert to JAX array for JIT compilation
-
-    return geo_exp
-
-
-def normalize_rad_pattern(pattern: ArrayLike, Dmax: float) -> jax.Array:
-    """
-    Normalize the radiation pattern to dBi.
-    """
-    pattern = pattern / jnp.max(jnp.abs(pattern))
-    pattern = 20 * jnp.log10(jnp.abs(pattern)) + 10.0 * jnp.log10(Dmax)
-    return pattern
-
-
-@jax.jit
-def rad_pattern_from_geo_and_excitations(
-    precomputed: ArrayLike,
-    Dmax_array: float,
-    w: ArrayLike,
-) -> jax.Array:
-    E_total = jnp.einsum("xy,tpcxy->tpc", w, precomputed)
-
-    E_total = jnp.abs(E_total) ** 2
-    E_total = jnp.sum(E_total, axis=-1)
-    E_total = jnp.sqrt(E_total)
-
-    E_norm = normalize_rad_pattern(E_total, Dmax_array)
-    return E_norm
-
-
-@jax.jit
-def rad_pattern_from_geo(
-    kx: ArrayLike,
-    ky: ArrayLike,
-    taper: ArrayLike,
-    precomputed: ArrayLike,
-    Dmax_array: ArrayLike,
-    steering_rad: ArrayLike,
-) -> tuple[jax.Array, jax.Array]:
-    """
-    Compute radiation pattern for given steering angles.
-    """
-    phase_shifts = calc_phase_shifts(kx, ky, steering_rad)
-
-    excitations = jnp.einsum("xy,xys->xy", taper, jnp.exp(-1j * phase_shifts))
-
-    E_norm = rad_pattern_from_geo_and_excitations(precomputed, Dmax_array, excitations)
-    return E_norm, excitations
-
-
-def precompute_array_contributions(
-    element_patterns: jax.Array,  # Shape: (16, 16, n_theta, n_phi) - your simulated patterns
-    kx: jax.Array,  # From your existing calc_array_params
-    ky: jax.Array,  # From your existing calc_array_params
-    theta_rad: jax.Array,  # From your dataset
-    phi_rad: jax.Array,  # From your dataset
-) -> jax.Array:
-    """
-    Precompute element_patterns * exp(1j * geometric_phase) for all elements.
-    Reuses your existing kx, ky arrays.
-
-    Returns:
-        Shape (16, 16, n_theta, n_phi) - precomputed element contributions
-    """
-    # Direction cosines (reusing your existing approach)
-    sin_theta = jnp.sin(theta_rad)
-    cos_phi = jnp.cos(phi_rad)
-    sin_phi = jnp.sin(phi_rad)
-
-    u = sin_theta[:, None] * cos_phi[None, :]  # (n_theta, n_phi)
-    v = sin_theta[:, None] * sin_phi[None, :]  # (n_theta, n_phi)
-
-    # Geometric phase using your existing kx, ky
-    x_phase = kx[:, None, None] * u[None, :, :]  # (16, n_theta, n_phi)
-    y_phase = ky[:, None, None] * v[None, :, :]  # (16, n_theta, n_phi)
-
-    # (16, 16, n_theta, n_phi)
-    geometric_phase = x_phase[:, None, :, :] + y_phase[None, :, :, :]
-
-    # Combine with element patterns
-    return element_patterns * jnp.exp(1j * geometric_phase)
-
-
-@jax.jit
-def array_synthesis(
-    precomputed_contributions: jax.Array,  # From precompute_array_contributions
-    excitations: jax.Array,  # Shape: (16, 16) - complex excitations
-) -> jax.Array:
-    """
-    Synthesize array pattern from precomputed contributions and excitations.
-
-    Returns:
-        Shape: (n_theta, n_phi) - power pattern
-    """
-    total_field = jnp.sum(
-        excitations[:, :, None, None] * precomputed_contributions, axis=(0, 1)
+    # Small variations (5-10%) to simulate coupling between elements
+    amp_variations = 1.0 + 0.05 * jax.random.normal(
+        amp_key, base_patterns.shape[:2] + (1, 1, 1)
+    )
+    phase_variations = 0.1 * jax.random.normal(
+        phase_key, base_patterns.shape[:2] + (1, 1, 1)
     )
 
-    return jnp.abs(total_field) ** 2
+    return base_patterns * amp_variations * jnp.exp(1j * phase_variations)
+
+
+def create_element_patterns(
+    config: ArrayConfig,
+    key: jax.Array,
+    is_embedded: bool,
+    openems_path: Path | None = None,
+) -> jax.Array:
+    """Simulates element patterns for either ideal or embedded array, with optional OpenEMS data."""
+    if openems_path is not None:
+        # Load OpenEMS data and convert to unified format
+        openems_data = load_openems_nf2ff(openems_path)
+        single_element = openems_data.E_field  # Shape: (n_theta, n_phi, 2)
+
+        # Tile across array positions to create 5D format: (array_x, array_y, n_theta, n_phi, n_polarizations)
+        base_patterns = jnp.tile(
+            single_element[None, None, ...], (*config.array_size, 1, 1, 1)
+        )
+
+        if is_embedded:
+            # Add element-specific distortions to simulate coupling
+            return add_embedding_effects(base_patterns, key)
+        else:
+            return base_patterns
+    else:
+        # Use existing synthetic generation (unchanged)
+        theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
+
+        # Base cosine model for field amplitude
+        base_field_amp = jnp.cos(config.theta_rad)
+        base_field_amp = base_field_amp.at[config.theta_rad > np.pi / 2].set(0)
+        base_field_amp = base_field_amp[:, None] * jnp.ones((theta_size, phi_size))
+
+        if not is_embedded:
+            ideal_field = base_field_amp[None, None, :, :, None]
+            ideal_field = jnp.tile(ideal_field, (*config.array_size, 1, 1, 1))
+            return ideal_field.astype(jnp.complex64)
+
+        # Embedded case: simulate distortion
+        num_pols = 2
+        final_shape = (*config.array_size, theta_size, phi_size, num_pols)
+        low_res_shape = (*config.array_size, 10, 20, num_pols)
+
+        key, amp_key, phase_key = jax.random.split(key, 3)
+
+        amp_dist_low_res = jax.random.uniform(
+            amp_key, low_res_shape, minval=0.5, maxval=1.5
+        )
+        amp_distortion = jax.image.resize(
+            amp_dist_low_res, final_shape, method="bicubic"
+        )
+
+        phase_dist_low_res = jax.random.uniform(
+            phase_key, low_res_shape, maxval=2 * np.pi
+        )
+        phase_distortion = jax.image.resize(
+            phase_dist_low_res, final_shape, method="bicubic"
+        )
+
+        distorted_amplitude = base_field_amp[None, None, ..., None] * amp_distortion
+        distorted_field = distorted_amplitude * jnp.exp(1j * phase_distortion)
+
+        return distorted_field.astype(jnp.complex64)
+
+
+def create_physics_setup(
+    key: jax.Array,
+    config: ArrayConfig | None = None,
+    openems_path: Path | None = None,
+):
+    """Creates the physics simulation setup with optional OpenEMS data support."""
+    config = config or ArrayConfig()
+
+    key, ideal_key, embedded_key = jax.random.split(key, 3)
+
+    # Always use synthetic for ideal patterns (clean reference)
+    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
+
+    # Use OpenEMS or synthetic for embedded patterns based on parameter
+    embedded_patterns = create_element_patterns(
+        config, embedded_key, is_embedded=True, openems_path=openems_path
+    )
+
+    synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
+    synthesize_embedded = create_pattern_synthesizer(embedded_patterns, config)
+    compute_analytical = create_analytical_weight_calculator(config)
+
+    return synthesize_ideal, synthesize_embedded, compute_analytical
+
+
+@jax.jit
+def normalize_patterns(patterns: ArrayLike) -> jax.Array:
+    """Performs peak normalization on a batch of radiation patterns (linear scale)."""
+    max_vals = jnp.max(patterns, axis=(1, 2), keepdims=True)
+    return patterns / (max_vals + 1e-8)
+
+
+@jax.jit
+def convert_to_db(patterns: ArrayLike, floor_db: float = -60) -> jax.Array:
+    """Converts normalized linear power patterns to dB scale."""
+    linear_floor = 10.0 ** (floor_db / 10.0)
+    clipped_patterns = jnp.maximum(patterns, linear_floor)
+    return 10.0 * jnp.log10(clipped_patterns)
+
+
+@jax.jit
+def convert_to_dbi(pattern: ArrayLike, Dmax: float) -> jax.Array:
+    """Convert pattern to dBi scale with directivity (for single patterns)."""
+    normalized = pattern / jnp.max(jnp.abs(pattern))
+    return 20 * jnp.log10(jnp.abs(normalized)) + 10.0 * jnp.log10(Dmax)
+
+
+# =============================================================================
+# Plotting Functions
+# =============================================================================
 
 
 def extract_E_plane_cut(pattern: np.ndarray, phi_idx: int = 0) -> np.ndarray:
@@ -390,7 +397,7 @@ def plot_E_plane(
     theta_rad = np.linspace(0, 2 * np.pi, E_norm_cut.size)
 
     if normalize:
-        E_norm_cut = normalize_rad_pattern(E_norm_cut, Dmax)
+        E_norm_cut = convert_to_dbi(E_norm_cut, Dmax)  # Updated function name
 
     ax.plot(theta_rad, E_norm_cut, fmt, linewidth=1, label=label)
     ax.set_thetagrids(np.arange(0, 360, 30))
@@ -573,14 +580,27 @@ def steering_repr(steering_angles: np.ndarray):
     return f"[θ°, φ°] = {formatted}"
 
 
+# =============================================================================
+# Demo Functions
+# =============================================================================
+
+
 def demo_openems_patterns():
-    steering_deg = np.array([[30, 45]])
+    """Demonstrate OpenEMS pattern loading with new unified interface."""
+    key = jax.random.key(42)
+    config = ArrayConfig()
 
-    array_params = calc_array_params(array_size=(16, 16), spacing_mm=(60, 60))
-    E_norm, _ = rad_pattern_from_geo(*array_params, np.radians(steering_deg))
-    E_norm = np.asarray(E_norm)
+    # Use new unified interface
+    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
+        key, config, openems_path=DEFAULT_SIM_PATH
+    )
 
-    theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
+    # Test steering angle
+    steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
+    weights, _ = compute_analytical(steering_angle)
+    E_norm = synthesize_embedded(weights)
+
+    theta_rad, phi_rad = config.theta_rad, config.phi_rad
     fig, axs = plt.subplots(1, 3, figsize=[18, 6], layout="compressed")
 
     plot_ff_2d(theta_rad, phi_rad, E_norm, ax=axs[0])
@@ -590,135 +610,19 @@ def demo_openems_patterns():
     axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
     plot_ff_3d(theta_rad, phi_rad, E_norm, ax=axs[2])
 
-    steering_str = steering_repr(steering_deg.T)
-    phase_shift_title = f"Radiation Pattern with Phase Shifts {steering_str}"
+    steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
+    phase_shift_title = f"OpenEMS Radiation Pattern ({steering_str})"
     fig.suptitle(phase_shift_title)
 
-    fig_path = "test.png"
+    fig_path = "test_openems.png"
     fig.savefig(fig_path, dpi=600)
-    logger.info(f"Saved sample plot to {fig_path}")
-
-
-def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Callable:
-    """Factory to create a function for calculating analytical weights."""
-    config = config or ArrayConfig()
-
-    k = get_wavenumber(config=config)
-    x_pos, y_pos = get_element_positions(config=config)
-    k_pos_x, k_pos_y = k * x_pos, k * y_pos
-
-    @jax.jit
-    def calculate(steering_angle_rad: ArrayLike) -> tuple[jax.Array, jax.Array]:
-        """Calculates ideal, analytical weights for a given steering angle."""
-        theta_steer, phi_steer = steering_angle_rad[0], steering_angle_rad[1]
-
-        ux = jnp.sin(theta_steer) * jnp.cos(phi_steer)
-        uy = jnp.sin(theta_steer) * jnp.sin(phi_steer)
-
-        x_phase, y_phase = k_pos_x * ux, k_pos_y * uy
-        phase_shifts = jnp.add.outer(x_phase, y_phase)
-
-        return jnp.exp(-1j * phase_shifts), phase_shifts
-
-    return calculate
-
-
-def create_pattern_synthesizer(
-    element_patterns: jax.Array,
-    config: ArrayConfig,
-) -> Callable:
-    """Factory to create a pattern synthesis function."""
-    config = config or ArrayConfig()
-
-    @jax.jit
-    def precompute_basis(raw_patterns):
-        k = get_wavenumber(config=config)
-        x_pos, y_pos = get_element_positions(config=config)
-        k_pos_x, k_pos_y = k * x_pos, k * y_pos
-
-        sin_theta = jnp.sin(config.theta_rad)
-        ux = sin_theta[:, None] * jnp.cos(config.phi_rad)[None, :]
-        uy = sin_theta[:, None] * jnp.sin(config.phi_rad)[None, :]
-
-        phase_x, phase_y = ux[..., None] * k_pos_x, uy[..., None] * k_pos_y
-        geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
-        geo_factor = jnp.exp(1j * geo_phase)
-
-        return jnp.einsum("xytpz,tpxy->tpzxy", raw_patterns, geo_factor)
-
-    element_field_basis = precompute_basis(element_patterns)
-
-    @jax.jit
-    def synthesize(weights: ArrayLike) -> jax.Array:
-        """Synthesizes a pattern from weights using the precomputed basis."""
-        total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_field_basis)
-        power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
-        return power_pattern
-
-    return synthesize
-
-
-def create_element_patterns(
-    config: ArrayConfig, key: jax.Array, is_embedded: bool
-) -> jax.Array:
-    """Simulates element patterns for either ideal or embedded array."""
-    theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
-
-    # Base cosine model for field amplitude
-    base_field_amp = jnp.cos(config.theta_rad)
-    base_field_amp = base_field_amp.at[config.theta_rad > np.pi / 2].set(0)
-    base_field_amp = base_field_amp[:, None] * jnp.ones((theta_size, phi_size))
-
-    if not is_embedded:
-        ideal_field = base_field_amp[None, None, :, :, None]
-        ideal_field = jnp.tile(ideal_field, (*config.array_size, 1, 1, 1))
-        return ideal_field.astype(jnp.complex64)
-
-    # Embedded case: simulate distortion
-    num_pols = 2
-    final_shape = (*config.array_size, theta_size, phi_size, num_pols)
-    low_res_shape = (*config.array_size, 10, 20, num_pols)
-
-    key, amp_key, phase_key = jax.random.split(key, 3)
-
-    amp_dist_low_res = jax.random.uniform(
-        amp_key, low_res_shape, minval=0.5, maxval=1.5
-    )
-    amp_distortion = jax.image.resize(amp_dist_low_res, final_shape, method="bicubic")
-
-    phase_dist_low_res = jax.random.uniform(phase_key, low_res_shape, maxval=2 * np.pi)
-    phase_distortion = jax.image.resize(
-        phase_dist_low_res, final_shape, method="bicubic"
-    )
-
-    distorted_amplitude = base_field_amp[None, None, ..., None] * amp_distortion
-    distorted_field = distorted_amplitude * jnp.exp(1j * phase_distortion)
-
-    return distorted_field.astype(jnp.complex64)
-
-
-def create_physics_setup(key: jax.Array, config: ArrayConfig | None = None):
-    """Creates the physics simulation setup (patterns and synthesizers)."""
-    config = config or ArrayConfig()
-
-    key, ideal_key, embedded_key = jax.random.split(key, 3)
-
-    ideal_patterns = create_element_patterns(config, ideal_key, is_embedded=False)
-    embedded_patterns = create_element_patterns(config, embedded_key, is_embedded=True)
-
-    synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
-    synthesize_embedded = create_pattern_synthesizer(embedded_patterns, config)
-    compute_analytical = create_analytical_weight_calculator(config)
-
-    return synthesize_ideal, synthesize_embedded, compute_analytical
+    logger.info(f"Saved OpenEMS sample plot to {fig_path}")
 
 
 def demo_phase_shifts():
     """Demonstrate phase shift calculations and visualization."""
     config = ArrayConfig()
-    k = get_wavenumber(config=config)
-    x_pos, y_pos = get_element_positions(config=config)
-    kx, ky = k * x_pos, k * y_pos
+    compute_analytical = create_analytical_weight_calculator(config)
 
     steering_angles = [
         [0, 0],  # Broadside
@@ -732,41 +636,22 @@ def demo_phase_shifts():
     nrows = 2
     ncols = np.ceil(steering_angles.shape[0] / 2).astype(np.int32)
 
-    phase_shifts = calc_phase_shifts(kx, ky, np.radians(steering_angles))
-    phase_shifts = phase_shifts.transpose(2, 0, 1)  # (n_steering, n_theta, n_phi)
+    # Use new analytical calculator
+    phase_shifts_list = []
+    for angle in steering_angles:
+        _, phase_shifts = compute_analytical(np.radians(angle))
+        phase_shifts_list.append(phase_shifts)
 
     kw = dict(figsize=(15, 10), sharex=True, sharey=True, layout="compressed")
     fig, axes = plt.subplots(nrows, ncols, **kw)
 
     for i, ax in enumerate(axes.flat[: steering_angles.shape[0]]):
         title = f"θ={steering_angles[i][0]}°, φ={steering_angles[i][1]}°"
-        im = plot_phase_shifts(phase_shifts[i], title=title, colorbar=False, ax=ax)
+        im = plot_phase_shifts(phase_shifts_list[i], title=title, colorbar=False, ax=ax)
 
     fig.colorbar(im, ax=axes, shrink=0.6, label="Degrees")
     fig.suptitle("Phase Shifts for Different Steering Angles")
     filename = "demo_phase_shifts.png"
-    fig.savefig(filename, dpi=250)
-    logger.info(f"Saved {filename}")
-
-
-def demo_tapers():
-    """Demonstrate different taper functions."""
-    array_size = ArrayConfig().array_size
-    taper_types = ["uniform", "hamming", "taylor"]
-
-    kw = dict(figsize=(15, 5), sharex=True, sharey=True, layout="compressed")
-    fig, axes = plt.subplots(1, len(taper_types), **kw)
-
-    for i, taper_type in enumerate(taper_types):
-        taper = calc_taper(array_size, taper_type)
-        im = axes[i].imshow(np.abs(taper), cmap="viridis", origin="lower")
-        axes[i].set_title(f"{taper_type.capitalize()} Taper")
-        axes[i].set_xlabel("Element X")
-        axes[i].set_ylabel("Element Y")
-
-    fig.colorbar(im, ax=axes, label="Taper Amplitude")
-    fig.suptitle("Different Array Taper Functions")
-    filename = "demo_tapers.png"
     fig.savefig(filename, dpi=250)
     logger.info(f"Saved {filename}")
 
@@ -864,17 +749,8 @@ def demo_physics_patterns():
     logger.info("Saved demo_phase_shifts_analytical.png")
 
 
-# ...existing code...
-@jax.jit
-def normalize_patterns(patterns: ArrayLike) -> jax.Array:
-    """Performs peak normalization on a batch of radiation patterns."""
-    max_vals = jnp.max(patterns, axis=(1, 2), keepdims=True)
-    return patterns / (max_vals + 1e-8)
-
-
-@jax.jit
-def convert_to_db(patterns: ArrayLike, floor_db: float = -60) -> jax.Array:
-    """Converts normalized linear power patterns to dB scale."""
-    linear_floor = 10.0 ** (floor_db / 10.0)
-    clipped_patterns = jnp.maximum(patterns, linear_floor)
-    return 10.0 * jnp.log10(clipped_patterns)
+if __name__ == "__main__":
+    demo_phase_shifts()
+    demo_simple_patterns()
+    demo_physics_patterns()
+    demo_openems_patterns()

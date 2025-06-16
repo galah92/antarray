@@ -24,6 +24,12 @@ app = typer.Typer(
     add_completion=False,
 )
 
+root_dir = Path(__file__).parent.parent
+
+DEFAULT_DATASET_DIR = root_dir / "dataset"
+DEFAULT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_DATASET_NAME = "farfield_dataset.h5"
+
 
 @app.command()
 def simulate(sim_path: str = "antenna_array.py"):
@@ -137,6 +143,7 @@ class Dataset:
         trig_encoding: bool = True,
         front_hemisphere: bool = True,
         key: jax.Array | None = None,
+        use_openems: bool = False,  # New parameter to enable OpenEMS mode
     ):
         self.batch_size = batch_size
         self.limit = limit
@@ -147,6 +154,7 @@ class Dataset:
         self.spacing_mm = spacing_mm
         self.theta_end = jnp.radians(theta_end)
         self.sim_path = sim_path
+        self.use_openems = use_openems
 
         self.clip = clip
         self.normalize = normalize
@@ -161,25 +169,34 @@ class Dataset:
             key = jax.random.key(0)
         self.key = key
 
-        # Load and prepare array parameters
-        array_params = physics.calc_array_params(
+        # Always use unified physics interface now
+        config = physics.ArrayConfig(
             array_size=array_size,
             spacing_mm=spacing_mm,
             theta_rad=self.theta_rad,
             phi_rad=self.phi_rad,
-            sim_path=self.sim_path,
         )
 
-        # Convert to JAX arrays and make them static
-        self.array_params = jax.tree.map(jnp.asarray, array_params)
-
-        # Beam probability distribution
-        self.n_beams_prob = get_beams_prob(max_n_beams)
-
-        self.rad_pattern_from_steering = partial(
-            physics.rad_pattern_from_geo,
-            *self.array_params,
+        key, physics_key = jax.random.split(key)
+        synthesize_ideal, synthesize_embedded, compute_analytical = (
+            physics.create_physics_setup(
+                physics_key,
+                config=config,
+                openems_path=self.sim_path if use_openems else None,
+            )
         )
+
+        # Use embedded patterns for realistic simulation
+        self.synthesize_pattern = synthesize_embedded
+        self.compute_analytical = compute_analytical
+
+        def unified_pattern_from_steering(steering_angles):
+            """Generate patterns using unified physics interface."""
+            weights, _ = self.compute_analytical(steering_angles)
+            pattern = self.synthesize_pattern(weights)
+            return pattern, weights
+
+        self.rad_pattern_from_steering = unified_pattern_from_steering
 
         self.transform_fn = create_radiation_pattern_transform(
             clip=clip,
@@ -229,10 +246,11 @@ def generate_beamforming(
     n_samples: int = 1_000,
     theta_end: float = 65,  # Degrees
     max_n_beams: int = 1,
-    dataset_dir: Path = physics.DEFAULT_DATASET_DIR,
-    dataset_name: str = physics.DEFAULT_DATASET_NAME,
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset_name: str = DEFAULT_DATASET_NAME,
     overwrite: bool = False,
     seed: int = 42,
+    use_openems: bool = False,  # New parameter
 ):
     array_size = (16, 16)
     theta_rad = np.radians(np.arange(90))
@@ -250,6 +268,7 @@ def generate_beamforming(
         clip=False,
         normalize=False,
         trig_encoding=False,
+        use_openems=use_openems,  # Pass through the parameter
     )
 
     logger.info(f"Generating dataset with {n_samples} samples")
@@ -275,7 +294,7 @@ def generate_beamforming(
 
 @app.command()
 def plot_dataset_phase_shifts(
-    dataset_dir: Path = physics.DEFAULT_DATASET_DIR,
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
     dataset_name: str = "ff_beamforming.h5",
     gif_name: str = "beamforming_phase_shifts.gif",
 ):
@@ -329,8 +348,8 @@ def plot_dataset_phase_shifts(
 @app.command()
 def plot_sample(
     idx: int,
-    dataset_dir: Path = physics.DEFAULT_DATASET_DIR,
-    dataset_name: str = physics.DEFAULT_DATASET_NAME,
+    dataset_dir: Path = DEFAULT_DATASET_DIR,
+    dataset_name: str = DEFAULT_DATASET_NAME,
 ):
     """
     Visualize a single sample from the dataset.
