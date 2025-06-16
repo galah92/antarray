@@ -55,7 +55,7 @@ class OpenEMSData:
     Dmax: float
     freq_hz: jax.Array
     E_field: jax.Array
-    E_norm: jax.Array
+    power_density: jax.Array
 
 
 @lru_cache
@@ -86,9 +86,9 @@ def load_openems_nf2ff(nf2ff_path: Path):
             freq_hz = np.squeeze(freq_hz)
 
         E_field = np.stack([E_theta, E_phi], axis=-1)  # (freq, theta, phi, 2)
-        E_norm = np.sqrt(np.abs(E_theta) ** 2 + np.abs(E_phi) ** 2)
+        power_density = np.sum(np.abs(E_field) ** 2, axis=-1)  # (freq, theta, phi)
 
-    return OpenEMSData(theta_rad, phi_rad, r, Dmax, freq_hz, E_field, E_norm)
+    return OpenEMSData(theta_rad, phi_rad, r, Dmax, freq_hz, E_field, power_density)
 
 
 def get_wavenumber(
@@ -357,9 +357,9 @@ def convert_to_db(patterns: ArrayLike, floor_db: float = -60) -> jax.Array:
 
 @jax.jit
 def convert_to_dbi(pattern: ArrayLike, Dmax: float) -> jax.Array:
-    """Convert pattern to dBi scale with directivity (for single patterns)."""
-    normalized = pattern / jnp.max(jnp.abs(pattern))
-    return 20 * jnp.log10(jnp.abs(normalized)) + 10.0 * jnp.log10(Dmax)
+    """Convert power pattern to dBi scale with directivity."""
+    normalized = pattern / jnp.max(pattern)  # Now power pattern, not field
+    return 10 * jnp.log10(normalized) + 10.0 * jnp.log10(Dmax)
 
 
 # =============================================================================
@@ -379,8 +379,8 @@ def extract_E_plane_cut(pattern: np.ndarray, phi_idx: int = 0) -> np.ndarray:
 
 
 def plot_E_plane(
-    E_norm,
-    Dmax,
+    pattern: np.ndarray,
+    Dmax: float,
     fmt: str = "r-",
     *,
     normalize: bool = False,
@@ -393,13 +393,13 @@ def plot_E_plane(
         fig = plt.figure(constrained_layout=True)
         ax = typing.cast(PolarAxes, fig.add_subplot(projection="polar"))
 
-    E_norm_cut = extract_E_plane_cut(E_norm, phi_idx=0)
-    theta_rad = np.linspace(0, 2 * np.pi, E_norm_cut.size)
+    pattern_cut = extract_E_plane_cut(pattern, phi_idx=0)
+    theta_rad = np.linspace(0, 2 * np.pi, pattern_cut.size)
 
     if normalize:
-        E_norm_cut = convert_to_dbi(E_norm_cut, Dmax)  # Updated function name
+        pattern_cut = convert_to_dbi(pattern_cut, Dmax)
 
-    ax.plot(theta_rad, E_norm_cut, fmt, linewidth=1, label=label)
+    ax.plot(theta_rad, pattern_cut, fmt, linewidth=1, label=label)
     ax.set_thetagrids(np.arange(0, 360, 30))
     ax.set_rgrids(np.arange(-20, 20, 10))
     ax.set_rlim(-25, 15)
@@ -598,17 +598,18 @@ def demo_openems_patterns():
     # Test steering angle
     steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
     weights, _ = compute_analytical(steering_angle)
-    E_norm = synthesize_embedded(weights)
+    power_pattern = synthesize_embedded(weights)
+    power_dB = convert_to_db(power_pattern)
 
     theta_rad, phi_rad = config.theta_rad, config.phi_rad
     fig, axs = plt.subplots(1, 3, figsize=[18, 6], layout="compressed")
 
-    plot_ff_2d(theta_rad, phi_rad, E_norm, ax=axs[0])
-    plot_sine_space(theta_rad, phi_rad, E_norm, ax=axs[1])
+    plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axs[0])
+    plot_sine_space(theta_rad, phi_rad, power_dB, ax=axs[1])
 
     axs[2].remove()
     axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
-    plot_ff_3d(theta_rad, phi_rad, E_norm, ax=axs[2])
+    plot_ff_3d(theta_rad, phi_rad, power_dB, ax=axs[2])
 
     steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
     phase_shift_title = f"OpenEMS Radiation Pattern ({steering_str})"
