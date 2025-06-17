@@ -350,12 +350,15 @@ def normalize_patterns(patterns: ArrayLike) -> jax.Array:
 
 
 @jax.jit
-def convert_to_db(patterns: ArrayLike, floor_db: float = -60) -> jax.Array:
+def convert_to_db(patterns: ArrayLike, floor_db: float | None = None) -> jax.Array:
     """Converts linear power patterns to normalized dB scale."""
-    normalized = patterns / jnp.max(patterns)  # Normalize first
-    linear_floor = 10.0 ** (floor_db / 10.0)
-    clipped = jnp.maximum(normalized, linear_floor)  # Then clip
-    return 10.0 * jnp.log10(clipped)
+    normalized = patterns / jnp.max(patterns)  # Normalize
+
+    if floor_db is not None:
+        linear_floor = 10.0 ** (floor_db / 10.0)
+        normalized = jnp.maximum(normalized, linear_floor)
+
+    return 10.0 * jnp.log10(normalized)
 
 
 # =============================================================================
@@ -427,15 +430,17 @@ def plot_ff_3d(
     phi_rad: ArrayLike,
     pattern: ArrayLike,
     *,
+    clip_min_db: float | None = None,
     elev: float | None = None,
     azim: float | None = None,
-    scale_factor: float = 1.0,
     title: str = "3D Radiation Pattern",
     ax: Axes3D | None = None,
 ):
-    pattern = pattern / np.max(pattern) * scale_factor
+    pattern = np.clip(pattern, min=clip_min_db)  # Clip to minimum dB value
+    pattern = (pattern - pattern.min()) / np.ptp(pattern)  # Normalize to [0, 1]
+    pattern = pattern * 2  # Scale pattern for visualization
 
-    # Calculate cartesian coordinates
+    # Calculate cartesian coordinates using the correctly scaled radius
     x = pattern * np.sin(theta_rad)[:, None] * np.cos(phi_rad)[None, :]
     y = pattern * np.sin(theta_rad)[:, None] * np.sin(phi_rad)[None, :]
     z = pattern * np.cos(theta_rad)[:, None]
@@ -446,13 +451,8 @@ def plot_ff_3d(
 
     ax.plot_surface(x, y, z, cmap="Spectral_r")
     ax.view_init(elev=elev, azim=azim)
-    ax.set_box_aspect(None, zoom=1.2)
-    ax.set_xlim(-scale_factor, scale_factor)
-    ax.set_ylim(-scale_factor, scale_factor)
-    ax.set_zlim(0, scale_factor * 1.2)
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.set_zticklabels([])
+    # ax.set_box_aspect(None, zoom=1.2)
+    ax.set(xlim=(-1, 1), ylim=(-1, 1), zlim=(0, 1.8), xticks=[], yticks=[], zticks=[])
     ax.set_title(title)
 
 
@@ -575,42 +575,6 @@ def steering_repr(steering_angles: np.ndarray):
 # =============================================================================
 
 
-def demo_openems_patterns():
-    """Demonstrate OpenEMS pattern loading with new unified interface."""
-    key = jax.random.key(42)
-    config = ArrayConfig()
-
-    # Use new unified interface
-    synthesize_ideal, _, compute_analytical = create_physics_setup(
-        key, config, openems_path=DEFAULT_SIM_PATH
-    )
-
-    # Test steering angle
-    steering_deg = jnp.array([30, 45])
-    steering_angle = jnp.radians(steering_deg)
-    weights, _ = compute_analytical(steering_angle)
-    power_pattern = synthesize_ideal(weights)
-    power_dB = convert_to_db(power_pattern, floor_db=-180.0)
-
-    theta_rad, phi_rad = config.theta_rad, config.phi_rad
-    fig, axs = plt.subplots(1, 3, figsize=[18, 6], layout="compressed")
-
-    plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axs[0])
-    plot_sine_space(theta_rad, phi_rad, power_dB, ax=axs[1])
-
-    axs[2].remove()
-    axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
-    plot_ff_3d(theta_rad, phi_rad, power_pattern, ax=axs[2])
-
-    steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
-    phase_shift_title = f"OpenEMS Radiation Pattern ({steering_str})"
-    fig.suptitle(phase_shift_title)
-
-    fig_path = "test_openems.png"
-    fig.savefig(fig_path, dpi=600)
-    logger.info(f"Saved OpenEMS sample plot to {fig_path}")
-
-
 def demo_phase_shifts():
     """Demonstrate phase shift calculations and visualization."""
     config = ArrayConfig()
@@ -648,6 +612,40 @@ def demo_phase_shifts():
     logger.info(f"Saved {filename}")
 
 
+def demo_openems_patterns():
+    """Demonstrate OpenEMS pattern loading with new unified interface."""
+    key = jax.random.key(42)
+    config = ArrayConfig()
+
+    synthesize_ideal, _, compute_analytical = create_physics_setup(
+        key, config, openems_path=DEFAULT_SIM_PATH
+    )
+
+    # Test steering angle
+    steering_deg = jnp.array([30, 45])
+    steering_angle = jnp.radians(steering_deg)
+    weights, _ = compute_analytical(steering_angle)
+    power_pattern = synthesize_ideal(weights)
+    power_dB = convert_to_db(power_pattern)
+
+    theta_rad, phi_rad = config.theta_rad, config.phi_rad
+
+    fig = plt.figure(figsize=(15, 5), layout="compressed")
+    axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
+
+    plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axd["A"])
+    plot_sine_space(theta_rad, phi_rad, power_dB, ax=axd["B"])
+    plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=axd["C"])
+
+    steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
+    phase_shift_title = f"OpenEMS Radiation Pattern ({steering_str})"
+    fig.suptitle(phase_shift_title)
+
+    fig_path = "test_openems.png"
+    fig.savefig(fig_path, dpi=250)
+    logger.info(f"Saved OpenEMS sample plot to {fig_path}")
+
+
 def demo_simple_patterns():
     """Create simple synthetic patterns for demonstration."""
     # Create simple test patterns
@@ -667,13 +665,13 @@ def demo_simple_patterns():
     titles = ["Cosine² Pattern", "Directional Pattern"]
 
     for i, (pattern, title) in enumerate(zip(patterns, titles)):
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5), layout="compressed")
-        plot_ff_2d(theta_rad, phi_rad, pattern, ax=axes[0])
-        plot_sine_space(theta_rad, phi_rad, pattern, ax=axes[1])
+        fig = plt.figure(figsize=(15, 5), layout="compressed")
+        axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
 
-        axes[2].remove()
-        axes[2] = fig.add_subplot(1, 3, 3, projection="3d")
-        plot_ff_3d(theta_rad, phi_rad, pattern, ax=axes[2])
+        power_dB = convert_to_db(pattern)
+        plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axd["A"])
+        plot_sine_space(theta_rad, phi_rad, power_dB, ax=axd["B"])
+        plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=axd["C"])
 
         fig.suptitle(title)
         filename = f"demo_pattern_{i + 1}.png"
@@ -742,7 +740,9 @@ def demo_physics_patterns():
 
 
 if __name__ == "__main__":
-    demo_phase_shifts()
-    demo_simple_patterns()
-    demo_openems_patterns()
-    # demo_physics_patterns()
+    cpu = jax.devices("cpu")[0]
+    with jax.default_device(cpu):
+        demo_phase_shifts()
+        demo_simple_patterns()
+        demo_openems_patterns()
+        demo_physics_patterns()
