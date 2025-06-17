@@ -2,7 +2,7 @@ import logging
 import typing
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 
 import h5py
@@ -15,6 +15,8 @@ from matplotlib.figure import SubFigure
 from matplotlib.image import AxesImage
 from matplotlib.projections import PolarAxes
 from mpl_toolkits.mplot3d import Axes3D
+
+from utils import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +137,29 @@ DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
 DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
 
 
+@jax.jit
+def calculate_weights(
+    kx: ArrayLike,
+    ky: ArrayLike,
+    steering_angle_rad: ArrayLike,
+) -> tuple[jax.Array, jax.Array]:
+    """Calculates analytical weights for given steering angles."""
+    steering_angle_rad = jnp.atleast_2d(steering_angle_rad)
+    theta_steer, phi_steer = steering_angle_rad[:, 0], steering_angle_rad[:, 1]
+
+    sin_theta = jnp.sin(theta_steer)
+    ux = sin_theta * jnp.cos(phi_steer)  # (n_beams,)
+    uy = sin_theta * jnp.sin(phi_steer)  # (n_beams,)
+
+    x_phase, y_phase = jnp.outer(kx, ux), jnp.outer(ky, uy)  # (n_x, n_beams)
+    phase_shifts = x_phase[:, None, :] + y_phase[None, :, :]  # (n_x, n_y, n_beams)
+
+    weights = jnp.exp(-1j * phase_shifts)  # (n_x, n_y, n_beams)
+    weights = jnp.sum(weights, axis=-1)  # (n_x, n_y), assume no tapering
+
+    return weights, phase_shifts
+
+
 def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Callable:
     """Factory to create a function for calculating analytical weights."""
     config = config or ArrayConfig()
@@ -142,25 +167,18 @@ def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Ca
     k = get_wavenumber(config=config)
     x_pos, y_pos = get_element_positions(config=config)
     kx, ky = k * x_pos, k * y_pos
+    kx, ky = jnp.asarray(kx), jnp.asarray(ky)
 
-    def calculate(steering_angle_rad: ArrayLike) -> tuple[jax.Array, jax.Array]:
-        """Calculates ideal, analytical weights for a given steering angle."""
-        steering_angle_rad = jnp.atleast_2d(steering_angle_rad)
-        theta_steer, phi_steer = steering_angle_rad[:, 0], steering_angle_rad[:, 1]
-
-        sin_theta = jnp.sin(theta_steer)
-        ux = sin_theta * jnp.cos(phi_steer)  # (n_beams,)
-        uy = sin_theta * jnp.sin(phi_steer)  # (n_beams,)
-
-        x_phase, y_phase = jnp.outer(kx, ux), jnp.outer(ky, uy)  # (n_x, n_beams)
-        phase_shifts = x_phase[:, None, :] + y_phase[None, :, :]  # (n_x, n_y, n_beams)
-
-        weights = jnp.exp(-1j * phase_shifts)  # (n_x, n_y, n_beams)
-        weights = jnp.sum(weights, axis=-1)  # (n_x, n_y), assume no tapering
-
-        return weights, phase_shifts
-
+    calculate = partial(calculate_weights, kx, ky)
     return calculate
+
+
+@jax.jit
+def synthesize_pattern(element_field_basis: ArrayLike, weights: ArrayLike) -> jax.Array:
+    """Synthesizes a pattern from weights using the precomputed basis."""
+    total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_field_basis)
+    power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
+    return power_pattern
 
 
 def create_pattern_synthesizer(
@@ -183,12 +201,7 @@ def create_pattern_synthesizer(
 
     element_field_basis = jnp.einsum("xytpz,tpxy->tpzxy", element_patterns, geo_factor)
 
-    def synthesize(weights: ArrayLike) -> jax.Array:
-        """Synthesizes a pattern from weights using the precomputed basis."""
-        total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_field_basis)
-        power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
-        return power_pattern
-
+    synthesize = partial(synthesize_pattern, element_field_basis)
     return synthesize
 
 
@@ -275,7 +288,6 @@ def create_physics_setup(
     key: jax.Array,
     config: ArrayConfig | None = None,
     openems_path: Path | None = None,
-    jit_compile: bool = True,
 ):
     """Creates the physics simulation setup with optional OpenEMS data support."""
     key, ideal_key, embedded_key = jax.random.split(key, 3)
@@ -292,11 +304,6 @@ def create_physics_setup(
     synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
     synthesize_embedded = create_pattern_synthesizer(embedded_patterns, config)
     compute_analytical = create_analytical_weight_calculator(config)
-
-    if jit_compile:
-        synthesize_ideal = jax.jit(synthesize_ideal)
-        synthesize_embedded = jax.jit(synthesize_embedded)
-        compute_analytical = jax.jit(compute_analytical)
 
     return synthesize_ideal, synthesize_embedded, compute_analytical
 
@@ -603,7 +610,7 @@ def demo_openems_patterns():
     config = ArrayConfig()
 
     synthesize_ideal, _, compute_analytical = create_physics_setup(
-        key, config, openems_path=DEFAULT_SIM_PATH, jit_compile=False
+        key, config, openems_path=DEFAULT_SIM_PATH
     )
 
     steering_deg = jnp.array([30, 45])
@@ -628,7 +635,7 @@ def demo_physics_patterns():
 
     key = jax.random.key(42)
     synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        key, jit_compile=False
+        key
     )
     weights, _ = compute_analytical(steering_angle)
     ideal_pattern, emb_pattern = synthesize_ideal(weights), synthesize_embedded(weights)
@@ -652,6 +659,7 @@ def demo_physics_patterns():
 
 
 if __name__ == "__main__":
+    setup_logging()
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
         demo_phase_shifts()

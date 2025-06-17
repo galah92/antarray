@@ -83,7 +83,7 @@ def train_pipeline(
 
     logger.info("Performing one-time precomputation")
     train_step = create_train_step_fn(
-        create_physics_setup(physics_key, openems_path=openems_path)
+        *create_physics_setup(physics_key, openems_path=openems_path)
     )
 
     model = InterferenceCorrector(rngs=nnx.Rngs(model_key))
