@@ -537,6 +537,29 @@ def plot_sine_space(
     return ax
 
 
+def plot_pattern(
+    pattern: ArrayLike,
+    *,
+    theta_rad: ArrayLike | None = None,
+    phi_rad: ArrayLike | None = None,
+    clip_min_db: float | None = None,
+    title: str | None = None,
+    fig: plt.Figure | None = None,
+):
+    if theta_rad is None:
+        theta_rad = ArrayConfig.theta_rad
+    if phi_rad is None:
+        phi_rad = ArrayConfig.phi_rad
+    if fig is None:
+        fig = plt.figure(figsize=(15, 5), layout="compressed")
+    if title is not None:
+        fig.suptitle(title)
+    axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
+    plot_ff_2d(theta_rad, phi_rad, pattern, ax=axd["A"])
+    plot_sine_space(theta_rad, phi_rad, pattern, ax=axd["B"])
+    plot_ff_3d(theta_rad, phi_rad, pattern, clip_min_db=clip_min_db, ax=axd["C"])
+
+
 def plot_phase_shifts(
     phase_shifts,
     title: str = "Phase Shifts",
@@ -625,25 +648,16 @@ def demo_openems_patterns():
         key, config, openems_path=DEFAULT_SIM_PATH
     )
 
-    # Test steering angle
     steering_deg = jnp.array([30, 45])
     steering_angle = jnp.radians(steering_deg)
     weights, _ = compute_analytical(steering_angle)
     power_pattern = synthesize_ideal(weights)
     power_dB = convert_to_db(power_pattern)
 
-    theta_rad, phi_rad = config.theta_rad, config.phi_rad
-
     fig = plt.figure(figsize=(15, 5), layout="compressed")
-    axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
-
-    plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axd["A"])
-    plot_sine_space(theta_rad, phi_rad, power_dB, ax=axd["B"])
-    plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=axd["C"])
-
     steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
-    phase_shift_title = f"OpenEMS Radiation Pattern ({steering_str})"
-    fig.suptitle(phase_shift_title)
+    title = f"OpenEMS Radiation Pattern ({steering_str})"
+    plot_pattern(power_dB, clip_min_db=-30, title=title, fig=fig)
 
     fig_path = "test_openems.png"
     fig.savefig(fig_path, dpi=250)
@@ -693,30 +707,18 @@ def demo_physics_patterns():
     )
     weights, _ = compute_analytical(steering_angle)
     ideal_pattern = synthesize_ideal(weights)
-    embedded_pattern = synthesize_embedded(weights)
+    emb_pattern = synthesize_embedded(weights)
 
     floor_db = -60.0  # dB floor for clipping
     linear_floor = 10.0 ** (floor_db / 10.0)
     ideal_pattern = 10.0 * jnp.log10(jnp.maximum(ideal_pattern, linear_floor))
-    embedded_pattern = 10.0 * jnp.log10(jnp.maximum(embedded_pattern, linear_floor))
-
-    theta_rad = jnp.linspace(0, jnp.pi, ideal_pattern.shape[0])
-    phi_rad = jnp.linspace(0, 2 * jnp.pi, ideal_pattern.shape[1])
+    emb_pattern = 10.0 * jnp.log10(jnp.maximum(emb_pattern, linear_floor))
 
     fig = plt.figure(figsize=(15, 10), layout="compressed")
     subfigs = typing.cast(list[SubFigure], fig.subfigures(2, 1))
 
-    subfigs[0].suptitle("Ideal Pattern Plots")
-    axd = subfigs[0].subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
-    plot_ff_2d(theta_rad, phi_rad, ideal_pattern, ax=axd["A"])
-    plot_sine_space(theta_rad, phi_rad, ideal_pattern, ax=axd["B"])
-    plot_ff_3d(theta_rad, phi_rad, ideal_pattern, clip_min_db=-10, ax=axd["C"])
-
-    subfigs[1].suptitle("Embedded Pattern Plots")
-    axd = subfigs[1].subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
-    plot_ff_2d(theta_rad, phi_rad, embedded_pattern, ax=axd["A"])
-    plot_sine_space(theta_rad, phi_rad, embedded_pattern, ax=axd["B"])
-    plot_ff_3d(theta_rad, phi_rad, embedded_pattern, clip_min_db=-10, ax=axd["C"])
+    plot_pattern(ideal_pattern, title="Ideal Pattern", clip_min_db=-10, fig=subfigs[0])
+    plot_pattern(emb_pattern, title="Embedded Pattern", clip_min_db=-10, fig=subfigs[1])
 
     steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
     fig.suptitle(f"Ideal vs Embedded Patterns ({steering_str})")
