@@ -315,7 +315,7 @@ def normalize_patterns(patterns: ArrayLike) -> jax.Array:
     return patterns / (max_vals + 1e-8)
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("floor_db",))
 def convert_to_db(patterns: ArrayLike, floor_db: float | None = None) -> jax.Array:
     """Converts linear power patterns to normalized dB scale."""
     normalized = patterns / jnp.max(patterns)  # Normalize
