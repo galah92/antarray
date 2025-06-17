@@ -135,50 +135,6 @@ DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
 DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
 
 
-def check_grating_lobes(freq=None, spacing_mm=None, config=None, verbose=False):
-    """Check for potential grating lobes in an antenna array based on element spacing."""
-    if config is not None:
-        freq = config.freq_hz
-        spacing_mm = config.spacing_mm
-    elif freq is None or spacing_mm is None:
-        freq = ArrayConfig.freq_hz if freq is None else freq
-        spacing_mm = ArrayConfig.spacing_mm if spacing_mm is None else spacing_mm
-
-    c = 299792458
-    wavelength = c / freq
-    wavelength_mm = wavelength * 1000
-
-    dx, dy = spacing_mm
-    dx_lambda = dx / wavelength_mm
-    dy_lambda = dy / wavelength_mm
-
-    if dx_lambda <= 0.5:
-        dx_critical = 90
-    else:
-        dx_critical = np.rad2deg(np.arcsin(1 / dx_lambda - 1))
-
-    if dy_lambda <= 0.5:
-        dy_critical = 90
-    else:
-        dy_critical = np.rad2deg(np.arcsin(1 / dy_lambda - 1))
-
-    dx_critical_angle = dx_critical if dx_lambda > 0.5 else None
-    dy_critical_angle = dy_critical if dy_lambda > 0.5 else None
-    has_grating_lobes = dx_lambda > 0.5 or dy_lambda > 0.5
-
-    if verbose:
-        logger.info("Array spacing check:")
-        logger.info(f"Wavelength: {wavelength_mm:.2f} mm")
-        logger.info(f"Element spacing: {dx_lambda:.1f}λ x {dy_lambda:.1f}λ")
-
-    if has_grating_lobes:
-        logger.info("WARNING: Grating lobes will be visible when steering beyond:")
-        if dx_critical_angle is not None:
-            logger.info(f"  - {dx_critical_angle:.1f}° in the X direction")
-        if dy_critical_angle is not None:
-            logger.info(f"  - {dy_critical_angle:.1f}° in the Y direction")
-
-
 def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Callable:
     """Factory to create a function for calculating analytical weights."""
     config = config or ArrayConfig()
@@ -191,13 +147,15 @@ def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Ca
         """Calculates ideal, analytical weights for a given steering angle."""
         theta_steer, phi_steer = steering_angle_rad[0], steering_angle_rad[1]
 
-        ux = jnp.sin(theta_steer) * jnp.cos(phi_steer)
-        uy = jnp.sin(theta_steer) * jnp.sin(phi_steer)
+        sin_theta_steer = jnp.sin(theta_steer)
+        ux = sin_theta_steer * jnp.cos(phi_steer)
+        uy = sin_theta_steer * jnp.sin(phi_steer)
 
         x_phase, y_phase = k_pos_x * ux, k_pos_y * uy
         phase_shifts = jnp.add.outer(x_phase, y_phase)
+        weights = jnp.exp(-1j * phase_shifts)
 
-        return jnp.exp(-1j * phase_shifts), phase_shifts
+        return weights, phase_shifts
 
     return calculate
 
@@ -317,16 +275,13 @@ def create_physics_setup(
     jit_compile: bool = True,
 ):
     """Creates the physics simulation setup with optional OpenEMS data support."""
-    config = config or ArrayConfig()
-
     key, ideal_key, embedded_key = jax.random.split(key, 3)
+    config = ArrayConfig() if config is None else config
 
-    # Always use synthetic for ideal patterns (clean reference)
     ideal_patterns = create_element_patterns(
         config, ideal_key, is_embedded=False, openems_path=openems_path
     )
 
-    # Use OpenEMS or synthetic for embedded patterns based on parameter
     embedded_patterns = create_element_patterns(
         config, embedded_key, is_embedded=True, openems_path=openems_path
     )
@@ -544,7 +499,7 @@ def plot_pattern(
     phi_rad: ArrayLike | None = None,
     clip_min_db: float | None = None,
     title: str | None = None,
-    fig: plt.Figure | None = None,
+    fig: plt.Figure | SubFigure | None = None,
 ):
     if theta_rad is None:
         theta_rad = ArrayConfig.theta_rad
