@@ -14,6 +14,7 @@ from training import (
     create_progress_logger,
     steering_angles_sampler,
 )
+from utils import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ def create_train_step_fn(
         analytical_weights, analytical_phase_shifts = vmapped_analytical_weights(
             batch_of_angles_rad
         )
+        analytical_phase_shifts = jnp.squeeze(analytical_phase_shifts)
 
         ideal_patterns = vmapped_ideal_synthesizer(analytical_weights)
         normalized_ideal_patterns = normalize_patterns(ideal_patterns)
@@ -77,26 +79,16 @@ def train_pipeline(
 ):
     """Main function to set up and run the training pipeline."""
     key = jax.random.key(seed)
+    key, physics_key, model_key, data_key = jax.random.split(key, 4)
 
     logger.info("Performing one-time precomputation")
-
-    # Create physics setup with optional OpenEMS support
-    key, physics_key = jax.random.split(key)
-    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        physics_key, openems_path=openems_path
-    )
-
     train_step = create_train_step_fn(
-        synthesize_ideal,
-        synthesize_embedded,
-        compute_analytical,
+        create_physics_setup(physics_key, openems_path=openems_path)
     )
 
-    key, model_key = jax.random.split(key)
     model = InterferenceCorrector(rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=lr))
 
-    key, data_key = jax.random.split(key)
     sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
 
     logger.info("Starting training")
@@ -105,7 +97,6 @@ def train_pipeline(
     try:
         for step, batch in enumerate(sampler):
             metrics = train_step(optimizer, batch)
-
             log_progress(step, metrics)
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
@@ -114,4 +105,5 @@ def train_pipeline(
 
 
 if __name__ == "__main__":
+    setup_logging()
     train_pipeline()
