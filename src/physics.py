@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from jax.typing import ArrayLike
+from matplotlib.figure import SubFigure
 from matplotlib.image import AxesImage
 from matplotlib.projections import PolarAxes
 from mpl_toolkits.mplot3d import Axes3D
@@ -407,7 +408,7 @@ def plot_E_plane(
     if ax is None:
         fig.set_tight_layout(True)
         if filename:
-            fig.savefig(filename, dpi=600)
+            fig.savefig(filename, dpi=250)
 
 
 def extend_pattern_to_360_theta(pattern: np.ndarray) -> np.ndarray:
@@ -434,7 +435,7 @@ def plot_ff_3d(
     elev: float | None = None,
     azim: float | None = None,
     title: str = "3D Radiation Pattern",
-    ax: Axes3D | None = None,
+    ax: plt.Axes | Axes3D | None = None,
 ):
     pattern = np.clip(
         pattern, a_min=clip_min_db, a_max=None
@@ -449,13 +450,14 @@ def plot_ff_3d(
 
     if ax is None:
         fig = plt.figure(layout="compressed")
-        ax = typing.cast(Axes3D, fig.add_subplot(projection="3d"))
+        ax = fig.add_subplot(projection="3d")
 
-    ax.plot_surface(x, y, z, cmap="Spectral_r")
-    ax.view_init(elev=elev, azim=azim)
-    # ax.set_box_aspect(None, zoom=1.2)
-    ax.set(xlim=(-1, 1), ylim=(-1, 1), zlim=(0, 1.8), xticks=[], yticks=[], zticks=[])
-    ax.set_title(title)
+    ax3d = typing.cast(Axes3D, ax)
+    ax3d.plot_surface(x, y, z, cmap="Spectral_r")
+    ax3d.view_init(elev=elev, azim=azim)
+    # ax3d.set_box_aspect(None, zoom=1.2)
+    ax3d.set(xlim=(-1, 1), ylim=(-1, 1), zlim=(0, 1.8), xticks=[], yticks=[], zticks=[])
+    ax3d.set_title(title)
 
 
 def plot_ff_2d(
@@ -637,8 +639,7 @@ def demo_openems_patterns():
 
     plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axd["A"])
     plot_sine_space(theta_rad, phi_rad, power_dB, ax=axd["B"])
-    ax = typing.cast(Axes3D, axd["C"])
-    plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=ax)
+    plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=axd["C"])
 
     steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
     phase_shift_title = f"OpenEMS Radiation Pattern ({steering_str})"
@@ -674,8 +675,7 @@ def demo_simple_patterns():
         power_dB = convert_to_db(pattern)
         plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axd["A"])
         plot_sine_space(theta_rad, phi_rad, power_dB, ax=axd["B"])
-        ax = typing.cast(Axes3D, axd["C"])
-        plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=ax)
+        plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=axd["C"])
 
         fig.suptitle(title)
         filename = f"demo_pattern_{i + 1}.png"
@@ -691,7 +691,7 @@ def demo_physics_patterns():
     synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
         key
     )
-    weights, phase_shifts = compute_analytical(steering_angle)
+    weights, _ = compute_analytical(steering_angle)
     ideal_pattern = synthesize_ideal(weights)
     embedded_pattern = synthesize_embedded(weights)
 
@@ -700,47 +700,29 @@ def demo_physics_patterns():
     ideal_pattern = 10.0 * jnp.log10(jnp.maximum(ideal_pattern, linear_floor))
     embedded_pattern = 10.0 * jnp.log10(jnp.maximum(embedded_pattern, linear_floor))
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12), layout="compressed")
-
     theta_rad = jnp.linspace(0, jnp.pi, ideal_pattern.shape[0])
     phi_rad = jnp.linspace(0, 2 * jnp.pi, ideal_pattern.shape[1])
 
-    # Ideal pattern plots
-    title = "Ideal Pattern (2D)"
-    plot_ff_2d(theta_rad, phi_rad, ideal_pattern, title=title, ax=axes[0, 0])
-    title = "Ideal Pattern (Sine Space)"
-    plot_sine_space(theta_rad, phi_rad, ideal_pattern, title=title, ax=axes[0, 1])
-    axes[0, 2].remove()
-    axes[0, 2] = fig.add_subplot(2, 3, 3, projection="3d")
-    title = "Ideal Pattern (3D)"
-    plot_ff_3d(theta_rad, phi_rad, ideal_pattern, title=title, ax=axes[0, 2])
+    fig = plt.figure(figsize=(15, 10), layout="compressed")
+    subfigs = typing.cast(list[SubFigure], fig.subfigures(2, 1))
 
-    # Embedded pattern plots
-    title = "Embedded Pattern (2D)"
-    plot_ff_2d(theta_rad, phi_rad, embedded_pattern, title=title, ax=axes[1, 0])
-    title = "Embedded Pattern (Sine Space)"
-    plot_sine_space(theta_rad, phi_rad, embedded_pattern, title=title, ax=axes[1, 1])
-    axes[1, 2].remove()
-    axes[1, 2] = fig.add_subplot(2, 3, 6, projection="3d")
-    title = "Embedded Pattern (3D)"
-    plot_ff_3d(theta_rad, phi_rad, embedded_pattern, title=title, ax=axes[1, 2])
+    subfigs[0].suptitle("Ideal Pattern Plots")
+    axd = subfigs[0].subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
+    plot_ff_2d(theta_rad, phi_rad, ideal_pattern, ax=axd["A"])
+    plot_sine_space(theta_rad, phi_rad, ideal_pattern, ax=axd["B"])
+    plot_ff_3d(theta_rad, phi_rad, ideal_pattern, clip_min_db=-10, ax=axd["C"])
 
-    fig.suptitle(
-        f"Physics Demo: Ideal vs Embedded Patterns (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)"
-    )
+    subfigs[1].suptitle("Embedded Pattern Plots")
+    axd = subfigs[1].subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
+    plot_ff_2d(theta_rad, phi_rad, embedded_pattern, ax=axd["A"])
+    plot_sine_space(theta_rad, phi_rad, embedded_pattern, ax=axd["B"])
+    plot_ff_3d(theta_rad, phi_rad, embedded_pattern, clip_min_db=-10, ax=axd["C"])
+
+    steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
+    fig.suptitle(f"Ideal vs Embedded Patterns ({steering_str})")
     filename = "demo_physics.png"
     fig.savefig(filename, dpi=250)
     logger.info(f"Saved {filename}")
-
-    # Plot phase shifts
-    fig, ax = plt.subplots(figsize=(8, 6), layout="compressed")
-    plot_phase_shifts(
-        phase_shifts,
-        title=f"Analytical Phase Shifts (θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°)",
-        ax=ax,
-    )
-    fig.savefig("demo_phase_shifts_analytical.png", dpi=250)
-    logger.info("Saved demo_phase_shifts_analytical.png")
 
 
 if __name__ == "__main__":
