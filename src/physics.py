@@ -141,24 +141,22 @@ def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Ca
 
     k = get_wavenumber(config=config)
     x_pos, y_pos = get_element_positions(config=config)
-    k_pos_x, k_pos_y = k * x_pos, k * y_pos
+    kx, ky = k * x_pos, k * y_pos
 
     def calculate(steering_angle_rad: ArrayLike) -> tuple[jax.Array, jax.Array]:
         """Calculates ideal, analytical weights for a given steering angle."""
         steering_angle_rad = jnp.atleast_2d(steering_angle_rad)
         theta_steer, phi_steer = steering_angle_rad[:, 0], steering_angle_rad[:, 1]
 
-        sin_theta_steer = jnp.sin(theta_steer)
-        ux = sin_theta_steer * jnp.cos(phi_steer)  # (n_beams,)
-        uy = sin_theta_steer * jnp.sin(phi_steer)  # (n_beams,)
+        sin_theta = jnp.sin(theta_steer)
+        ux = sin_theta * jnp.cos(phi_steer)  # (n_beams,)
+        uy = sin_theta * jnp.sin(phi_steer)  # (n_beams,)
 
-        x_phase = k_pos_x[None, :] * ux[:, None]  # (n_beams, n_x)
-        y_phase = k_pos_y[None, :] * uy[:, None]  # (n_beams, n_y)
+        x_phase, y_phase = jnp.outer(kx, ux), jnp.outer(ky, uy)  # (n_x, n_beams)
+        phase_shifts = x_phase[:, None, :] + y_phase[None, :, :]  # (n_x, n_y, n_beams)
 
-        phase_shifts = x_phase[:, :, None] + y_phase[:, None, :]  # (n_beams, n_x, n_y)
-        phase_shifts = jnp.sum(phase_shifts, axis=0)  # (n_x, n_y)
-
-        weights = jnp.exp(-1j * phase_shifts)
+        weights = jnp.exp(-1j * phase_shifts)  # (n_x, n_y, n_beams)
+        weights = jnp.sum(weights, axis=-1)  # (n_x, n_y), assume no tapering
 
         return weights, phase_shifts
 
