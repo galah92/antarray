@@ -187,7 +187,6 @@ def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Ca
     x_pos, y_pos = get_element_positions(config=config)
     k_pos_x, k_pos_y = k * x_pos, k * y_pos
 
-    @jax.jit
     def calculate(steering_angle_rad: ArrayLike) -> tuple[jax.Array, jax.Array]:
         """Calculates ideal, analytical weights for a given steering angle."""
         theta_steer, phi_steer = steering_angle_rad[0], steering_angle_rad[1]
@@ -209,25 +208,20 @@ def create_pattern_synthesizer(
 ) -> Callable:
     """Factory to create a pattern synthesis function."""
 
-    @jax.jit
-    def precompute_basis(raw_patterns):
-        k = get_wavenumber(config=config)
-        x_pos, y_pos = get_element_positions(config=config)
-        k_pos_x, k_pos_y = k * x_pos, k * y_pos
+    k = get_wavenumber(config=config)
+    x_pos, y_pos = get_element_positions(config=config)
+    k_pos_x, k_pos_y = k * x_pos, k * y_pos
 
-        sin_theta = jnp.sin(config.theta_rad)
-        ux = sin_theta[:, None] * jnp.cos(config.phi_rad)[None, :]
-        uy = sin_theta[:, None] * jnp.sin(config.phi_rad)[None, :]
+    sin_theta = jnp.sin(config.theta_rad)
+    ux = sin_theta[:, None] * jnp.cos(config.phi_rad)[None, :]
+    uy = sin_theta[:, None] * jnp.sin(config.phi_rad)[None, :]
 
-        phase_x, phase_y = ux[..., None] * k_pos_x, uy[..., None] * k_pos_y
-        geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
-        geo_factor = jnp.exp(1j * geo_phase)
+    phase_x, phase_y = ux[..., None] * k_pos_x, uy[..., None] * k_pos_y
+    geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
+    geo_factor = jnp.exp(1j * geo_phase)
 
-        return jnp.einsum("xytpz,tpxy->tpzxy", raw_patterns, geo_factor)
+    element_field_basis = jnp.einsum("xytpz,tpxy->tpzxy", element_patterns, geo_factor)
 
-    element_field_basis = precompute_basis(element_patterns)
-
-    @jax.jit
     def synthesize(weights: ArrayLike) -> jax.Array:
         """Synthesizes a pattern from weights using the precomputed basis."""
         total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_field_basis)
@@ -320,6 +314,7 @@ def create_physics_setup(
     key: jax.Array,
     config: ArrayConfig | None = None,
     openems_path: Path | None = None,
+    jit_compile: bool = True,
 ):
     """Creates the physics simulation setup with optional OpenEMS data support."""
     config = config or ArrayConfig()
@@ -339,6 +334,11 @@ def create_physics_setup(
     synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
     synthesize_embedded = create_pattern_synthesizer(embedded_patterns, config)
     compute_analytical = create_analytical_weight_calculator(config)
+
+    if jit_compile:
+        synthesize_ideal = jax.jit(synthesize_ideal)
+        synthesize_embedded = jax.jit(synthesize_embedded)
+        compute_analytical = jax.jit(compute_analytical)
 
     return synthesize_ideal, synthesize_embedded, compute_analytical
 
@@ -645,7 +645,7 @@ def demo_openems_patterns():
     config = ArrayConfig()
 
     synthesize_ideal, _, compute_analytical = create_physics_setup(
-        key, config, openems_path=DEFAULT_SIM_PATH
+        key, config, openems_path=DEFAULT_SIM_PATH, jit_compile=False
     )
 
     steering_deg = jnp.array([30, 45])
@@ -703,11 +703,10 @@ def demo_physics_patterns():
 
     key = jax.random.key(42)
     synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        key
+        key, jit_compile=False
     )
     weights, _ = compute_analytical(steering_angle)
-    ideal_pattern = synthesize_ideal(weights)
-    emb_pattern = synthesize_embedded(weights)
+    ideal_pattern, emb_pattern = synthesize_ideal(weights), synthesize_embedded(weights)
 
     floor_db = -60.0  # dB floor for clipping
     linear_floor = 10.0 ** (floor_db / 10.0)
