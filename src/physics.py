@@ -664,39 +664,6 @@ def demo_openems_patterns():
     logger.info(f"Saved OpenEMS sample plot to {fig_path}")
 
 
-def demo_simple_patterns():
-    """Create simple synthetic patterns for demonstration."""
-    # Create simple test patterns
-    theta_rad = np.linspace(0, np.pi, 180)
-    phi_rad = np.linspace(0, 2 * np.pi, 360)
-
-    # Pattern 1: Simple cosine pattern
-    theta_grid, phi_grid = np.meshgrid(theta_rad, phi_rad, indexing="ij")
-    pattern1 = 20 * np.cos(theta_grid) ** 2
-    pattern1[theta_grid > np.pi / 2] = 0  # Set values beyond 90° to 0
-
-    # Pattern 2: Directional pattern
-    pattern2 = 25 * np.cos(theta_grid) ** 4 * (1 + 0.5 * np.cos(2 * phi_grid))
-    pattern2[theta_grid > np.pi / 2] = 0  # Set values beyond 90° to 0
-
-    patterns = [pattern1, pattern2]
-    titles = ["Cosine² Pattern", "Directional Pattern"]
-
-    for i, (pattern, title) in enumerate(zip(patterns, titles)):
-        fig = plt.figure(figsize=(15, 5), layout="compressed")
-        axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
-
-        power_dB = convert_to_db(pattern)
-        plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axd["A"])
-        plot_sine_space(theta_rad, phi_rad, power_dB, ax=axd["B"])
-        plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=axd["C"])
-
-        fig.suptitle(title)
-        filename = f"demo_pattern_{i + 1}.png"
-        fig.savefig(filename, dpi=250)
-        logger.info(f"Saved {filename}")
-
-
 def demo_physics_patterns():
     """Demonstrate the physics simulation functions."""
     steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
@@ -730,6 +697,5 @@ if __name__ == "__main__":
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
         demo_phase_shifts()
-        demo_simple_patterns()
         demo_openems_patterns()
         demo_physics_patterns()
