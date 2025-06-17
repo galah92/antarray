@@ -436,7 +436,9 @@ def plot_ff_3d(
     title: str = "3D Radiation Pattern",
     ax: Axes3D | None = None,
 ):
-    pattern = np.clip(pattern, min=clip_min_db)  # Clip to minimum dB value
+    pattern = np.clip(
+        pattern, a_min=clip_min_db, a_max=None
+    )  # Clip to minimum dB value
     pattern = (pattern - pattern.min()) / np.ptp(pattern)  # Normalize to [0, 1]
     pattern = pattern * 2  # Scale pattern for visualization
 
@@ -635,7 +637,8 @@ def demo_openems_patterns():
 
     plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axd["A"])
     plot_sine_space(theta_rad, phi_rad, power_dB, ax=axd["B"])
-    plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=axd["C"])
+    ax = typing.cast(Axes3D, axd["C"])
+    plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=ax)
 
     steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
     phase_shift_title = f"OpenEMS Radiation Pattern ({steering_str})"
@@ -671,7 +674,8 @@ def demo_simple_patterns():
         power_dB = convert_to_db(pattern)
         plot_ff_2d(theta_rad, phi_rad, power_dB, ax=axd["A"])
         plot_sine_space(theta_rad, phi_rad, power_dB, ax=axd["B"])
-        plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=axd["C"])
+        ax = typing.cast(Axes3D, axd["C"])
+        plot_ff_3d(theta_rad, phi_rad, power_dB, clip_min_db=-30, ax=ax)
 
         fig.suptitle(title)
         filename = f"demo_pattern_{i + 1}.png"
