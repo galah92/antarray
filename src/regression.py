@@ -251,7 +251,6 @@ def train_step(
     def loss_fn(
         model: RegressionNet,
         batch: data.DataBatch,
-        synthesize_embedded: Callable | None = None,
     ) -> tuple[jax.Array, dict]:
         pred_phase_shifts = model(batch.radiation_patterns)
 
@@ -262,7 +261,6 @@ def train_step(
         loss = circular_mse
         metrics["circular_mse"] = circular_mse
 
-        # Add physics loss if synthesizer is provided
         if synthesize_embedded is not None:
             physics_loss = physics_loss_fn(
                 batch, pred_phase_shifts, synthesize_embedded
@@ -273,9 +271,7 @@ def train_step(
         metrics["loss"] = loss
         return loss, metrics
 
-    (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
-        model, batch, synthesize_embedded
-    )
+    (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
     optimizer.update(grads)
     metrics["grad_norm"] = optax.global_norm(grads)
 
