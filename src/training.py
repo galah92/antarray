@@ -372,8 +372,8 @@ def restore_checkpoint(
     if isinstance(item, nnx.Optimizer):
         handler = ocp.args.StandardRestore(nnx.state(item))
         restored = mngr.restore(step, args=ocp.args.Composite(state=handler))
-        nnx.update(item, restored.state)
-    else:  # Module
+        nnx.update(item, restored.state)  # ty: ignore[possibly-unbound-attribute]
+    else:
         state = nnx.state(item)
         restored = mngr.restore(step, args=ocp.args.StandardRestore(state))
         nnx.update(item, restored)
