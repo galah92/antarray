@@ -94,7 +94,6 @@ def create_radiation_pattern_transform(
     normalize: bool = True,
     radiation_pattern_max: float = 30.0,
     trig_encoding: bool = True,
-    front_hemisphere: bool = True,
 ):
     """Create a JIT-compiled radiation pattern transformation function."""
 
@@ -117,7 +116,7 @@ def create_radiation_pattern_transform(
         return radiation_pattern
 
     # Precompute trigonometric encoding channels
-    n_theta = 90 if front_hemisphere else 180
+    n_theta = 180
     phi_rad = jnp.arange(360) * jnp.pi / 180
     sin_phi = jnp.tile(jnp.sin(phi_rad), reps=(n_theta, 1))
     cos_phi = jnp.tile(jnp.cos(phi_rad), reps=(n_theta, 1))
@@ -141,7 +140,6 @@ class Dataset:
         normalize: bool = True,
         radiation_pattern_max: float = 30.0,  # Maximum radiation pattern value in dB observed
         trig_encoding: bool = True,
-        front_hemisphere: bool = True,
         key: jax.Array | None = None,
         use_openems: bool = False,  # New parameter to enable OpenEMS mode
     ):
@@ -160,9 +158,8 @@ class Dataset:
         self.normalize = normalize
         self.radiation_pattern_max = radiation_pattern_max
         self.trig_encoding = trig_encoding
-        self.front_hemisphere = front_hemisphere
 
-        self.theta_rad = jnp.radians(jnp.arange(90 if front_hemisphere else 180))
+        self.theta_rad = jnp.radians(jnp.arange(180))
         self.phi_rad = jnp.radians(jnp.arange(360))
 
         if key is None:
@@ -199,7 +196,6 @@ class Dataset:
             normalize=normalize,
             radiation_pattern_max=radiation_pattern_max,
             trig_encoding=trig_encoding,
-            front_hemisphere=front_hemisphere,
         )
 
         self.generate_sample = create_sample_generator(

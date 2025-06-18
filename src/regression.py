@@ -171,100 +171,40 @@ class RegressionNet(nnx.Module):
         return x
 
 
-def circular_mse_fn(
-    batch: data.DataBatch,
-    pred_phase_shifts: ArrayLike,
-) -> jax.Array:
-    phase_shifts = batch.phase_shifts
-
-    # Circular MSE loss
-    phase_diff = jnp.abs(pred_phase_shifts - phase_shifts)
+def circular_mse_fn(target: ArrayLike, pred: ArrayLike) -> jax.Array:
+    phase_diff = jnp.abs(pred - target)
     circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
     circular_mse = jnp.mean(circular_diff**2)
 
     return circular_mse
 
 
-def physics_loss_fn(
-    batch: data.DataBatch,
-    pred_phase_shifts: ArrayLike,
-    synthesize_embedded: Callable,
-) -> jax.Array:
-    """Physics loss function using embedded physics."""
-    radiation_patterns = batch.radiation_patterns
-
-    # Convert predicted phase shifts to complex weights
-    pred_weights = jnp.exp(-1j * pred_phase_shifts)
-
-    # Synthesize patterns using embedded physics
-    pred_patterns = jax.vmap(synthesize_embedded)(pred_weights)
-
-    # Remove trig encoding dimensions if present
-    if radiation_patterns.shape[-1] > 1:
-        radiation_patterns = radiation_patterns[:, :, :, 0]
-    if len(pred_patterns.shape) > 3:
-        pred_patterns = (
-            pred_patterns[:, :, 0]
-            if pred_patterns.shape[-1] > 1
-            else pred_patterns.squeeze(-1)
-        )
-
-    # Compute loss between predicted and target patterns
-    loss = jnp.mean((pred_patterns - radiation_patterns) ** 2)
-    loss = loss * (30.0**2)
-
-    return loss
-
-
-def loss_fn(
-    model: RegressionNet,
-    batch: data.DataBatch,
-    synthesize_embedded: Callable | None = None,
-) -> tuple[jax.Array, dict]:
-    pred_phase_shifts = model(batch.radiation_patterns)
-
-    metrics = {}
-
-    # Circular MSE loss
-    circular_mse = circular_mse_fn(batch, pred_phase_shifts)
-    loss = circular_mse
-    metrics["circular_mse"] = circular_mse
-
-    # Add physics loss if synthesizer is provided
-    if synthesize_embedded is not None:
-        physics_loss = physics_loss_fn(batch, pred_phase_shifts, synthesize_embedded)
-        loss += physics_loss
-        metrics["physics_loss"] = physics_loss
-
-    metrics["loss"] = loss
-    return loss, metrics
-
-
-@nnx.jit
+@partial(nnx.jit, static_argnames=("synth_pattern",))
 def train_step(
     optimizer: nnx.Optimizer,
     batch: data.DataBatch,
-    synthesize_embedded: Callable | None = None,
+    synth_pattern: Callable | None = None,
 ) -> dict[str, float]:
     model = optimizer.model
 
-    def loss_fn(
-        model: RegressionNet,
-        batch: data.DataBatch,
-    ) -> tuple[jax.Array, dict]:
+    if synth_pattern is not None:
+        synth_pattern = jax.vmap(synth_pattern)
+
+    def loss_fn(model: RegressionNet, batch: data.DataBatch) -> tuple[jax.Array, dict]:
         pred_phase_shifts = model(batch.radiation_patterns)
 
         metrics = {}
 
-        # Circular MSE loss
-        circular_mse = circular_mse_fn(batch, pred_phase_shifts)
+        circular_mse = circular_mse_fn(batch.phase_shifts, pred_phase_shifts)
         loss = circular_mse
         metrics["circular_mse"] = circular_mse
+        metrics["circular_rmse"] = jnp.sqrt(circular_mse)
 
-        if synthesize_embedded is not None:
-            physics_loss = physics_loss_fn(
-                batch, pred_phase_shifts, synthesize_embedded
-            )
+        if synth_pattern is not None:
+            pred_patterns = synth_pattern(pred_phase_shifts)
+            # FIXME: also need to denormalize
+            radiation_patterns = batch.radiation_patterns[..., 0]
+            physics_loss = ((pred_patterns - radiation_patterns) ** 2).mean()
             loss += physics_loss
             metrics["physics_loss"] = physics_loss
 
@@ -281,11 +221,11 @@ def train_step(
 def warmup_step(
     dataset: data.Dataset,
     optimizer: nnx.Optimizer,
-    synthesize_embedded: Callable | None = None,
+    synth_pattern: Callable | None = None,
 ):
     logger.info("Warming up GPU kernels")
     warmup_batch = next(dataset)
-    _ = train_step(optimizer, warmup_batch, synthesize_embedded)
+    _ = train_step(optimizer, warmup_batch, synth_pattern)
     logger.info("Warmup completed")
 
 
@@ -305,7 +245,7 @@ def train(
     restore: bool = True,
     overwrite: bool = False,
     openems_path: Path | None = None,
-    use_physics_loss: bool = False,
+    use_physics_loss: bool = True,
 ):
     key = jax.random.key(seed)
     key, dataset_key, model_key = jax.random.split(key, num=3)
@@ -341,7 +281,6 @@ def train(
         for step, batch in enumerate(dataset, start=start_step):
             metrics = train_step(optimizer, batch, synthesize_ideal)
             save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
-
             log_progress(step, metrics)
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
