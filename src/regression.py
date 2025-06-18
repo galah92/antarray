@@ -248,10 +248,34 @@ def train_step(
 ) -> dict[str, float]:
     model = optimizer.model
 
-    def _loss_fn(model):
-        return loss_fn(model, batch, synthesize_embedded)
+    def loss_fn(
+        model: RegressionNet,
+        batch: data.DataBatch,
+        synthesize_embedded: Callable | None = None,
+    ) -> tuple[jax.Array, dict]:
+        pred_phase_shifts = model(batch.radiation_patterns)
 
-    (loss, metrics), grads = nnx.value_and_grad(_loss_fn, has_aux=True)(model)
+        metrics = {}
+
+        # Circular MSE loss
+        circular_mse = circular_mse_fn(batch, pred_phase_shifts)
+        loss = circular_mse
+        metrics["circular_mse"] = circular_mse
+
+        # Add physics loss if synthesizer is provided
+        if synthesize_embedded is not None:
+            physics_loss = physics_loss_fn(
+                batch, pred_phase_shifts, synthesize_embedded
+            )
+            loss += physics_loss
+            metrics["physics_loss"] = physics_loss
+
+        metrics["loss"] = loss
+        return loss, metrics
+
+    (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
+        model, batch, synthesize_embedded
+    )
     optimizer.update(grads)
     metrics["grad_norm"] = optax.global_norm(grads)
 
@@ -328,34 +352,6 @@ def train(
         raise
     finally:
         ckpt_mngr.wait_until_finished()
-
-
-@app.command()
-def eval(seed: int = 42):
-    key = jax.random.key(seed)
-    key, dataset_key, model_key = jax.random.split(key, num=3)
-    batch_size = 1024
-
-    optimizer = create_trainables(n_steps=batch_size, lr=0.0, key=model_key)
-
-    ckpt_path = Path.cwd() / "checkpoints"
-    ckpt_options = ocp.CheckpointManagerOptions(read_only=True)
-    ckpt_mngr = ocp.CheckpointManager(ckpt_path, options=ckpt_options)
-
-    start_step = restore_checkpoint(ckpt_mngr, optimizer, step=None)
-    logger.info(f"Resuming from step {start_step}")
-
-    optimizer.model.eval()
-
-    dataset = data.Dataset(batch_size=batch_size, limit=batch_size, key=dataset_key)
-    _batch = next(dataset)
-    # metrics = train_step(optimizer, batch)
-    # logger.info(
-    #     f"Evaluation at step {start_step}: "
-    #     f"Loss: {metrics['loss']:.3f} | "
-    #     f"Phase RMSE: {metrics['phase_rmse']:.3f} | "
-    #     f"Grad Norm: {metrics['grad_norm']:.3f}"
-    # )
 
 
 if __name__ == "__main__":
