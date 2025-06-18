@@ -79,11 +79,11 @@ def train_pipeline(
 ):
     """Main function to set up and run the training pipeline."""
     key = jax.random.key(seed)
-    key, physics_key, model_key, data_key = jax.random.split(key, 4)
+    key, model_key, data_key = jax.random.split(key, 3)
 
     logger.info("Performing one-time precomputation")
     synthesize_ideal, compute_analytical = create_physics_setup(
-        physics_key, openems_path=openems_path
+        openems_path=openems_path
     )
     train_step = create_train_step_fn(
         synthesize_ideal, synthesize_ideal, compute_analytical

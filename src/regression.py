@@ -288,7 +288,7 @@ def train(
     use_physics_loss: bool = False,
 ):
     key = jax.random.key(seed)
-    key, dataset_key, model_key, physics_key = jax.random.split(key, num=4)
+    key, dataset_key, model_key = jax.random.split(key, num=3)
 
     optimizer = create_trainables(n_steps, lr, key=model_key)
 
@@ -308,9 +308,7 @@ def train(
     synthesize_ideal = None
     if use_physics_loss:
         config = ArrayConfig()
-        synthesize_ideal, _ = create_physics_setup(
-            physics_key, config, openems_path=openems_path
-        )
+        synthesize_ideal, _ = create_physics_setup(config, openems_path=openems_path)
 
     warmup_step(dataset, optimizer, synthesize_ideal)
 

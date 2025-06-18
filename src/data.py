@@ -177,9 +177,7 @@ class Dataset:
             phi_rad=self.phi_rad,
         )
 
-        key, physics_key = jax.random.split(key)
         synthesize_ideal, compute_analytical = physics.create_physics_setup(
-            physics_key,
             config=config,
             openems_path=self.sim_path if use_openems else None,
         )

@@ -236,9 +236,8 @@ def train_diffusion_pipeline(
     logger.info("Setting up diffusion training pipeline")
 
     # Create physics setup with optional OpenEMS support
-    key, physics_key = jax.random.split(key)
     synthesize_ideal, compute_analytical = create_physics_setup(
-        physics_key, openems_path=openems_path
+        openems_path=openems_path
     )
 
     # Create scheduler and model
@@ -306,9 +305,8 @@ def evaluate_diffusion_model(
     test_batch = next(test_angles)
 
     # Create physics setup for evaluation with optional OpenEMS support
-    key, physics_key = jax.random.split(key)
     synthesize_ideal, compute_analytical = create_physics_setup(
-        physics_key, openems_path=openems_path
+        openems_path=openems_path
     )
 
     # Compute analytical weights and target patterns

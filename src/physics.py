@@ -205,26 +205,8 @@ def create_pattern_synthesizer(
     return synthesize
 
 
-def add_embedding_effects(base_patterns: jax.Array, key: jax.Array) -> jax.Array:
-    """Add realistic element-to-element variations to OpenEMS base patterns."""
-    # Apply small random amplitude/phase distortions to simulate embedding effects
-    key, amp_key, phase_key = jax.random.split(key, 3)
-
-    # Small variations (5-10%) to simulate coupling between elements
-    amp_variations = 1.0 + 0.05 * jax.random.normal(
-        amp_key, base_patterns.shape[:2] + (1, 1, 1)
-    )
-    phase_variations = 0.1 * jax.random.normal(
-        phase_key, base_patterns.shape[:2] + (1, 1, 1)
-    )
-
-    return base_patterns * amp_variations * jnp.exp(1j * phase_variations)
-
-
 def create_element_patterns(
     config: ArrayConfig,
-    key: jax.Array,
-    is_embedded: bool,
     openems_path: Path | None = None,
 ) -> jax.Array:
     """Simulates element patterns for either ideal or embedded array, with optional OpenEMS data."""
@@ -237,67 +219,31 @@ def create_element_patterns(
         base_patterns = jnp.tile(
             single_element[None, None, ...], (*config.array_size, 1, 1, 1)
         )
+        return base_patterns
 
-        if is_embedded:
-            # Add element-specific distortions to simulate coupling
-            return add_embedding_effects(base_patterns, key)
-        else:
-            return base_patterns
-    else:
-        # Use existing synthetic generation (unchanged)
-        theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
+    # Use existing synthetic generation (unchanged)
+    theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
 
-        # Base cosine model for field amplitude
-        base_field_amp = jnp.cos(config.theta_rad)
-        base_field_amp = base_field_amp.at[config.theta_rad > np.pi / 2].set(0)
-        base_field_amp = base_field_amp[:, None] * jnp.ones((theta_size, phi_size))
+    # Base cosine model for field amplitude
+    base_field_amp = jnp.cos(config.theta_rad)
+    base_field_amp = base_field_amp.at[config.theta_rad > np.pi / 2].set(0)
+    base_field_amp = base_field_amp[:, None] * jnp.ones((theta_size, phi_size))
 
-        if not is_embedded:
-            ideal_field = base_field_amp[None, None, :, :, None]
-            ideal_field = jnp.tile(ideal_field, (*config.array_size, 1, 1, 1))
-            return ideal_field.astype(jnp.complex64)
-
-        # Embedded case: simulate distortion
-        num_pols = 2
-        final_shape = (*config.array_size, theta_size, phi_size, num_pols)
-        low_res_shape = (*config.array_size, 10, 20, num_pols)
-
-        key, amp_key, phase_key = jax.random.split(key, 3)
-
-        amp_dist_low_res = jax.random.uniform(
-            amp_key, low_res_shape, minval=0.5, maxval=1.5
-        )
-        amp_distortion = jax.image.resize(
-            amp_dist_low_res, final_shape, method="bicubic"
-        )
-
-        phase_dist_low_res = jax.random.uniform(
-            phase_key, low_res_shape, maxval=2 * np.pi
-        )
-        phase_distortion = jax.image.resize(
-            phase_dist_low_res, final_shape, method="bicubic"
-        )
-
-        distorted_amplitude = base_field_amp[None, None, ..., None] * amp_distortion
-        distorted_field = distorted_amplitude * jnp.exp(1j * phase_distortion)
-
-        return distorted_field.astype(jnp.complex64)
+    ideal_field = base_field_amp[None, None, :, :, None]
+    ideal_field = jnp.tile(ideal_field, (*config.array_size, 1, 1, 1))
+    return ideal_field.astype(jnp.complex64)
 
 
 def create_physics_setup(
-    key: jax.Array,
     config: ArrayConfig | None = None,
     openems_path: Path | None = None,
 ):
     """Creates the physics simulation setup with optional OpenEMS data support."""
-    key, ideal_key = jax.random.split(key)
     config = ArrayConfig() if config is None else config
 
-    element_patterns = create_element_patterns(
-        config, ideal_key, is_embedded=False, openems_path=openems_path
-    )
-
+    element_patterns = create_element_patterns(config, openems_path=openems_path)
     synthesize_pattern = create_pattern_synthesizer(element_patterns, config)
+
     compute_analytical = create_analytical_weight_calculator(config)
 
     return synthesize_pattern, compute_analytical
@@ -601,11 +547,10 @@ def demo_phase_shifts():
 
 def demo_openems_patterns():
     """Demonstrate OpenEMS pattern loading with new unified interface."""
-    key = jax.random.key(42)
     config = ArrayConfig()
 
     synthesize_ideal, compute_analytical = create_physics_setup(
-        key, config, openems_path=DEFAULT_SIM_PATH
+        config, openems_path=DEFAULT_SIM_PATH
     )
 
     steering_deg = jnp.array([30, 45])
@@ -628,8 +573,7 @@ def demo_physics_patterns():
     """Demonstrate the physics simulation functions."""
     steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
 
-    key = jax.random.key(42)
-    synthesize_ideal, compute_analytical = create_physics_setup(key)
+    synthesize_ideal, compute_analytical = create_physics_setup()
     weights, _ = compute_analytical(steering_angle)
     ideal_pattern = synthesize_ideal(weights)
 
