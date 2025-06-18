@@ -178,16 +178,14 @@ class Dataset:
         )
 
         key, physics_key = jax.random.split(key)
-        synthesize_ideal, synthesize_embedded, compute_analytical = (
-            physics.create_physics_setup(
-                physics_key,
-                config=config,
-                openems_path=self.sim_path if use_openems else None,
-            )
+        synthesize_ideal, compute_analytical = physics.create_physics_setup(
+            physics_key,
+            config=config,
+            openems_path=self.sim_path if use_openems else None,
         )
 
         # Use embedded patterns for realistic simulation
-        self.synthesize_pattern = synthesize_embedded
+        self.synthesize_pattern = synthesize_ideal
         self.compute_analytical = compute_analytical
 
         def unified_pattern_from_steering(steering_angles):

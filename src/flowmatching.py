@@ -213,7 +213,7 @@ def train_flow_matching_pipeline(
     logger.info("Setting up flow matching training pipeline")
 
     # Create physics setup with optional OpenEMS support
-    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
+    synthesize_ideal, compute_analytical = create_physics_setup(
         key, openems_path=openems_path
     )
 
@@ -235,7 +235,7 @@ def train_flow_matching_pipeline(
 
     # Create training step
     train_step = create_train_step_fn(
-        synthesize_ideal, synthesize_embedded, compute_analytical, flow_matcher
+        synthesize_ideal, synthesize_ideal, compute_analytical, flow_matcher
     )
 
     # Training data generator
@@ -292,7 +292,7 @@ def evaluate_flow_matching_model(
 
     # Create physics setup for evaluation with optional OpenEMS support
     key, physics_key = jax.random.split(key)
-    synthesize_ideal, _, compute_analytical = create_physics_setup(
+    synthesize_ideal, compute_analytical = create_physics_setup(
         physics_key, openems_path=openems_path
     )
 

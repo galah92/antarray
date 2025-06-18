@@ -219,7 +219,7 @@ def physics_loss_fn(
 def loss_fn(
     model: RegressionNet,
     batch: data.DataBatch,
-    synthesize_embedded: Callable = None,
+    synthesize_embedded: Callable | None = None,
 ) -> tuple[jax.Array, dict]:
     pred_phase_shifts = model(batch.radiation_patterns)
 
@@ -244,7 +244,7 @@ def loss_fn(
 def train_step(
     optimizer: nnx.Optimizer,
     batch: data.DataBatch,
-    synthesize_embedded: Callable = None,
+    synthesize_embedded: Callable | None = None,
 ) -> dict[str, float]:
     model = optimizer.model
 
@@ -261,7 +261,7 @@ def train_step(
 def warmup_step(
     dataset: data.Dataset,
     optimizer: nnx.Optimizer,
-    synthesize_embedded: Callable = None,
+    synthesize_embedded: Callable | None = None,
 ):
     logger.info("Warming up GPU kernels")
     warmup_batch = next(dataset)
@@ -305,14 +305,14 @@ def train(
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
     # Setup physics if needed
-    synthesize_embedded = None
+    synthesize_ideal = None
     if use_physics_loss:
         config = ArrayConfig()
-        _, synthesize_embedded, _ = create_physics_setup(
+        synthesize_ideal, _ = create_physics_setup(
             physics_key, config, openems_path=openems_path
         )
 
-    warmup_step(dataset, optimizer, synthesize_embedded)
+    warmup_step(dataset, optimizer, synthesize_ideal)
 
     logger.info("Starting training")
     log_progress = create_progress_logger(
@@ -321,7 +321,7 @@ def train(
 
     try:
         for step, batch in enumerate(dataset, start=start_step):
-            metrics = train_step(optimizer, batch, synthesize_embedded)
+            metrics = train_step(optimizer, batch, synthesize_ideal)
             save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
 
             log_progress(step, metrics)

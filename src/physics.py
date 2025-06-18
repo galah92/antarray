@@ -290,22 +290,17 @@ def create_physics_setup(
     openems_path: Path | None = None,
 ):
     """Creates the physics simulation setup with optional OpenEMS data support."""
-    key, ideal_key, embedded_key = jax.random.split(key, 3)
+    key, ideal_key = jax.random.split(key)
     config = ArrayConfig() if config is None else config
 
-    ideal_patterns = create_element_patterns(
+    element_patterns = create_element_patterns(
         config, ideal_key, is_embedded=False, openems_path=openems_path
     )
 
-    embedded_patterns = create_element_patterns(
-        config, embedded_key, is_embedded=True, openems_path=openems_path
-    )
-
-    synthesize_ideal = create_pattern_synthesizer(ideal_patterns, config)
-    synthesize_embedded = create_pattern_synthesizer(embedded_patterns, config)
+    synthesize_pattern = create_pattern_synthesizer(element_patterns, config)
     compute_analytical = create_analytical_weight_calculator(config)
 
-    return synthesize_ideal, synthesize_embedded, compute_analytical
+    return synthesize_pattern, compute_analytical
 
 
 @jax.jit
@@ -609,7 +604,7 @@ def demo_openems_patterns():
     key = jax.random.key(42)
     config = ArrayConfig()
 
-    synthesize_ideal, _, compute_analytical = create_physics_setup(
+    synthesize_ideal, compute_analytical = create_physics_setup(
         key, config, openems_path=DEFAULT_SIM_PATH
     )
 
@@ -634,25 +629,21 @@ def demo_physics_patterns():
     steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
 
     key = jax.random.key(42)
-    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
-        key
-    )
+    synthesize_ideal, compute_analytical = create_physics_setup(key)
     weights, _ = compute_analytical(steering_angle)
-    ideal_pattern, emb_pattern = synthesize_ideal(weights), synthesize_embedded(weights)
+    ideal_pattern = synthesize_ideal(weights)
 
     floor_db = -60.0  # dB floor for clipping
     linear_floor = 10.0 ** (floor_db / 10.0)
     ideal_pattern = 10.0 * jnp.log10(jnp.maximum(ideal_pattern, linear_floor))
-    emb_pattern = 10.0 * jnp.log10(jnp.maximum(emb_pattern, linear_floor))
 
     fig = plt.figure(figsize=(15, 10), layout="compressed")
     subfigs = typing.cast(list[SubFigure], fig.subfigures(2, 1))
 
     plot_pattern(ideal_pattern, title="Ideal Pattern", clip_min_db=-10, fig=subfigs[0])
-    plot_pattern(emb_pattern, title="Embedded Pattern", clip_min_db=-10, fig=subfigs[1])
 
     steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
-    fig.suptitle(f"Ideal vs Embedded Patterns ({steering_str})")
+    fig.suptitle(f"Ideal Patterns ({steering_str})")
     filename = "demo_physics.png"
     fig.savefig(filename, dpi=250)
     logger.info(f"Saved {filename}")

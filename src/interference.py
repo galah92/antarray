@@ -82,11 +82,11 @@ def train_pipeline(
     key, physics_key, model_key, data_key = jax.random.split(key, 4)
 
     logger.info("Performing one-time precomputation")
-    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
+    synthesize_ideal, compute_analytical = create_physics_setup(
         physics_key, openems_path=openems_path
     )
     train_step = create_train_step_fn(
-        synthesize_ideal, synthesize_embedded, compute_analytical
+        synthesize_ideal, synthesize_ideal, compute_analytical
     )
 
     model = InterferenceCorrector(rngs=nnx.Rngs(model_key))

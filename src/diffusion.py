@@ -237,7 +237,7 @@ def train_diffusion_pipeline(
 
     # Create physics setup with optional OpenEMS support
     key, physics_key = jax.random.split(key)
-    synthesize_ideal, synthesize_embedded, compute_analytical = create_physics_setup(
+    synthesize_ideal, compute_analytical = create_physics_setup(
         physics_key, openems_path=openems_path
     )
 
@@ -263,7 +263,7 @@ def train_diffusion_pipeline(
     # Create training step
     train_step = create_train_step_fn(
         synthesize_ideal,
-        synthesize_embedded,
+        synthesize_ideal,
         compute_analytical,
         scheduler,
     )
@@ -307,7 +307,7 @@ def evaluate_diffusion_model(
 
     # Create physics setup for evaluation with optional OpenEMS support
     key, physics_key = jax.random.split(key)
-    synthesize_ideal, _, compute_analytical = create_physics_setup(
+    synthesize_ideal, compute_analytical = create_physics_setup(
         physics_key, openems_path=openems_path
     )
 
