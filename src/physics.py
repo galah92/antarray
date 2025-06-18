@@ -209,29 +209,26 @@ def create_element_patterns(
     config: ArrayConfig,
     openems_path: Path | None = None,
 ) -> jax.Array:
-    """Simulates element patterns for either ideal or embedded array, with optional OpenEMS data."""
+    """Simulates element patterns for ideal array, with optional OpenEMS data."""
     if openems_path is not None:
-        # Load OpenEMS data and convert to unified format
-        openems_data = load_openems_nf2ff(openems_path)
-        single_element = openems_data.E_field  # Shape: (n_theta, n_phi, 2)
+        E_field = load_openems_nf2ff(openems_path).E_field  # (n_theta, n_phi, 2)
 
-        # Tile across array positions to create 5D format: (array_x, array_y, n_theta, n_phi, n_polarizations)
-        base_patterns = jnp.tile(
-            single_element[None, None, ...], (*config.array_size, 1, 1, 1)
-        )
-        return base_patterns
+        reps = config.array_size + (1,) * E_field.ndim
+        E_field = jnp.tile(E_field, reps)  # (n_x, n_y, n_theta, n_phi, n_polarization)
+        return E_field
 
     # Use existing synthetic generation (unchanged)
     theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
 
     # Base cosine model for field amplitude
-    base_field_amp = jnp.cos(config.theta_rad)
-    base_field_amp = base_field_amp.at[config.theta_rad > np.pi / 2].set(0)
-    base_field_amp = base_field_amp[:, None] * jnp.ones((theta_size, phi_size))
+    amplitude = jnp.cos(config.theta_rad)
+    amplitude = amplitude.at[config.theta_rad > np.pi / 2].set(0)
+    amplitude = amplitude[:, None] * jnp.ones((theta_size, phi_size))
 
-    ideal_field = base_field_amp[None, None, :, :, None]
-    ideal_field = jnp.tile(ideal_field, (*config.array_size, 1, 1, 1))
-    return ideal_field.astype(jnp.complex64)
+    E_field = amplitude[:, :, None]  # (n_theta, n_phi, 1)
+    reps = config.array_size + (1,) * E_field.ndim
+    E_field = jnp.tile(E_field, reps)  # (n_x, n_y, n_theta, n_phi, n_polarization)
+    return E_field.astype(jnp.complex64)
 
 
 def create_physics_setup(
