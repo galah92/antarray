@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 import jax
@@ -7,10 +8,10 @@ import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from physics import convert_to_db, create_physics_setup, normalize_patterns
+from physics import convert_to_db, create_physics_setup
 from training import (
     InterferenceCorrector,
-    calculate_pattern_loss,
+    circular_mse_fn,
     create_progress_logger,
     steering_angles_sampler,
 )
@@ -19,55 +20,49 @@ from utils import setup_logging
 logger = logging.getLogger(__name__)
 
 
-def create_train_step_fn(
-    synthesize_ideal_pattern: Callable,
-    synthesize_embedded_pattern: Callable,
-    compute_analytical_weights: Callable,
-):
-    """Factory that creates the jitted training step function."""
-    vmapped_analytical_weights = jax.vmap(compute_analytical_weights)
-    vmapped_ideal_synthesizer = jax.vmap(synthesize_ideal_pattern)
-    vmapped_embedded_synthesizer = jax.vmap(synthesize_embedded_pattern)
+@partial(nnx.jit, static_argnames=("synth_pattern", "compute_weights"))
+def train_step(
+    optimizer: nnx.Optimizer,
+    batch: jax.Array,
+    synth_pattern: Callable,
+    compute_weights: Callable,
+) -> dict[str, float]:
+    model = optimizer.model
 
-    def loss_fn(model: InterferenceCorrector, batch_of_angles_rad: jax.Array):
-        analytical_weights, analytical_phase_shifts = vmapped_analytical_weights(
-            batch_of_angles_rad
-        )
-        analytical_phase_shifts = jnp.squeeze(analytical_phase_shifts)
+    convert_to_db_vm = jax.vmap(convert_to_db)
 
-        ideal_patterns = vmapped_ideal_synthesizer(analytical_weights)
-        normalized_ideal_patterns = normalize_patterns(ideal_patterns)
+    target_weights, target_phase_shifts = compute_weights(batch)
+    target_phase_shifts = jnp.squeeze(target_phase_shifts)
 
-        corrective_weights, corrective_phase_shifts = model(normalized_ideal_patterns)
+    target_patterns = synth_pattern(target_weights)
 
-        embedded_patterns = vmapped_embedded_synthesizer(corrective_weights)
-        normalized_embedded_patterns = normalize_patterns(embedded_patterns)
+    def loss_fn(model: InterferenceCorrector, target_patterns: jax.Array):
+        pred_weights, pred_phase_shifts = model(target_patterns)
 
-        ideal_patterns_db = convert_to_db(normalized_ideal_patterns)
-        embedded_patterns_db = convert_to_db(normalized_embedded_patterns)
+        pred_patterns = synth_pattern(pred_weights)
 
-        loss, metrics = calculate_pattern_loss(embedded_patterns_db, ideal_patterns_db)
+        target_patterns_db = convert_to_db_vm(target_patterns)
+        pred_patterns_db = convert_to_db_vm(pred_patterns)
 
-        phase_shifts_mse = optax.losses.squared_error(
-            corrective_phase_shifts, analytical_phase_shifts
-        ).mean()
-        metrics["phase_shifts_mse"] = phase_shifts_mse
-        metrics["phase_shifts_rmse"] = jnp.sqrt(phase_shifts_mse)
-        metrics["phase_shifts_std"] = jnp.std(corrective_phase_shifts)
+        patterns_mse = ((target_patterns_db - pred_patterns_db) ** 2).mean()
+        phase_shifts_mse = circular_mse_fn(target_phase_shifts, pred_phase_shifts)
 
-        loss = loss + phase_shifts_mse  # Combine losses
+        loss = patterns_mse + phase_shifts_mse
 
+        metrics = {
+            "loss": loss,
+            "patterns_mse": patterns_mse,
+            "phase_shifts_mse": phase_shifts_mse,
+            "phase_shifts_rmse": jnp.sqrt(phase_shifts_mse),
+        }
         return loss, metrics
 
-    @nnx.jit
-    def train_step_fn(optimizer: nnx.Optimizer, batch: jax.Array):
-        model = optimizer.model
-        (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
-        optimizer.update(grads)
-        metrics["grad_norm"] = optax.global_norm(grads)
-        return metrics
-
-    return train_step_fn
+    (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
+        model, target_patterns
+    )
+    optimizer.update(grads)
+    metrics["grad_norm"] = optax.global_norm(grads)
+    return metrics
 
 
 def train_pipeline(
@@ -82,12 +77,8 @@ def train_pipeline(
     key, model_key, data_key = jax.random.split(key, 3)
 
     logger.info("Performing one-time precomputation")
-    synthesize_ideal, compute_analytical = create_physics_setup(
-        openems_path=openems_path
-    )
-    train_step = create_train_step_fn(
-        synthesize_ideal, synthesize_ideal, compute_analytical
-    )
+    synth_pattern, compute_weights = create_physics_setup(openems_path=openems_path)
+    synth_pattern, compute_weights = jax.vmap(synth_pattern), jax.vmap(compute_weights)
 
     model = InterferenceCorrector(rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=lr))
@@ -99,7 +90,7 @@ def train_pipeline(
 
     try:
         for step, batch in enumerate(sampler):
-            metrics = train_step(optimizer, batch)
+            metrics = train_step(optimizer, batch, synth_pattern, compute_weights)
             log_progress(step, metrics)
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")

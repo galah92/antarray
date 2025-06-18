@@ -14,6 +14,7 @@ from jax.typing import ArrayLike
 import data
 from physics import ArrayConfig, create_physics_setup
 from training import (
+    circular_mse_fn,
     create_progress_logger,
     pad_batch,
     resize_batch,
@@ -169,14 +170,6 @@ class RegressionNet(nnx.Module):
         x = self.decoder(x)
         x = x.squeeze(-1)  # Remove the channel dimension
         return x
-
-
-def circular_mse_fn(target: ArrayLike, pred: ArrayLike) -> jax.Array:
-    phase_diff = jnp.abs(pred - target)
-    circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
-    circular_mse = jnp.mean(circular_diff**2)
-
-    return circular_mse
 
 
 @partial(nnx.jit, static_argnames=("synth_pattern",))

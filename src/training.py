@@ -45,6 +45,14 @@ def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMeth
     return jax.image.resize(image, shape=shape, method=method)
 
 
+def circular_mse_fn(target: ArrayLike, pred: ArrayLike) -> jax.Array:
+    phase_diff = jnp.abs(pred - target)
+    circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
+    circular_mse = (circular_diff**2).mean()
+
+    return circular_mse
+
+
 # =============================================================================
 # Basic Neural Network Components
 # =============================================================================
