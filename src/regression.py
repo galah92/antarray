@@ -1,7 +1,7 @@
 import logging
 from functools import partial
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -20,6 +20,7 @@ from training import (
     restore_checkpoint,
     save_checkpoint,
 )
+from utils import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -184,91 +185,87 @@ def circular_mse_fn(
     return circular_mse
 
 
-def create_physics_loss_fn(config: ArrayConfig, openems_path: Path | None = None):
-    """Create physics loss function using modern physics setup."""
-    # Create physics setup once with optional OpenEMS support
-    key = jax.random.key(0)  # Deterministic for consistency
-    _, synthesize_embedded, _ = create_physics_setup(
-        key, config, openems_path=openems_path
-    )
+def physics_loss_fn(
+    batch: data.DataBatch,
+    pred_phase_shifts: ArrayLike,
+    synthesize_embedded: Callable,
+) -> jax.Array:
+    """Physics loss function using embedded physics."""
+    radiation_patterns = batch.radiation_patterns
 
-    def physics_loss_fn(
-        batch: data.DataBatch,
-        pred_phase_shifts: ArrayLike,
-    ):
-        radiation_patterns = batch.radiation_patterns
+    # Convert predicted phase shifts to complex weights
+    pred_weights = jnp.exp(-1j * pred_phase_shifts)
 
-        # Convert predicted phase shifts to complex weights
-        pred_weights = jnp.exp(-1j * pred_phase_shifts)
+    # Synthesize patterns using embedded physics
+    pred_patterns = jax.vmap(synthesize_embedded)(pred_weights)
 
-        # Synthesize patterns using embedded physics
-        pred_patterns = jax.vmap(synthesize_embedded)(pred_weights)
+    # Remove trig encoding dimensions if present
+    if radiation_patterns.shape[-1] > 1:
+        radiation_patterns = radiation_patterns[:, :, :, 0]
+    if len(pred_patterns.shape) > 3:
+        pred_patterns = (
+            pred_patterns[:, :, 0]
+            if pred_patterns.shape[-1] > 1
+            else pred_patterns.squeeze(-1)
+        )
 
-        # Remove trig encoding dimensions if present
-        if radiation_patterns.shape[-1] > 1:
-            radiation_patterns = radiation_patterns[:, :, :, 0]
-        if len(pred_patterns.shape) > 3:
-            pred_patterns = (
-                pred_patterns[:, :, 0]
-                if pred_patterns.shape[-1] > 1
-                else pred_patterns.squeeze(-1)
-            )
+    # Compute loss between predicted and target patterns
+    loss = jnp.mean((pred_patterns - radiation_patterns) ** 2)
+    loss = loss * (30.0**2)
 
-        # Compute loss between predicted and target patterns
-        loss = jnp.mean((pred_patterns - radiation_patterns) ** 2)
-        loss = loss * (30.0**2)
-
-        return loss
-
-    return physics_loss_fn
+    return loss
 
 
 def loss_fn(
     model: RegressionNet,
     batch: data.DataBatch,
-    config: ArrayConfig,
-    *,
-    use_physics_loss: bool = False,
-    use_circular_mse: bool = True,
+    synthesize_embedded: Callable = None,
 ) -> tuple[jax.Array, dict]:
     pred_phase_shifts = model(batch.radiation_patterns)
 
     metrics = {}
-    loss = jnp.zeros(())
 
-    if use_physics_loss:
-        physics_loss_fn = create_physics_loss_fn(config)
-        physics_loss = physics_loss_fn(batch, pred_phase_shifts)
+    # Circular MSE loss
+    circular_mse = circular_mse_fn(batch, pred_phase_shifts)
+    loss = circular_mse
+    metrics["circular_mse"] = circular_mse
+
+    # Add physics loss if synthesizer is provided
+    if synthesize_embedded is not None:
+        physics_loss = physics_loss_fn(batch, pred_phase_shifts, synthesize_embedded)
         loss += physics_loss
         metrics["physics_loss"] = physics_loss
-
-    if use_circular_mse:
-        circular_mse = circular_mse_fn(batch, pred_phase_shifts)
-        alpha = 10 if use_physics_loss else 1
-        loss += circular_mse * alpha
-        metrics["circular_mse"] = circular_mse
 
     metrics["loss"] = loss
     return loss, metrics
 
 
-def create_train_step(loss_fn):
-    @nnx.jit
-    def train_step(optimizer: nnx.Optimizer, batch: data.DataBatch) -> dict[str, float]:
-        model = optimizer.model
-        (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
-        optimizer.update(grads)
-        metrics["grad_norm"] = optax.global_norm(grads)
+@nnx.jit
+def train_step(
+    optimizer: nnx.Optimizer,
+    batch: data.DataBatch,
+    synthesize_embedded: Callable = None,
+) -> dict[str, float]:
+    model = optimizer.model
 
-        return metrics
+    def _loss_fn(model):
+        return loss_fn(model, batch, synthesize_embedded)
 
-    return train_step
+    (loss, metrics), grads = nnx.value_and_grad(_loss_fn, has_aux=True)(model)
+    optimizer.update(grads)
+    metrics["grad_norm"] = optax.global_norm(grads)
+
+    return metrics
 
 
-def warmup_step(dataset: data.Dataset, optimizer: nnx.Optimizer, train_step):
+def warmup_step(
+    dataset: data.Dataset,
+    optimizer: nnx.Optimizer,
+    synthesize_embedded: Callable = None,
+):
     logger.info("Warming up GPU kernels")
     warmup_batch = next(dataset)
-    _ = train_step(optimizer, warmup_batch)
+    _ = train_step(optimizer, warmup_batch, synthesize_embedded)
     logger.info("Warmup completed")
 
 
@@ -288,9 +285,10 @@ def train(
     restore: bool = True,
     overwrite: bool = False,
     openems_path: Path | None = None,
+    use_physics_loss: bool = False,
 ):
     key = jax.random.key(seed)
-    key, dataset_key, model_key = jax.random.split(key, num=3)
+    key, dataset_key, model_key, physics_key = jax.random.split(key, num=4)
 
     optimizer = create_trainables(n_steps, lr, key=model_key)
 
@@ -306,12 +304,15 @@ def train(
     n_steps -= start_step
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
-    config = ArrayConfig()
+    # Setup physics if needed
+    synthesize_embedded = None
+    if use_physics_loss:
+        config = ArrayConfig()
+        _, synthesize_embedded, _ = create_physics_setup(
+            physics_key, config, openems_path=openems_path
+        )
 
-    train_step = create_train_step(
-        loss_fn=partial(loss_fn, config=config, openems_path=openems_path)
-    )
-    warmup_step(dataset, optimizer, train_step)
+    warmup_step(dataset, optimizer, synthesize_embedded)
 
     logger.info("Starting training")
     log_progress = create_progress_logger(
@@ -320,7 +321,7 @@ def train(
 
     try:
         for step, batch in enumerate(dataset, start=start_step):
-            metrics = train_step(optimizer, batch)
+            metrics = train_step(optimizer, batch, synthesize_embedded)
             save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
 
             log_progress(step, metrics)
@@ -360,4 +361,5 @@ def eval(seed: int = 42):
 
 
 if __name__ == "__main__":
+    setup_logging()
     app()
