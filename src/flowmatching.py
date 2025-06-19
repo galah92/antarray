@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from physics import create_physics_setup, normalize_patterns
+from physics import ArrayConfig, create_physics_setup, normalize_patterns
 from training import (
     VelocityNet,
     create_checkpoint_manager,
@@ -213,8 +213,9 @@ def train_flow_matching_pipeline(
     logger.info("Setting up flow matching training pipeline")
 
     # Create physics setup with optional OpenEMS support
+    config = ArrayConfig()
     synthesize_ideal, compute_analytical = create_physics_setup(
-        openems_path=openems_path
+        config, openems_path=openems_path
     )
 
     # Create flow matcher and model
@@ -291,8 +292,9 @@ def evaluate_flow_matching_model(
     test_batch = next(test_angles)
 
     # Create physics setup for evaluation with optional OpenEMS support
+    config = ArrayConfig()
     synthesize_ideal, compute_analytical = create_physics_setup(
-        openems_path=openems_path
+        config, openems_path=openems_path
     )
 
     # Compute analytical weights and target patterns

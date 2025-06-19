@@ -232,11 +232,10 @@ def create_element_patterns(
 
 
 def create_physics_setup(
-    config: ArrayConfig | None = None,
+    config: ArrayConfig,
     openems_path: Path | None = None,
-):
+) -> tuple[Callable, Callable]:
     """Creates the physics simulation setup with optional OpenEMS data support."""
-    config = ArrayConfig() if config is None else config
 
     element_patterns = create_element_patterns(config, openems_path=openems_path)
     synthesize_pattern = create_pattern_synthesizer(element_patterns, config)
@@ -570,7 +569,8 @@ def demo_physics_patterns():
     """Demonstrate the physics simulation functions."""
     steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
 
-    synthesize_ideal, compute_analytical = create_physics_setup()
+    config = ArrayConfig()
+    synthesize_ideal, compute_analytical = create_physics_setup(config)
     weights, _ = compute_analytical(steering_angle)
     ideal_pattern = synthesize_ideal(weights)
 

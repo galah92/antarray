@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from physics import create_physics_setup, normalize_patterns
+from physics import ArrayConfig, create_physics_setup, normalize_patterns
 from training import (
     DenoisingUNet,
     create_progress_logger,
@@ -236,8 +236,9 @@ def train_diffusion_pipeline(
     logger.info("Setting up diffusion training pipeline")
 
     # Create physics setup with optional OpenEMS support
+    config = ArrayConfig()
     synthesize_ideal, compute_analytical = create_physics_setup(
-        openems_path=openems_path
+        config, openems_path=openems_path
     )
 
     # Create scheduler and model
@@ -305,8 +306,9 @@ def evaluate_diffusion_model(
     test_batch = next(test_angles)
 
     # Create physics setup for evaluation with optional OpenEMS support
+    config = ArrayConfig()
     synthesize_ideal, compute_analytical = create_physics_setup(
-        openems_path=openems_path
+        config, openems_path=openems_path
     )
 
     # Compute analytical weights and target patterns
