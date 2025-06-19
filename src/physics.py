@@ -160,7 +160,7 @@ def calculate_weights(
     return weights, phase_shifts
 
 
-def create_analytical_weight_calculator(config: ArrayConfig | None = None) -> Callable:
+def make_analytical_weight_calculator(config: ArrayConfig | None = None) -> Callable:
     """Factory to create a function for calculating analytical weights."""
     config = config or ArrayConfig()
 
@@ -181,7 +181,7 @@ def synthesize_pattern(element_field_basis: ArrayLike, weights: ArrayLike) -> ja
     return power_pattern
 
 
-def create_pattern_synthesizer(
+def make_pattern_synthesizer(
     element_patterns: jax.Array,
     config: ArrayConfig,
 ) -> Callable:
@@ -205,7 +205,7 @@ def create_pattern_synthesizer(
     return synthesize
 
 
-def create_element_patterns(
+def make_element_patterns(
     config: ArrayConfig,
     openems_path: Path | None = None,
 ) -> jax.Array:
@@ -231,16 +231,16 @@ def create_element_patterns(
     return E_field.astype(jnp.complex64)
 
 
-def create_physics_setup(
+def make_physics_setup(
     config: ArrayConfig,
     openems_path: Path | None = None,
 ) -> tuple[Callable, Callable]:
     """Creates the physics simulation setup with optional OpenEMS data support."""
 
-    element_patterns = create_element_patterns(config, openems_path=openems_path)
-    synthesize_pattern = create_pattern_synthesizer(element_patterns, config)
+    element_patterns = make_element_patterns(config, openems_path=openems_path)
+    synthesize_pattern = make_pattern_synthesizer(element_patterns, config)
 
-    compute_analytical = create_analytical_weight_calculator(config)
+    compute_analytical = make_analytical_weight_calculator(config)
 
     return synthesize_pattern, compute_analytical
 
@@ -507,7 +507,7 @@ def steering_repr(steering_angles: np.ndarray):
 def demo_phase_shifts():
     """Demonstrate phase shift calculations and visualization."""
     config = ArrayConfig()
-    compute_analytical = create_analytical_weight_calculator(config)
+    compute_analytical = make_analytical_weight_calculator(config)
 
     steering_angles = [
         [0, 0],  # Broadside
@@ -545,7 +545,7 @@ def demo_openems_patterns():
     """Demonstrate OpenEMS pattern loading with new unified interface."""
     config = ArrayConfig()
 
-    synthesize_ideal, compute_analytical = create_physics_setup(
+    synthesize_ideal, compute_analytical = make_physics_setup(
         config, openems_path=DEFAULT_SIM_PATH
     )
 
@@ -570,7 +570,7 @@ def demo_physics_patterns():
     steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
 
     config = ArrayConfig()
-    synthesize_ideal, compute_analytical = create_physics_setup(config)
+    synthesize_ideal, compute_analytical = make_physics_setup(config)
     weights, _ = compute_analytical(steering_angle)
     ideal_pattern = synthesize_ideal(weights)
 

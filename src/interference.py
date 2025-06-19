@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from physics import ArrayConfig, convert_to_db, create_physics_setup
+from physics import ArrayConfig, convert_to_db, make_physics_setup
 from training import (
     InterferenceCorrector,
     circular_mse_fn,
@@ -78,7 +78,7 @@ def train_pipeline(
 
     logger.info("Performing one-time precomputation")
     config = ArrayConfig()
-    synth_pattern, compute_weights = create_physics_setup(
+    synth_pattern, compute_weights = make_physics_setup(
         config, openems_path=openems_path
     )
     synth_pattern, compute_weights = jax.vmap(synth_pattern), jax.vmap(compute_weights)

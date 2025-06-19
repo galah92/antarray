@@ -12,7 +12,7 @@ from flax import nnx
 from jax.typing import ArrayLike
 
 import data
-from physics import ArrayConfig, create_physics_setup
+from physics import ArrayConfig, make_physics_setup
 from training import (
     circular_mse_fn,
     create_progress_logger,
@@ -261,7 +261,7 @@ def train(
     synthesize_ideal = None
     if use_physics_loss:
         config = ArrayConfig()
-        synthesize_ideal, _ = create_physics_setup(config, openems_path=openems_path)
+        synthesize_ideal, _ = make_physics_setup(config, openems_path=openems_path)
 
     warmup_step(dataset, optimizer, synthesize_ideal)
 

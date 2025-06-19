@@ -174,7 +174,7 @@ class Dataset:
             phi_rad=self.phi_rad,
         )
 
-        synthesize_ideal, compute_analytical = physics.create_physics_setup(
+        synthesize_ideal, compute_analytical = physics.make_physics_setup(
             config=config,
             openems_path=self.sim_path if use_openems else None,
         )
