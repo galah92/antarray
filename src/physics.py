@@ -20,6 +20,12 @@ from utils import setup_logging
 
 logger = logging.getLogger(__name__)
 
+root_dir = Path(__file__).parent.parent
+
+DEFAULT_SIM_DIR = root_dir / "openems" / "sim" / "antenna_array"
+DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
+DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
+
 
 # @dataclass(frozen=True)
 class ArrayConfig:
@@ -94,12 +100,10 @@ def load_openems_nf2ff(nf2ff_path: Path):
     return OpenEMSData(theta_rad, phi_rad, r, Dmax, freq_hz, E_field, power_density)
 
 
-def get_wavenumber(
-    freq_hz: float | None = None, config: ArrayConfig | None = None
-) -> float:
+def get_wavenumber(freq_hz: float | None = None) -> float:
     """Calculate the wavenumber for a given frequency in Hz."""
     if freq_hz is None:
-        freq_hz = config.freq_hz if config is not None else ArrayConfig.freq_hz
+        freq_hz = ArrayConfig.freq_hz
 
     c = 299792458  # Speed of light in m/s
     wavelength = c / freq_hz  # Wavelength in meters
@@ -107,19 +111,15 @@ def get_wavenumber(
     return k
 
 
-@lru_cache(maxsize=1)
+@lru_cache
 def get_element_positions(
     array_size: tuple[int, int] | None = None,
     spacing_mm: tuple[float, float] | None = None,
-    config: ArrayConfig | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Calculate element positions using config or explicit parameters."""
-    if config is not None:
-        array_size = config.array_size
-        spacing_mm = config.spacing_mm
-    elif array_size is None or spacing_mm is None:
-        # Use defaults from ArrayConfig
+    if array_size is None:
         array_size = ArrayConfig.array_size
+    if spacing_mm is None:
         spacing_mm = ArrayConfig.spacing_mm
 
     xn, yn = array_size
@@ -130,28 +130,29 @@ def get_element_positions(
     return x_positions, y_positions
 
 
-root_dir = Path(__file__).parent.parent
-
-DEFAULT_SIM_DIR = root_dir / "openems" / "sim" / "antenna_array"
-DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
-DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
+@lru_cache
+def compute_spatial_phase_coeffs(config: ArrayConfig) -> tuple[np.ndarray, np.ndarray]:
+    """Compute spatial phase coefficients (kx, ky) for antenna array elements."""
+    k = get_wavenumber(config.freq_hz)
+    x_pos, y_pos = get_element_positions(config.array_size, config.spacing_mm)
+    kx, ky = k * x_pos, k * y_pos
+    return kx, ky
 
 
 @jax.jit
 def calculate_weights(
     kx: ArrayLike,
     ky: ArrayLike,
-    steering_angle_rad: ArrayLike,
+    steering_angles: ArrayLike,
 ) -> tuple[jax.Array, jax.Array]:
-    """Calculates analytical weights for given steering angles."""
-    steering_angle_rad = jnp.atleast_2d(steering_angle_rad)
-    theta_steer, phi_steer = steering_angle_rad[:, 0], steering_angle_rad[:, 1]
+    """Calculates element weights for given steering angles."""
+    steering_angles = jnp.atleast_2d(steering_angles)
+    theta, phi = steering_angles[:, 0], steering_angles[:, 1]
 
-    sin_theta = jnp.sin(theta_steer)
-    ux = sin_theta * jnp.cos(phi_steer)  # (n_beams,)
-    uy = sin_theta * jnp.sin(phi_steer)  # (n_beams,)
+    sin_theta = jnp.sin(theta)
+    x_phase = jnp.outer(kx, sin_theta * jnp.cos(phi))  # (n_x, n_beams)
+    y_phase = jnp.outer(ky, sin_theta * jnp.sin(phi))  # (n_y, n_beams)
 
-    x_phase, y_phase = jnp.outer(kx, ux), jnp.outer(ky, uy)  # (n_x, n_beams)
     phase_shifts = x_phase[:, None, :] + y_phase[None, :, :]  # (n_x, n_y, n_beams)
 
     weights = jnp.exp(-1j * phase_shifts)  # (n_x, n_y, n_beams)
@@ -160,75 +161,77 @@ def calculate_weights(
     return weights, phase_shifts
 
 
-def make_analytical_weight_calculator(config: ArrayConfig | None = None) -> Callable:
-    """Factory to create a function for calculating analytical weights."""
-    config = config or ArrayConfig()
-
-    k = get_wavenumber(config=config)
-    x_pos, y_pos = get_element_positions(config=config)
-    kx, ky = k * x_pos, k * y_pos
+def make_element_weight_calculator(config: ArrayConfig) -> Callable:
+    """Factory to create a function for calculating element weights."""
+    kx, ky = compute_spatial_phase_coeffs(config)
     kx, ky = jnp.asarray(kx), jnp.asarray(ky)
-
     calculate = partial(calculate_weights, kx, ky)
     return calculate
 
 
+def compute_element_fields(
+    element_patterns: np.ndarray,
+    config: ArrayConfig,
+) -> np.ndarray:
+    """Create element field basis with geometric phase factors."""
+    kx, ky = compute_spatial_phase_coeffs(config)
+
+    sin_theta = np.sin(config.theta_rad)
+    sin_phi, cos_phi = np.sin(config.phi_rad), np.cos(config.phi_rad)
+    phase_x = np.einsum("t,p,x->tpx", sin_theta, cos_phi, kx)  # (n_theta, n_phi, n_x)
+    phase_y = np.einsum("t,p,y->tpy", sin_theta, sin_phi, ky)  # (n_theta, n_phi, n_y)
+
+    geo_phase = phase_x[..., None] + phase_y[..., None, :]  # (n_theta, n_phi, n_x, n_y)
+    geo_factor = np.exp(1j * geo_phase)  # (n_theta, n_phi, n_x, n_y)
+
+    element_fields = np.einsum("xytpz,tpxy->tpzxy", element_patterns, geo_factor)
+    return element_fields
+
+
 @jax.jit
-def synthesize_pattern(element_field_basis: ArrayLike, weights: ArrayLike) -> jax.Array:
+def synthesize_pattern(element_fields: ArrayLike, weights: ArrayLike) -> jax.Array:
     """Synthesizes a pattern from weights using the precomputed basis."""
-    total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_field_basis)
+    total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_fields)
     power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
     return power_pattern
 
 
 def make_pattern_synthesizer(
-    element_patterns: jax.Array,
+    element_patterns: np.ndarray,
     config: ArrayConfig,
 ) -> Callable:
     """Factory to create a pattern synthesis function."""
-
-    k = get_wavenumber(config=config)
-    x_pos, y_pos = get_element_positions(config=config)
-    k_pos_x, k_pos_y = k * x_pos, k * y_pos
-
-    sin_theta = jnp.sin(config.theta_rad)
-    ux = sin_theta[:, None] * jnp.cos(config.phi_rad)[None, :]
-    uy = sin_theta[:, None] * jnp.sin(config.phi_rad)[None, :]
-
-    phase_x, phase_y = ux[..., None] * k_pos_x, uy[..., None] * k_pos_y
-    geo_phase = phase_x[..., None] + phase_y[:, :, None, :]
-    geo_factor = jnp.exp(1j * geo_phase)
-
-    element_field_basis = jnp.einsum("xytpz,tpxy->tpzxy", element_patterns, geo_factor)
-
-    synthesize = partial(synthesize_pattern, element_field_basis)
+    element_fields = compute_element_fields(element_patterns, config)
+    element_fields = jnp.asarray(element_fields)
+    synthesize = partial(synthesize_pattern, element_fields)
     return synthesize
 
 
-def make_element_patterns(
+@lru_cache
+def load_element_patterns(
     config: ArrayConfig,
     openems_path: Path | None = None,
-) -> jax.Array:
+) -> np.ndarray:
     """Simulates element patterns for ideal array, with optional OpenEMS data."""
     if openems_path is not None:
         E_field = load_openems_nf2ff(openems_path).E_field  # (n_theta, n_phi, 2)
 
         reps = config.array_size + (1,) * E_field.ndim
-        E_field = jnp.tile(E_field, reps)  # (n_x, n_y, n_theta, n_phi, n_polarization)
+        E_field = np.tile(E_field, reps)  # (n_x, n_y, n_theta, n_phi, n_polarization)
         return E_field
 
     # Use existing synthetic generation (unchanged)
     theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
 
     # Base cosine model for field amplitude
-    amplitude = jnp.cos(config.theta_rad)
-    amplitude = amplitude.at[config.theta_rad > np.pi / 2].set(0)
-    amplitude = amplitude[:, None] * jnp.ones((theta_size, phi_size))
+    amplitude = np.cos(config.theta_rad)
+    amplitude = np.where(config.theta_rad > np.pi / 2, 0, amplitude)
+    amplitude = amplitude[:, None] * np.ones((theta_size, phi_size))
 
     E_field = amplitude[:, :, None]  # (n_theta, n_phi, 1)
     reps = config.array_size + (1,) * E_field.ndim
-    E_field = jnp.tile(E_field, reps)  # (n_x, n_y, n_theta, n_phi, n_polarization)
-    return E_field.astype(jnp.complex64)
+    E_field = np.tile(E_field, reps)  # (n_x, n_y, n_theta, n_phi, n_polarization)
+    return E_field.astype(np.complex64)
 
 
 def make_physics_setup(
@@ -237,12 +240,12 @@ def make_physics_setup(
 ) -> tuple[Callable, Callable]:
     """Creates the physics simulation setup with optional OpenEMS data support."""
 
-    element_patterns = make_element_patterns(config, openems_path=openems_path)
+    element_patterns = load_element_patterns(config, openems_path=openems_path)
     synthesize_pattern = make_pattern_synthesizer(element_patterns, config)
 
-    compute_analytical = make_analytical_weight_calculator(config)
+    compute_element_weights = make_element_weight_calculator(config)
 
-    return synthesize_pattern, compute_analytical
+    return synthesize_pattern, compute_element_weights
 
 
 @jax.jit
@@ -507,7 +510,7 @@ def steering_repr(steering_angles: np.ndarray):
 def demo_phase_shifts():
     """Demonstrate phase shift calculations and visualization."""
     config = ArrayConfig()
-    compute_analytical = make_analytical_weight_calculator(config)
+    compute_element_weights = make_element_weight_calculator(config)
 
     steering_angles = [
         [0, 0],  # Broadside
@@ -521,10 +524,10 @@ def demo_phase_shifts():
     nrows = 2
     ncols = np.ceil(steering_angles.shape[0] / 2).astype(np.int32)
 
-    # Use new analytical calculator
+    # Use new element weight calculator
     phase_shifts_list = []
     for angle in steering_angles:
-        _, phase_shifts = compute_analytical(np.radians(angle))
+        _, phase_shifts = compute_element_weights(np.radians(angle))
         phase_shifts_list.append(phase_shifts)
 
     kw = dict(figsize=(15, 10), sharex=True, sharey=True, layout="compressed")
@@ -545,13 +548,13 @@ def demo_openems_patterns():
     """Demonstrate OpenEMS pattern loading with new unified interface."""
     config = ArrayConfig()
 
-    synthesize_ideal, compute_analytical = make_physics_setup(
+    synthesize_ideal, compute_element_weights = make_physics_setup(
         config, openems_path=DEFAULT_SIM_PATH
     )
 
     steering_deg = jnp.array([30, 45])
     steering_angle = jnp.radians(steering_deg)
-    weights, _ = compute_analytical(steering_angle)
+    weights, _ = compute_element_weights(steering_angle)
     power_pattern = synthesize_ideal(weights)
     power_dB = convert_to_db(power_pattern)
 
@@ -570,8 +573,8 @@ def demo_physics_patterns():
     steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
 
     config = ArrayConfig()
-    synthesize_ideal, compute_analytical = make_physics_setup(config)
-    weights, _ = compute_analytical(steering_angle)
+    synthesize_ideal, compute_element_weights = make_physics_setup(config)
+    weights, _ = compute_element_weights(steering_angle)
     ideal_pattern = synthesize_ideal(weights)
 
     floor_db = -60.0  # dB floor for clipping

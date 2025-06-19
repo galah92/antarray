@@ -174,18 +174,18 @@ class Dataset:
             phi_rad=self.phi_rad,
         )
 
-        synthesize_ideal, compute_analytical = physics.make_physics_setup(
+        synthesize_ideal, compute_element_weights = physics.make_physics_setup(
             config=config,
             openems_path=self.sim_path if use_openems else None,
         )
 
         # Use embedded patterns for realistic simulation
         self.synthesize_pattern = synthesize_ideal
-        self.compute_analytical = compute_analytical
+        self.compute_element_weights = compute_element_weights
 
         def unified_pattern_from_steering(steering_angles):
             """Generate patterns using unified physics interface."""
-            weights, _ = self.compute_analytical(steering_angles)
+            weights, _ = self.compute_element_weights(steering_angles)
             pattern = self.synthesize_pattern(weights)
             return pattern, weights
 

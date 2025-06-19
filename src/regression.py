@@ -1,7 +1,7 @@
 import logging
 from functools import partial
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import NamedTuple, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -12,7 +12,12 @@ from flax import nnx
 from jax.typing import ArrayLike
 
 import data
-from physics import ArrayConfig, make_physics_setup
+from physics import (
+    ArrayConfig,
+    compute_element_fields,
+    load_element_patterns,
+    synthesize_pattern,
+)
 from training import (
     circular_mse_fn,
     create_progress_logger,
@@ -172,36 +177,39 @@ class RegressionNet(nnx.Module):
         return x
 
 
-@partial(nnx.jit, static_argnames=("synth_pattern",))
+synthesize_patterns = jax.vmap(synthesize_pattern, in_axes=(None, 0))  # Batch weights
+
+
+class ArrayParams(NamedTuple):
+    element_fields: jax.Array
+
+
+@nnx.jit
 def train_step(
     optimizer: nnx.Optimizer,
     batch: data.DataBatch,
-    synth_pattern: Callable | None = None,
+    params: ArrayParams,
 ) -> dict[str, float]:
     model = optimizer.model
-
-    if synth_pattern is not None:
-        synth_pattern = jax.vmap(synth_pattern)
 
     def loss_fn(model: RegressionNet, batch: data.DataBatch) -> tuple[jax.Array, dict]:
         pred_phase_shifts = model(batch.radiation_patterns)
 
-        metrics = {}
-
         circular_mse = circular_mse_fn(batch.phase_shifts, pred_phase_shifts)
-        loss = circular_mse
-        metrics["circular_mse"] = circular_mse
-        metrics["circular_rmse"] = jnp.sqrt(circular_mse)
 
-        if synth_pattern is not None:
-            pred_patterns = synth_pattern(pred_phase_shifts)
-            # FIXME: also need to denormalize
-            radiation_patterns = batch.radiation_patterns[..., 0]
-            physics_loss = ((pred_patterns - radiation_patterns) ** 2).mean()
-            loss += physics_loss
-            metrics["physics_loss"] = physics_loss
+        pred_weights = jnp.exp(1j * pred_phase_shifts)
+        pred_patterns = synthesize_patterns(params.element_fields, pred_weights)
+        # FIXME: also need to denormalize the patterns
+        radiation_patterns = batch.radiation_patterns[..., 0]
+        pattern_loss = ((pred_patterns - radiation_patterns) ** 2).mean()
 
-        metrics["loss"] = loss
+        loss = circular_mse + pattern_loss
+        metrics = dict(
+            loss=loss,
+            circular_mse=circular_mse,
+            circular_rmse=jnp.sqrt(circular_mse),
+            pattern_loss=pattern_loss,
+        )
         return loss, metrics
 
     (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
@@ -214,11 +222,13 @@ def train_step(
 def warmup_step(
     dataset: data.Dataset,
     optimizer: nnx.Optimizer,
-    synth_pattern: Callable | None = None,
+    params: ArrayParams,
 ):
     logger.info("Warming up GPU kernels")
+    optimizer.model.eval()
     warmup_batch = next(dataset)
-    _ = train_step(optimizer, warmup_batch, synth_pattern)
+    _ = train_step(optimizer, warmup_batch, params)
+    optimizer.model.train()
     logger.info("Warmup completed")
 
 
@@ -232,13 +242,12 @@ def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimiz
 @app.command()
 def train(
     n_steps: int = 100_000,
-    batch_size: int = 1024,
+    batch_size: int = 512,
     lr: float = 2e-3,
     seed: int = 42,
     restore: bool = True,
     overwrite: bool = False,
     openems_path: Path | None = None,
-    use_physics_loss: bool = True,
 ):
     key = jax.random.key(seed)
     key, dataset_key, model_key = jax.random.split(key, num=3)
@@ -257,13 +266,12 @@ def train(
     n_steps -= start_step
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
-    # Setup physics if needed
-    synthesize_ideal = None
-    if use_physics_loss:
-        config = ArrayConfig()
-        synthesize_ideal, _ = make_physics_setup(config, openems_path=openems_path)
+    config = ArrayConfig()
+    element_patterns = load_element_patterns(config, openems_path=openems_path)
+    element_fields = compute_element_fields(element_patterns, config)
+    array_params = ArrayParams(element_fields=jnp.asarray(element_fields))
 
-    warmup_step(dataset, optimizer, synthesize_ideal)
+    warmup_step(dataset, optimizer, array_params)
 
     logger.info("Starting training")
     log_progress = create_progress_logger(
@@ -272,7 +280,7 @@ def train(
 
     try:
         for step, batch in enumerate(dataset, start=start_step):
-            metrics = train_step(optimizer, batch, synthesize_ideal)
+            metrics = train_step(optimizer, batch, array_params)
             save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
             log_progress(step, metrics)
     except KeyboardInterrupt:

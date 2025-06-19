@@ -95,21 +95,21 @@ class DDPMScheduler:
 def create_train_step_fn(
     synthesize_ideal_pattern: Callable,
     synthesize_embedded_pattern: Callable,
-    compute_analytical_weights: Callable,
+    compute_element_weights: Callable,
     scheduler: DDPMScheduler,
 ):
     """Factory that creates the jitted training step function for diffusion."""
-    vmapped_analytical_weights = jax.vmap(compute_analytical_weights)
+    vmapped_element_weights = jax.vmap(compute_element_weights)
     vmapped_embedded_synthesizer = jax.vmap(synthesize_embedded_pattern)
 
     def loss_fn(model: DenoisingUNet, batch_of_angles_rad: jax.Array, key: jax.Array):
         batch_size = batch_of_angles_rad.shape[0]
 
-        # Generate analytical weights and target patterns
-        analytical_weights, _ = vmapped_analytical_weights(batch_of_angles_rad)
+        # Generate element weights and target patterns
+        element_weights, _ = vmapped_element_weights(batch_of_angles_rad)
 
         # Create target patterns (ideal case)
-        ideal_patterns = jax.vmap(synthesize_ideal_pattern)(analytical_weights)
+        ideal_patterns = jax.vmap(synthesize_ideal_pattern)(element_weights)
         target_patterns = normalize_patterns(ideal_patterns)
 
         # Sample random timesteps
@@ -118,11 +118,11 @@ def create_train_step_fn(
             timestep_key, (batch_size,), 0, scheduler.num_train_timesteps
         )
 
-        # Add noise to analytical weights
+        # Add noise to element weights
         noise = jax.random.normal(
-            noise_key, analytical_weights.shape, dtype=analytical_weights.dtype
+            noise_key, element_weights.shape, dtype=element_weights.dtype
         )
-        noisy_weights = scheduler.add_noise(analytical_weights, noise, timesteps)
+        noisy_weights = scheduler.add_noise(element_weights, noise, timesteps)
 
         # Model predicts the noise
         predicted_noise = model(
@@ -311,12 +311,12 @@ def evaluate_diffusion_model(
         config, openems_path=openems_path
     )
 
-    # Compute analytical weights and target patterns
-    vmapped_analytical_weights = jax.vmap(compute_analytical)
-    analytical_weights, _ = vmapped_analytical_weights(test_batch)
+    # Compute element weights and target patterns
+    vmapped_element_weights = jax.vmap(compute_analytical)
+    element_weights, _ = vmapped_element_weights(test_batch)
 
     # Create ideal target patterns
-    ideal_target_patterns = jax.vmap(synthesize_ideal)(analytical_weights)
+    ideal_target_patterns = jax.vmap(synthesize_ideal)(element_weights)
     ideal_target_patterns = normalize_patterns(ideal_target_patterns)
 
     # Solve using diffusion for each target pattern
@@ -338,7 +338,7 @@ def evaluate_diffusion_model(
     predicted_weights = jax.vmap(solve_single)(ideal_target_patterns, solve_keys)
 
     # Compute evaluation metrics
-    weight_mse = jnp.mean(jnp.abs(predicted_weights - analytical_weights) ** 2)
+    weight_mse = jnp.mean(jnp.abs(predicted_weights - element_weights) ** 2)
 
     # Pattern quality metrics
     predicted_patterns = jax.vmap(synthesize_embedded)(predicted_weights)
@@ -354,7 +354,7 @@ def evaluate_diffusion_model(
         "pattern_mse": pattern_mse,
         "test_angles": test_batch,
         "predicted_weights": predicted_weights,
-        "analytical_weights": analytical_weights,
+        "element_weights": element_weights,
         "predicted_patterns": predicted_patterns,
         "target_patterns": ideal_target_patterns,
     }

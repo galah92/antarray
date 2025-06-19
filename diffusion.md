@@ -14,15 +14,15 @@ The strategy is broken into two distinct phases:
 
 **The Process (End-to-End Physics-Informed Training):**
 
-1.  **Generate a Scenario:** Start with a simple, ideal case: calculate the `analytical_weights` for a random steering angle and the corresponding ideal `target_pattern`.
-2.  **Add Noise:** Take the simple `analytical_weights` and add a random amount of noise to them. This creates our `noised_weights`.
+1.  **Generate a Scenario:** Start with a simple, ideal case: calculate the `element_weights` for a random steering angle and the corresponding ideal `target_pattern`.
+2.  **Add Noise:** Take the simple `element_weights` and add a random amount of noise to them. This creates our `noised_weights`.
 3.  **The Model's Task:** Feed the `noised_weights` into the `DenoisingUNet`. The model's job is to predict a set of "clean" `corrective_weights`.
-4.  **The Physics-Based Loss:** This is the crucial step. We **do not** compare the model's output to the original `analytical_weights`. Instead:
+4.  **The Physics-Based Loss:** This is the crucial step. We **do not** compare the model's output to the original `element_weights`. Instead:
     *   We take the model's predicted `corrective_weights`.
     *   We plug them into our **real-world physics simulator** (`synthesize_embedded_pattern`).
     *   The loss is the difference between the resulting *simulated pattern* and our *desired target_pattern*.
 
-**The Outcome:** The gradient from this loss forces the UNet to learn a very complex task. It learns to output weights that are **intentionally different** from the simple `analytical_weights` in a very specific way that perfectly counteracts the distortion of the embedded system. It learns the **inverse transformation function**.
+**The Outcome:** The gradient from this loss forces the UNet to learn a very complex task. It learns to output weights that are **intentionally different** from the simple `element_weights` in a very specific way that perfectly counteracts the distortion of the embedded system. It learns the **inverse transformation function**.
 
 ---
 
