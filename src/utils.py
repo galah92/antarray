@@ -20,7 +20,9 @@ def setup_logging():
         ],
         force=True,  # https://github.com/google/orbax/issues/1248
     )
-    logging.getLogger("absl").setLevel(logging.CRITICAL)  # Suppress absl logging
+    loggers = ("absl", "jax._src.xla_bridge")
+    for logger_name in loggers:
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)  # Suppress logging
 
     # Log the command line arguments
     logger = logging.getLogger(__name__)
