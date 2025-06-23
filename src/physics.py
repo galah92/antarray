@@ -191,7 +191,7 @@ def compute_element_fields(
 @jax.jit
 def synthesize_pattern(element_fields: ArrayLike, weights: ArrayLike) -> jax.Array:
     """Synthesizes a pattern from weights using the precomputed basis."""
-    total_field = jnp.einsum("xy,tpzxy->tpz", weights, element_fields)
+    total_field = jnp.einsum("tpzxy,xy->tpz", element_fields, weights)
     power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
     return power_pattern
 
