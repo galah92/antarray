@@ -368,7 +368,7 @@ def save_checkpoint(
 def restore_checkpoint(
     mngr: ocp.CheckpointManager,
     item: nnx.Optimizer | nnx.Module,
-    step: int | None,
+    step: int | None = None,
 ) -> int:
     """Restore checkpoint using orbax."""
     if step is None:

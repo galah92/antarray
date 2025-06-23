@@ -16,7 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 jax = [
-    "jax[cuda12]==0.6.1",
+    "jax[cuda12]==0.6.2 ; platform_system == 'linux'",
+    "jax==0.6.2 ; platform_system != 'linux'",
     "flax>=0.10.6",
     "optax>=0.2.4",
     "orbax-checkpoint>=0.11.13",

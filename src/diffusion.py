@@ -358,9 +358,9 @@ def evaluate(
     scheduler = DDPMScheduler(num_train_timesteps=1000)
 
     params = DiffusionParams(
-        scheduler=scheduler,
         element_fields=jnp.asarray(element_fields),
-        spatial_phase_coeffs=(jnp.asarray(kx), jnp.asarray(ky)),
+        kx=jnp.asarray(kx),
+        ky=jnp.asarray(ky),
     )
 
     key, model_key, data_key = jax.random.split(key, 3)
@@ -380,7 +380,7 @@ def evaluate(
     model = optimizer.model
 
     # Create test data
-    sampler = steering_angles_sampler(data_key, n_eval_samples)
+    sampler = steering_angles_sampler(data_key, n_eval_samples, limit=1)
 
     logger.info(f"Evaluating diffusion model on {n_eval_samples} samples")
 
@@ -389,8 +389,8 @@ def evaluate(
 
         # Create target pattern
         element_weights, _ = vmapped_calculate_weights(
-            params.spatial_phase_coeffs[0],
-            params.spatial_phase_coeffs[1],
+            params.kx,
+            params.ky,
             steering_angles,
         )
         target_pattern = vmapped_synthesize(params.element_fields, element_weights)
