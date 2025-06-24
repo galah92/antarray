@@ -418,14 +418,20 @@ def steering_angles_sampler(
     key: jax.Array,
     batch_size: int,
     limit: int,
-    theta_end: float = np.radians(60),
+    theta_end: float = 60,
+    device: str | None = None,
 ) -> Iterator[jax.Array]:
     """Creates a generator that yields batches of random steering angles."""
+    device = jax.devices(device)[0]
+    minval = jax.device_put(0.0, device=device)
+    theta_end = jax.device_put(theta_end, device=device)
+    phi_end = jax.device_put(2 * jnp.pi, device=device)
+    uniform = jax.random.uniform
     for _ in range(limit):
         key, theta_key, phi_key = jax.random.split(key, num=3)
-        thetas = jax.random.uniform(theta_key, shape=(batch_size,), maxval=theta_end)
-        phis = jax.random.uniform(phi_key, shape=(batch_size,), maxval=2 * jnp.pi)
-        yield jnp.stack([thetas, phis], axis=-1)
+        theta = uniform(theta_key, shape=(batch_size,), minval=minval, maxval=theta_end)
+        phi = uniform(phi_key, shape=(batch_size,), minval=minval, maxval=phi_end)
+        yield jnp.stack([theta, phi], axis=-1)
 
 
 @jax.jit

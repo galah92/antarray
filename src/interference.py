@@ -128,4 +128,8 @@ def train_pipeline(
 
 if __name__ == "__main__":
     setup_logging()
-    train_pipeline()
+    try:
+        train_pipeline()
+    except Exception as e:
+        logger.error("An error occurred during training", exc_info=e)
+        raise
