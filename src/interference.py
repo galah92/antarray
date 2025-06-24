@@ -1,14 +1,21 @@
 import logging
-from collections.abc import Callable
-from functools import partial
 from pathlib import Path
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from physics import ArrayConfig, convert_to_db, make_physics_setup
+from physics import (
+    ArrayConfig,
+    calculate_weights,
+    compute_element_fields,
+    compute_spatial_phase_coeffs,
+    convert_to_db,
+    load_element_patterns,
+    synthesize_pattern,
+)
 from training import (
     InterferenceCorrector,
     circular_mse_fn,
@@ -19,27 +26,36 @@ from utils import setup_logging
 
 logger = logging.getLogger(__name__)
 
+convert_to_db_vm = jax.vmap(convert_to_db)
+calculate_weights_vm = jax.vmap(calculate_weights, in_axes=(None, None, 0))
+synthesize_pattern_vm = jax.vmap(synthesize_pattern, in_axes=(None, 0))
 
-@partial(nnx.jit, static_argnames=("synth_pattern", "compute_weights"))
+
+class PhysicsParams(NamedTuple):
+    element_fields: jax.Array
+    kx: jax.Array
+    ky: jax.Array
+
+
+@nnx.jit
 def train_step(
     optimizer: nnx.Optimizer,
     batch: jax.Array,
-    synth_pattern: Callable,
-    compute_weights: Callable,
+    params: PhysicsParams,
 ) -> dict[str, float]:
     model = optimizer.model
 
-    convert_to_db_vm = jax.vmap(convert_to_db)
-
-    target_weights, target_phase_shifts = compute_weights(batch)
+    target_weights, target_phase_shifts = calculate_weights_vm(
+        params.kx, params.ky, batch
+    )
     target_phase_shifts = jnp.squeeze(target_phase_shifts)
 
-    target_patterns = synth_pattern(target_weights)
+    target_patterns = synthesize_pattern_vm(params.element_fields, target_weights)
 
     def loss_fn(model: InterferenceCorrector, target_patterns: jax.Array):
         pred_weights, pred_phase_shifts = model(target_patterns)
 
-        pred_patterns = synth_pattern(pred_weights)
+        pred_patterns = synthesize_pattern_vm(params.element_fields, pred_weights)
 
         target_patterns_db = convert_to_db_vm(target_patterns)
         pred_patterns_db = convert_to_db_vm(pred_patterns)
@@ -67,7 +83,7 @@ def train_step(
 
 def train_pipeline(
     n_steps: int = 10_000,
-    batch_size: int = 512,
+    batch_size: int = 32,
     lr: float = 5e-4,
     seed: int = 42,
     openems_path: Path | None = None,
@@ -78,22 +94,31 @@ def train_pipeline(
 
     logger.info("Performing one-time precomputation")
     config = ArrayConfig()
-    synth_pattern, compute_weights = make_physics_setup(
-        config, openems_path=openems_path
+    kx, ky = compute_spatial_phase_coeffs(config)
+    element_patterns = load_element_patterns(config, openems_path=openems_path)
+    element_fields = compute_element_fields(element_patterns, config)
+
+    physics_params = PhysicsParams(
+        element_fields=jnp.asarray(element_fields),
+        kx=jnp.asarray(kx),
+        ky=jnp.asarray(ky),
     )
-    synth_pattern, compute_weights = jax.vmap(synth_pattern), jax.vmap(compute_weights)
 
     model = InterferenceCorrector(rngs=nnx.Rngs(model_key))
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=lr))
 
     sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
 
-    logger.info("Starting training")
-    log_progress = create_progress_logger(n_steps, log_every=100)
+    logger.info("Warming up GPU kernels")
+    model.eval()
+    train_step(optimizer, next(sampler), physics_params)
+    model.train()
 
+    log_progress = create_progress_logger(n_steps, log_every=10)
+    logger.info("Starting training")
     try:
         for step, batch in enumerate(sampler):
-            metrics = train_step(optimizer, batch, synth_pattern, compute_weights)
+            metrics = train_step(optimizer, batch, physics_params)
             log_progress(step, metrics)
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
