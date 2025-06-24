@@ -70,7 +70,7 @@ class ConvBlock(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ):
-        self.conv1 = nnx.Conv(
+        self.conv = nnx.Conv(
             in_features,
             out_features,
             kernel_size=kernel_size,
@@ -78,20 +78,13 @@ class ConvBlock(nnx.Module):
             use_bias=False,
             rngs=rngs,
         )
-        self.norm1 = nnx.BatchNorm(out_features, rngs=rngs)
-        self.conv2 = nnx.Conv(
-            out_features,
-            out_features,
-            kernel_size=kernel_size,
-            padding=padding,
-            use_bias=False,
-            rngs=rngs,
-        )
-        self.norm2 = nnx.BatchNorm(out_features, rngs=rngs)
+        self.norm = nnx.BatchNorm(out_features, rngs=rngs)
+        self.out_features = out_features
 
     def __call__(self, x: jax.Array) -> jax.Array:
-        x = nnx.relu(self.norm1(self.conv1(x)))
-        x = nnx.relu(self.norm2(self.conv2(x)))
+        x = self.conv(x)
+        x = self.norm(x)
+        x = nnx.relu(x)
         return x
 
 
@@ -335,8 +328,9 @@ class InterferenceCorrector(nnx.Module):
         d2 = self.dec_conv2(c1)
 
         d3 = self.dec_conv3(d2)
-        phase_shifts = self.final_conv(d3).squeeze(-1)
+        phase_shifts = self.final_conv(d3)
 
+        phase_shifts = phase_shifts.squeeze(-1)  # Remove channel dimension
         complex_weights = jnp.exp(-1j * phase_shifts)
         return complex_weights, phase_shifts
 
@@ -424,7 +418,7 @@ def steering_angles_sampler(
     """Creates a generator that yields batches of random steering angles."""
     device = jax.devices(device)[0]
     minval = jax.device_put(0.0, device=device)
-    theta_end = jax.device_put(theta_end, device=device)
+    theta_end = jax.device_put(jnp.radians(theta_end), device=device)
     phi_end = jax.device_put(2 * jnp.pi, device=device)
     uniform = jax.random.uniform
     for _ in range(limit):

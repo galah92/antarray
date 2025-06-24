@@ -30,16 +30,12 @@ logger = logging.getLogger(__name__)
 
 def preprocess_pattern(pattern: jax.Array) -> jax.Array:
     """Preprocess the pattern by converting it to dB scale, clipping and normalizing."""
-    pattern_db = convert_to_db(pattern)
-
-    a_min = -30.0  # dB threshold for clipping
-    clipped = jnp.clip(pattern_db, a_min=a_min, a_max=None)  # Clip to -30 dB
-
-    normalized = (clipped - a_min) / (0 - a_min)  # Normalize to [0, 1]
+    floor_db = -30.0  # dB threshold for clipping
+    pattern_db = convert_to_db(pattern, floor_db=floor_db)
+    normalized = (pattern_db - floor_db) / (0 - floor_db)  # Normalize to [0, 1]
     return normalized
 
 
-convert_to_db_vm = jax.vmap(convert_to_db)
 preprocess_pattern_vm = jax.vmap(preprocess_pattern)
 calculate_weights_vm = jax.vmap(calculate_weights, in_axes=(None, None, 0))
 synthesize_pattern_vm = jax.vmap(synthesize_pattern, in_axes=(None, 0))
@@ -70,8 +66,8 @@ def train_step(
         pred_weights, pred_phase_shifts = model(preprocessed_patterns)
         pred_patterns = synthesize_pattern_vm(params.element_fields, pred_weights)
 
-        target_patterns_db = convert_to_db_vm(target_patterns)
-        pred_patterns_db = convert_to_db_vm(pred_patterns)
+        target_patterns_db = preprocess_pattern_vm(target_patterns)
+        pred_patterns_db = preprocess_pattern_vm(pred_patterns)
         patterns_mse = ((target_patterns_db - pred_patterns_db) ** 2).mean()
 
         phase_shifts_mse = circular_mse_fn(target_phase_shifts, pred_phase_shifts)
