@@ -8,6 +8,7 @@ import optax
 from flax import nnx
 
 from physics import (
+    DEFAULT_SIM_PATH,
     ArrayConfig,
     calculate_weights,
     compute_element_fields,
@@ -26,7 +27,20 @@ from utils import setup_logging
 
 logger = logging.getLogger(__name__)
 
+
+def preprocess_pattern(pattern: jax.Array) -> jax.Array:
+    """Preprocess the pattern by converting it to dB scale, clipping and normalizing."""
+    pattern_db = convert_to_db(pattern)
+
+    a_min = -30.0  # dB threshold for clipping
+    clipped = jnp.clip(pattern_db, a_min=a_min, a_max=None)  # Clip to -30 dB
+
+    normalized = (clipped - a_min) / (0 - a_min)  # Normalize to [0, 1]
+    return normalized
+
+
 convert_to_db_vm = jax.vmap(convert_to_db)
+preprocess_pattern_vm = jax.vmap(preprocess_pattern)
 calculate_weights_vm = jax.vmap(calculate_weights, in_axes=(None, None, 0))
 synthesize_pattern_vm = jax.vmap(synthesize_pattern, in_axes=(None, 0))
 
@@ -49,18 +63,17 @@ def train_step(
         params.kx, params.ky, batch
     )
     target_phase_shifts = jnp.squeeze(target_phase_shifts)
-
     target_patterns = synthesize_pattern_vm(params.element_fields, target_weights)
 
     def loss_fn(model: InterferenceCorrector, target_patterns: jax.Array):
-        pred_weights, pred_phase_shifts = model(target_patterns)
-
+        preprocessed_patterns = preprocess_pattern_vm(target_patterns)
+        pred_weights, pred_phase_shifts = model(preprocessed_patterns)
         pred_patterns = synthesize_pattern_vm(params.element_fields, pred_weights)
 
         target_patterns_db = convert_to_db_vm(target_patterns)
         pred_patterns_db = convert_to_db_vm(pred_patterns)
-
         patterns_mse = ((target_patterns_db - pred_patterns_db) ** 2).mean()
+
         phase_shifts_mse = circular_mse_fn(target_phase_shifts, pred_phase_shifts)
 
         loss = patterns_mse + phase_shifts_mse
@@ -86,7 +99,7 @@ def train_pipeline(
     batch_size: int = 32,
     lr: float = 5e-4,
     seed: int = 42,
-    openems_path: Path | None = None,
+    openems_path: Path | None = DEFAULT_SIM_PATH,
 ):
     """Main function to set up and run the training pipeline."""
     key = jax.random.key(seed)
