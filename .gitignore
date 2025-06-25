@@ -179,6 +179,7 @@ cython_debug/
 .h5
 *.pt
 dataset
+cst
 experiments
 checkpoints
 flow_matching_checkpoints

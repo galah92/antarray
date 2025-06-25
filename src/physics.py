@@ -373,20 +373,21 @@ def plot_ff_2d(
     title: str = "2D Radiation Pattern",
     colorbar: bool = True,
     ax: plt.Axes | None = None,
-):
+) -> AxesImage:
     if ax is None:
         _, ax = plt.subplots(1, 1, figsize=(8, 6))
 
-    theta_deg, phi_deg = np.rad2deg(theta_rad), np.rad2deg(phi_rad)
+    theta_deg, phi_deg = np.degrees(theta_rad), np.degrees(phi_rad)
     extent = (np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg))
     aspect = theta_deg.size / phi_deg.size
     im = ax.imshow(pattern, extent=extent, origin="lower", aspect=aspect)
-    ax.set_xlabel("θ°")
-    ax.set_ylabel("φ°")
+    ax.set(xticks=theta_deg[::30], yticks=phi_deg[::30], xlabel="θ°", ylabel="φ°")
     ax.set_title(title)
 
     if colorbar:
         ax.figure.colorbar(im, fraction=0.046, pad=0.04, label="Normalized Dbi")
+
+    return im
 
 
 def plot_sine_space(
@@ -460,9 +461,10 @@ def plot_pattern(
     if title is not None:
         fig.suptitle(title)
     axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
-    plot_ff_2d(theta_rad, phi_rad, pattern, ax=axd["A"])
-    plot_sine_space(theta_rad, phi_rad, pattern, ax=axd["B"])
+    im = plot_ff_2d(theta_rad, phi_rad, pattern, ax=axd["A"], colorbar=False)
+    plot_sine_space(theta_rad, phi_rad, pattern, ax=axd["B"], colorbar=False)
     plot_ff_3d(theta_rad, phi_rad, pattern, clip_min_db=clip_min_db, ax=axd["C"])
+    fig.colorbar(im, ax=axd["B"], label="Normalized Dbi")
 
 
 def plot_phase_shifts(
