@@ -255,7 +255,9 @@ def make_pattern_synthesizer(
 
 @jax.jit
 def find_correction_weights(
-    target_field: jax.Array, element_fields: jax.Array
+    target_field: jax.Array,
+    element_fields: jax.Array,
+    alpha: float = 1e-2,
 ) -> jax.Array:
     """Finds the optimal weights for the distorted array to match a target field using least-squares."""
     n_x, n_y, n_theta, n_phi, n_pol = element_fields.shape
@@ -265,8 +267,10 @@ def find_correction_weights(
     A = element_fields.transpose(2, 3, 4, 0, 1).reshape(n_points, n_elements)
     b = target_field.flatten()  # (n_points,)
 
-    # Solve the least-squares problem A * w = b for w
-    w = jnp.linalg.lstsq(A, b, rcond=None)[0]  #  (n_elements,)
+    # Solve the Ridge Regression problem: (A^H * A + alpha*I) * w = A^H * b
+    A_H = A.T.conj()
+    I = jnp.eye(n_elements)
+    w = jnp.linalg.solve(A_H @ A + alpha * I, A_H @ b)  #  (n_elements,)
 
     w = w.reshape(n_x, n_y)  # (n_x, n_y)
     return w
