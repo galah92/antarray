@@ -487,21 +487,27 @@ def plot_pattern(
     phi_rad: ArrayLike | None = None,
     clip_min_db: float | None = None,
     title: str | None = None,
-    fig: plt.Figure | SubFigure | None = None,
-):
+    colorbar: str | None = None,
+    fig: plt.FigureBase | None = None,
+) -> plt.FigureBase:
     if theta_rad is None:
         theta_rad = ArrayConfig.theta_rad
     if phi_rad is None:
         phi_rad = ArrayConfig.phi_rad
+
     if fig is None:
         fig = plt.figure(figsize=(15, 5), layout="compressed")
-    if title is not None:
-        fig.suptitle(title)
     axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
     im = plot_ff_2d(theta_rad, phi_rad, pattern, ax=axd["A"], colorbar=False)
     plot_sine_space(theta_rad, phi_rad, pattern, ax=axd["B"], colorbar=False)
     plot_ff_3d(theta_rad, phi_rad, pattern, clip_min_db=clip_min_db, ax=axd["C"])
-    fig.colorbar(im, ax=axd["B"], label="Normalized Dbi")
+
+    if title is not None:
+        fig.suptitle(title)
+    if colorbar is not None:
+        fig.colorbar(im, ax=axd["B"], label=colorbar)
+
+    return fig
 
 
 def plot_phase_shifts(
