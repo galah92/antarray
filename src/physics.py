@@ -227,10 +227,17 @@ def compute_element_fields(
     return element_fields
 
 
-@jax.jit
-def synthesize_pattern(element_fields: ArrayLike, weights: ArrayLike) -> jax.Array:
+@partial(jax.jit, static_argnames=("power",))
+def synthesize_pattern(
+    element_fields: ArrayLike,
+    weights: ArrayLike,
+    power: bool = True,
+) -> jax.Array:
     """Synthesizes a pattern from weights using the precomputed basis."""
     total_field = jnp.einsum("xytpz,xy->tpz", element_fields, weights)
+    if not power:
+        return total_field
+
     power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
     return power_pattern
 
@@ -244,6 +251,25 @@ def make_pattern_synthesizer(
     element_fields = jnp.asarray(element_fields)
     synthesize = partial(synthesize_pattern, element_fields)
     return synthesize
+
+
+@jax.jit
+def find_correction_weights(
+    target_field: jax.Array, element_fields: jax.Array
+) -> jax.Array:
+    """Finds the optimal weights for the distorted array to match a target field using least-squares."""
+    n_x, n_y, n_theta, n_phi, n_pol = element_fields.shape
+    n_elements = n_x * n_y
+    n_points = n_theta * n_phi * n_pol
+
+    A = element_fields.transpose(2, 3, 4, 0, 1).reshape(n_points, n_elements)
+    b = target_field.flatten()  # (n_points,)
+
+    # Solve the least-squares problem A * w = b for w
+    w = jnp.linalg.lstsq(A, b, rcond=None)[0]  #  (n_elements,)
+
+    w = w.reshape(n_x, n_y)  # (n_x, n_y)
+    return w
 
 
 @lru_cache
