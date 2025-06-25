@@ -113,9 +113,9 @@ def load_cst(cst_path: Path) -> CstData:
         "phi_deg",
         "abs_dir",
         "abs_cross",
-        "phase_cross",
+        "phase_cross_deg",
         "abs_copol",
-        "phase_copol",
+        "phase_copol_deg",
         "ax_ratio",
     )
     data = {}
@@ -126,13 +126,14 @@ def load_cst(cst_path: Path) -> CstData:
     data = [v for _, v in sorted(data.items())]
     data = np.stack(data, axis=0)  # (16, 181 * 360, ...)
 
-    fields = data["abs_cross"] * np.exp(1j * data["phase_cross"])
+    E_cross = data["abs_cross"] * np.exp(1j * np.radians(data["phase_cross_deg"]))
+    E_copol = data["abs_copol"] * np.exp(1j * np.radians(data["phase_copol_deg"]))
+    fields = np.stack([E_copol, E_cross], axis=-1)
 
-    fields = fields.reshape(-1, 360, 181)  #  (n_element, phi, theta)
-    fields = fields[:, :, :-1]  #  Remove last theta value
-    fields = fields.transpose((0, 2, 1))  #  (n_element, theta, phi)
-    fields = fields.reshape(4, 4, *fields.shape[1:3])  # (n_x, n_y, n_theta, n_phi)
-    fields = fields[..., None]  # (n_x, n_y, n_theta, n_phi, n_pol)
+    fields = fields.reshape(-1, 360, 181, 2)  #  (n_element, phi, theta, n_pol)
+    fields = fields.transpose((0, 2, 1, 3))  #  (n_element, theta, phi, n_pol)
+    fields = fields[:, :-1]  #  Remove last theta value
+    fields = fields.reshape(4, 4, *fields.shape[1:])
 
     config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
     return CstData(config=config, element_fields=fields)
