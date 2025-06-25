@@ -100,6 +100,48 @@ def load_openems_nf2ff(nf2ff_path: Path):
     return OpenEMSData(theta_rad, phi_rad, r, Dmax, freq_hz, E_field, power_density)
 
 
+class CstData(typing.NamedTuple):
+    config: ArrayConfig
+    element_fields: jax.Array
+
+
+@lru_cache
+def load_cst(cst_path: Path) -> CstData:
+    logger.info(f"Loading antenna pattern from {cst_path}")
+    cst_path = Path().resolve().parent / "cst"
+    names = (
+        "theta_deg",
+        "phi_deg",
+        "abs_dir",
+        "abs_cross",
+        "phase_cross",
+        "abs_copol",
+        "phase_copol",
+        "ax_ratio",
+    )
+    data = {}
+    for path in cst_path.iterdir():
+        i = int(path.stem.split()[-1][1:-1]) - 1
+        data[i] = np.genfromtxt(path, skip_header=2, dtype=np.float32, names=names)
+
+    data = [v for _, v in sorted(data.items())]
+    data = np.stack(data, axis=0)  # (16, 181 * 360, ...)
+
+    fields = data["abs_cross"] * np.exp(1j * data["phase_cross"])
+
+    fields = fields.reshape(-1, 360, 181)  #  (n_element, phi, theta)
+    fields = fields[:, :, :-1]  #  Remove last theta value
+    fields = fields.transpose((0, 2, 1))  #  (n_element, theta, phi)
+    fields = fields.reshape(4, 4, *fields.shape[1:3])  # (n_x, n_y, n_theta, n_phi)
+    fields = fields[..., None]  # (n_x, n_y, n_theta, n_phi, n_pol)
+    fields = fields.transpose((2, 3, 4, 0, 1))  # (n_theta, n_phi, n_pol, n_x, n_y)
+
+    return CstData(
+        config=ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9),
+        element_fields=fields,
+    )
+
+
 def get_wavenumber(freq_hz: float | None = None) -> float:
     """Calculate the wavenumber for a given frequency in Hz."""
     if freq_hz is None:
