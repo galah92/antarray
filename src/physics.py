@@ -27,7 +27,6 @@ DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
 DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
 
 
-# @dataclass(frozen=True)
 class ArrayConfig:
     """Configuration for antenna array parameters and simulation settings."""
 
@@ -257,7 +256,7 @@ def make_pattern_synthesizer(
 def find_correction_weights(
     target_field: jax.Array,
     element_fields: jax.Array,
-    alpha: float = 1e-2,
+    alpha: float | None = 1e-2,
 ) -> jax.Array:
     """Finds the optimal weights for the distorted array to match a target field using least-squares."""
     n_x, n_y, n_theta, n_phi, n_pol = element_fields.shape
@@ -267,10 +266,14 @@ def find_correction_weights(
     A = element_fields.transpose(2, 3, 4, 0, 1).reshape(n_points, n_elements)
     b = target_field.flatten()  # (n_points,)
 
-    # Solve the Ridge Regression problem: (A^H * A + alpha*I) * w = A^H * b
-    A_H = A.T.conj()
-    I = jnp.eye(n_elements)
-    w = jnp.linalg.solve(A_H @ A + alpha * I, A_H @ b)  #  (n_elements,)
+    if alpha is not None:
+        # Solve the Ridge Regression problem: (A^H * A + alpha*I) * w = A^H * b
+        A_H = A.T.conj()
+        I = jnp.eye(n_elements)
+        w = jnp.linalg.solve(A_H @ A + alpha * I, A_H @ b)  #  (n_elements,)
+    else:
+        # Solve the least-squares problem A * w = b for w
+        w = jnp.linalg.lstsq(A, b, rcond=None)[0]  # (n_elements,)
 
     w = w.reshape(n_x, n_y)  # (n_x, n_y)
     return w
@@ -356,7 +359,7 @@ def plot_E_plane(
     *,
     label: str | None = None,
     title: str | None = None,
-    ax: PolarAxes | None = None,
+    ax: plt.Axes | PolarAxes | None = None,
     filename: str | None = None,
 ):
     if ax is None:
@@ -366,18 +369,19 @@ def plot_E_plane(
     pattern_cut = extract_E_plane_cut(pattern, phi_idx=0)
     theta_rad = np.linspace(0, 2 * np.pi, pattern_cut.size)
 
-    ax.plot(theta_rad, pattern_cut, fmt, linewidth=1, label=label)
-    ax.set_thetagrids(np.arange(0, 360, 30))
-    ax.set_rgrids(np.arange(-20, 20, 10))
-    ax.set_rlim(-25, 15)
-    ax.set_theta_offset(np.pi / 2)  # make 0 degree at the top
-    ax.set_theta_direction(-1)  # clockwise
-    ax.set_rlabel_position(90)  # move radial label to the right
-    ax.grid(True, linestyle="--")
-    ax.tick_params(labelsize=6)
+    axp = typing.cast(PolarAxes, ax)
+    axp.plot(theta_rad, pattern_cut, fmt, linewidth=1, label=label)
+    axp.set_thetagrids(np.arange(0, 360, 30))
+    axp.set_rgrids(np.arange(-20, 20, 10))
+    axp.set_rlim(-25, 15)
+    axp.set_theta_offset(np.pi / 2)  # make 0 degree at the top
+    axp.set_theta_direction(-1)  # clockwise
+    axp.set_rlabel_position(90)  # move radial label to the right
+    axp.grid(True, linestyle="--")
+    axp.tick_params(labelsize=6)
     if title:
-        ax.set_title(title)
-    if ax is None:
+        axp.set_title(title)
+    if axp is None:
         fig.set_tight_layout(True)
         if filename:
             fig.savefig(filename, dpi=250)
@@ -666,6 +670,51 @@ def demo_physics_patterns():
     filename = "demo_physics.png"
     fig.savefig(filename, dpi=250)
     logger.info(f"Saved {filename}")
+
+
+def demo_cst_patterns():
+    cst_path = Path().resolve().parent / "cst"
+    cst_orig_data = load_cst(cst_path / "classic")
+    distorted_elem_fields = load_cst(cst_path / "disturbed_5").element_fields
+
+    weight_calc_orig = make_element_weight_calculator(cst_orig_data.config)
+    weights_orig, _ = weight_calc_orig(np.radians([0, 0]))
+
+    synthesize_field = partial(synthesize_pattern, power=False)
+
+    def field_to_power_db(field):
+        return convert_to_db(jnp.sum(jnp.abs(field) ** 2, axis=-1))
+
+    target_field = synthesize_field(cst_orig_data.element_fields, weights_orig)
+    target_power_db = field_to_power_db(target_field)
+    weights_corrected = find_correction_weights(target_field, distorted_elem_fields)
+
+    distorted_field = synthesize_field(distorted_elem_fields, weights_orig)
+    distorted_power_db = field_to_power_db(distorted_field)
+    corrected_field = synthesize_field(distorted_elem_fields, weights_corrected)
+    corrected_power_db = field_to_power_db(corrected_field)
+
+    fig = plt.figure(figsize=(16, 8), layout="compressed")
+    per_subplot_kw = {"ABC": {"projection": "polar"}}
+    axd = fig.subplot_mosaic("ABC\nDEF", per_subplot_kw=per_subplot_kw)
+    fig.suptitle("Array Pattern Calibration using Least-Squares")
+
+    title = "Target (Original Array)"
+    plot_E_plane(target_power_db, ax=axd["A"], title=title)
+    title = "Distorted Array (Uncorrected)"
+    plot_E_plane(distorted_power_db, ax=axd["B"], title=title)
+    title = "Distorted Array (Corrected)"
+    plot_E_plane(corrected_power_db, ax=axd["C"], title=title)
+
+    title = "Original Ideal Weights"
+    plot_phase_shifts(jnp.angle(weights_orig), ax=axd["D"], title=title)
+    title = "Corrected Weights"
+    plot_phase_shifts(jnp.angle(weights_corrected), ax=axd["E"], title=title)
+    phase_difference = jnp.angle(weights_corrected) - jnp.angle(weights_orig)
+    title = "Correction (Phase Difference)"
+    plot_phase_shifts(phase_difference, ax=axd["F"], title=title)
+
+    fig.savefig("demo_cst_patterns.png", dpi=250)
 
 
 if __name__ == "__main__":
