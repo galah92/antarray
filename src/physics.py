@@ -108,7 +108,6 @@ class CstData(typing.NamedTuple):
 @lru_cache
 def load_cst(cst_path: Path) -> CstData:
     logger.info(f"Loading antenna pattern from {cst_path}")
-    cst_path = Path().resolve().parent / "cst"
     names = (
         "theta_deg",
         "phi_deg",
@@ -134,12 +133,9 @@ def load_cst(cst_path: Path) -> CstData:
     fields = fields.transpose((0, 2, 1))  #  (n_element, theta, phi)
     fields = fields.reshape(4, 4, *fields.shape[1:3])  # (n_x, n_y, n_theta, n_phi)
     fields = fields[..., None]  # (n_x, n_y, n_theta, n_phi, n_pol)
-    fields = fields.transpose((2, 3, 4, 0, 1))  # (n_theta, n_phi, n_pol, n_x, n_y)
 
-    return CstData(
-        config=ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9),
-        element_fields=fields,
-    )
+    config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
+    return CstData(config=config, element_fields=fields)
 
 
 def get_wavenumber(freq_hz: float | None = None) -> float:
@@ -233,7 +229,7 @@ def compute_element_fields(
 @jax.jit
 def synthesize_pattern(element_fields: ArrayLike, weights: ArrayLike) -> jax.Array:
     """Synthesizes a pattern from weights using the precomputed basis."""
-    total_field = jnp.einsum("tpzxy,xy->tpz", element_fields, weights)
+    total_field = jnp.einsum("xytpz,xy->tpz", element_fields, weights)
     power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
     return power_pattern
 
@@ -258,9 +254,8 @@ def load_element_patterns(
     if openems_path is not None:
         E_field = load_openems_nf2ff(openems_path).E_field  # (n_theta, n_phi, 2)
 
-        reps = config.array_size + (1,) * E_field.ndim
-        E_field = np.tile(E_field, reps)  # (n_x, n_y, n_theta, n_phi, n_polarization)
-        return E_field
+        E_field = np.tile(E_field[..., None, None], config.array_size)
+        return E_field  # (n_x, n_y, n_theta, n_phi, n_pol)
 
     # Use existing synthetic generation (unchanged)
     theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
@@ -271,9 +266,8 @@ def load_element_patterns(
     amplitude = amplitude[:, None] * np.ones((theta_size, phi_size))
 
     E_field = amplitude[:, :, None]  # (n_theta, n_phi, 1)
-    reps = config.array_size + (1,) * E_field.ndim
-    E_field = np.tile(E_field, reps)  # (n_x, n_y, n_theta, n_phi, n_polarization)
-    return E_field.astype(np.complex64)
+    E_field = np.tile(E_field[..., None, None], config.array_size)
+    return E_field.astype(np.complex64)  # (n_x, n_y, n_theta, n_phi, n_pol)
 
 
 def make_physics_setup(
