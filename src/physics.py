@@ -673,7 +673,7 @@ def demo_physics_patterns():
 
 
 def demo_cst_patterns():
-    cst_path = Path().resolve().parent / "cst"
+    cst_path = Path(__file__).parents[1] / "cst"
     cst_orig_data = load_cst(cst_path / "classic")
     distorted_elem_fields = load_cst(cst_path / "disturbed_5").element_fields
 
@@ -714,7 +714,9 @@ def demo_cst_patterns():
     title = "Correction (Phase Difference)"
     plot_phase_shifts(phase_difference, ax=axd["F"], title=title)
 
-    fig.savefig("demo_cst_patterns.png", dpi=250)
+    filename = "demo_cst_patterns.png"
+    fig.savefig(filename, dpi=250)
+    logger.info(f"Saved CST demo plot to {filename}")
 
 
 if __name__ == "__main__":
@@ -722,5 +724,6 @@ if __name__ == "__main__":
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
         demo_phase_shifts()
-        demo_openems_patterns()
-        demo_physics_patterns()
+        # demo_openems_patterns()
+        # demo_physics_patterns()
+        demo_cst_patterns()
