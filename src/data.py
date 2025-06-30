@@ -351,7 +351,6 @@ def plot_sample(
         pattern = h5f["patterns"][idx]
         phase_shifts = np.angle(h5f["excitations"][idx])
         steering = h5f["steering"][idx]
-        theta, phi = h5f["theta"][:], h5f["phi"][:]
 
     fig, axs = plt.subplots(1, 3, figsize=[18, 6])
 
@@ -359,11 +358,11 @@ def plot_sample(
 
     physics.plot_phase_shifts(phase_shifts, ax=axs[0])
 
-    physics.plot_ff_2d(theta, phi, pattern, ax=axs[1])
+    physics.plot_ff_2d(pattern, ax=axs[1])
 
     axs[2].remove()
     axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
-    physics.plot_ff_3d(theta, phi, pattern, ax=axs[2])
+    physics.plot_ff_3d(pattern, ax=axs[2])
 
     steering_str = physics.steering_repr(steering)
     phase_shift_title = f"Phase Shifts ({steering_str})"
@@ -383,8 +382,6 @@ def visualize_dataset(batch_size: int = 4, seed: int = 42):
     patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
     steering_angles = batch.steering_angles
 
-    theta_rad, phi_rad = np.radians(np.arange(90)), np.radians(np.arange(360))
-
     fig, axes = plt.subplots(batch_size, 2, figsize=(12, 3 * batch_size))
     if batch_size == 1:
         axes = axes.reshape(1, -1)
@@ -392,7 +389,7 @@ def visualize_dataset(batch_size: int = 4, seed: int = 42):
     for i in range(batch_size):
         steering_str = physics.steering_repr(np.degrees(steering_angles[i].T))
         title = f"Radiation Pattern\n{steering_str}"
-        physics.plot_ff_2d(theta_rad, phi_rad, patterns[i], title=title, ax=axes[i, 0])
+        physics.plot_ff_2d(patterns[i], title=title, ax=axes[i, 0])
         title = "Phase Shifts\n"
         physics.plot_phase_shifts(phase_shifts[i], title=title, ax=axes[i, 1])
 

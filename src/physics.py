@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from jax.typing import ArrayLike
+from matplotlib.colorizer import ColorizingArtist
 from matplotlib.figure import SubFigure
 from matplotlib.image import AxesImage
 from matplotlib.projections import PolarAxes
@@ -357,6 +358,7 @@ def plot_E_plane(
     pattern: np.ndarray,
     fmt: str = "r-",
     *,
+    phi_idx: int = 0,
     label: str | None = None,
     title: str | None = None,
     ax: plt.Axes | PolarAxes | None = None,
@@ -366,14 +368,14 @@ def plot_E_plane(
         fig = plt.figure(constrained_layout=True)
         ax = typing.cast(PolarAxes, fig.add_subplot(projection="polar"))
 
-    pattern_cut = extract_E_plane_cut(pattern, phi_idx=0)
+    pattern_cut = extract_E_plane_cut(pattern, phi_idx=phi_idx)
     theta_rad = np.linspace(0, 2 * np.pi, pattern_cut.size)
 
     axp = typing.cast(PolarAxes, ax)
     axp.plot(theta_rad, pattern_cut, fmt, linewidth=1, label=label)
     axp.set_thetagrids(np.arange(0, 360, 30))
     axp.set_rgrids(np.arange(-20, 20, 10))
-    axp.set_rlim(-25, 15)
+    axp.set_rlim(-30, 5)
     axp.set_theta_offset(np.pi / 2)  # make 0 degree at the top
     axp.set_theta_direction(-1)  # clockwise
     axp.set_rlabel_position(90)  # move radial label to the right
@@ -403,16 +405,21 @@ def extend_pattern_to_360_theta(pattern: np.ndarray) -> np.ndarray:
 
 
 def plot_ff_3d(
-    theta_rad: ArrayLike,
-    phi_rad: ArrayLike,
     pattern: ArrayLike,
     *,
+    theta_rad: ArrayLike | None = None,
+    phi_rad: ArrayLike | None = None,
     clip_min_db: float | None = None,
     elev: float | None = None,
     azim: float | None = None,
     title: str = "3D Radiation Pattern",
     ax: plt.Axes | Axes3D | None = None,
 ):
+    if theta_rad is None:
+        theta_rad = ArrayConfig.theta_rad
+    if phi_rad is None:
+        phi_rad = ArrayConfig.phi_rad
+
     pattern = np.clip(
         pattern, a_min=clip_min_db, a_max=None
     )  # Clip to minimum dB value
@@ -437,16 +444,21 @@ def plot_ff_3d(
 
 
 def plot_ff_2d(
-    theta_rad: ArrayLike,
-    phi_rad: ArrayLike,
     pattern: ArrayLike,
     *,
+    theta_rad: ArrayLike | None = None,
+    phi_rad: ArrayLike | None = None,
     title: str = "2D Radiation Pattern",
     colorbar: bool = True,
     ax: plt.Axes | None = None,
 ) -> AxesImage:
     if ax is None:
         _, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+    if theta_rad is None:
+        theta_rad = ArrayConfig.theta_rad
+    if phi_rad is None:
+        phi_rad = ArrayConfig.phi_rad
 
     theta_deg, phi_deg = np.degrees(theta_rad), np.degrees(phi_rad)
     extent = (np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg))
@@ -462,18 +474,23 @@ def plot_ff_2d(
 
 
 def plot_sine_space(
-    theta_rad: ArrayLike,
-    phi_rad: ArrayLike,
     pattern: ArrayLike,
     *,
+    theta_rad: ArrayLike | None = None,
+    phi_rad: ArrayLike | None = None,
     title: str = "Sine-Space Radiation Pattern",
     theta_circles: bool = True,
     phi_lines: bool = True,
     colorbar: bool = True,
     ax: plt.Axes | None = None,
-):
+) -> ColorizingArtist:
     if ax is None:
         _, ax = plt.subplots(1, 1, figsize=(8, 8))
+
+    if theta_rad is None:
+        theta_rad = ArrayConfig.theta_rad
+    if phi_rad is None:
+        phi_rad = ArrayConfig.phi_rad
 
     u = np.sin(theta_rad)[:, None] * np.cos(phi_rad)
     v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)
@@ -511,7 +528,7 @@ def plot_sine_space(
     if colorbar:
         ax.figure.colorbar(im, fraction=0.046, pad=0.04, label="Normalized Dbi")
 
-    return ax
+    return im
 
 
 def plot_pattern(
@@ -532,9 +549,9 @@ def plot_pattern(
     if fig is None:
         fig = plt.figure(figsize=(15, 5), layout="compressed")
     axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
-    im = plot_ff_2d(theta_rad, phi_rad, pattern, ax=axd["A"], colorbar=False)
-    plot_sine_space(theta_rad, phi_rad, pattern, ax=axd["B"], colorbar=False)
-    plot_ff_3d(theta_rad, phi_rad, pattern, clip_min_db=clip_min_db, ax=axd["C"])
+    im = plot_ff_2d(pattern, ax=axd["A"], colorbar=False)
+    plot_sine_space(pattern, ax=axd["B"], colorbar=False)
+    plot_ff_3d(pattern, clip_min_db=clip_min_db, ax=axd["C"])
 
     if title is not None:
         fig.suptitle(title)
@@ -675,45 +692,72 @@ def demo_physics_patterns():
 def demo_cst_patterns():
     cst_path = Path(__file__).parents[1] / "cst"
     cst_orig_data = load_cst(cst_path / "classic")
-    distorted_elem_fields = load_cst(cst_path / "disturbed_5").element_fields
+    dist_elem_fields = load_cst(cst_path / "disturbed_5").element_fields
 
+    steering_rad = np.radians([0, 0])
     weight_calc_orig = make_element_weight_calculator(cst_orig_data.config)
-    weights_orig, _ = weight_calc_orig(np.radians([0, 0]))
+    weights_orig, _ = weight_calc_orig(steering_rad)
 
     synthesize_field = partial(synthesize_pattern, power=False)
 
-    def field_to_power_db(field):
-        return convert_to_db(jnp.sum(jnp.abs(field) ** 2, axis=-1))
+    def field_to_power(field):
+        return jnp.sum(jnp.abs(field) ** 2, axis=-1)
 
     target_field = synthesize_field(cst_orig_data.element_fields, weights_orig)
-    target_power_db = field_to_power_db(target_field)
-    weights_corrected = find_correction_weights(target_field, distorted_elem_fields)
+    target_power = field_to_power(target_field)
+    target_power_db = convert_to_db(target_power)
+    weights_corr = find_correction_weights(target_field, dist_elem_fields)
 
-    distorted_field = synthesize_field(distorted_elem_fields, weights_orig)
-    distorted_power_db = field_to_power_db(distorted_field)
-    corrected_field = synthesize_field(distorted_elem_fields, weights_corrected)
-    corrected_power_db = field_to_power_db(corrected_field)
+    dist_field = synthesize_field(dist_elem_fields, weights_orig)
+    dist_power = field_to_power(dist_field)
+    dist_power_db = convert_to_db(dist_power)
+    corr_field = synthesize_field(dist_elem_fields, weights_corr)
+    corr_power = field_to_power(corr_field)
+    corr_power_db = convert_to_db(corr_power)
 
-    fig = plt.figure(figsize=(16, 8), layout="compressed")
-    per_subplot_kw = {"ABC": {"projection": "polar"}}
-    axd = fig.subplot_mosaic("ABC\nDEF", per_subplot_kw=per_subplot_kw)
-    fig.suptitle("Array Pattern Calibration using Least-Squares")
+    phi_rad = cst_orig_data.config.phi_rad
 
-    title = "Target (Original Array)"
-    plot_E_plane(target_power_db, ax=axd["A"], title=title)
-    title = "Distorted Array (Uncorrected)"
-    plot_E_plane(distorted_power_db, ax=axd["B"], title=title)
-    title = "Distorted Array (Corrected)"
-    plot_E_plane(corrected_power_db, ax=axd["C"], title=title)
+    fig = plt.figure(figsize=(16, 20), layout="constrained")
+    subfigs = typing.cast(list[SubFigure], fig.subfigures(4, 1))
+    share = dict(sharex=True, sharey=True)
+    title_target = "Target (Original Array)"
+    title_dist = "Distorted Array (Uncorrected)"
+    title_corr = "Distorted Array (Corrected)"
 
-    title = "Original Ideal Weights"
-    plot_phase_shifts(jnp.angle(weights_orig), ax=axd["D"], title=title)
-    title = "Corrected Weights"
-    plot_phase_shifts(jnp.angle(weights_corrected), ax=axd["E"], title=title)
-    phase_difference = jnp.angle(weights_corrected) - jnp.angle(weights_orig)
-    title = "Correction (Phase Difference)"
-    plot_phase_shifts(phase_difference, ax=axd["F"], title=title)
+    ax0 = subfigs[0].subplots(1, 3, **share, subplot_kw=dict(projection="polar"))
+    phi_idx = np.abs(phi_rad - steering_rad[1]).argmin()
+    logger.info(f"Using phi index {phi_idx} for steering angle {steering_rad[1]} rad")
+    phi_deg = np.degrees(phi_rad[phi_idx])
+    subfigs[0].suptitle(f"E-plane Patterns (Polar Projection) for {phi_deg:.1f}°")
+    plot_E_plane(target_power_db, phi_idx=phi_idx, ax=ax0[0], title=title_target)
+    plot_E_plane(dist_power_db, phi_idx=phi_idx, ax=ax0[1], title=title_dist)
+    plot_E_plane(corr_power_db, phi_idx=phi_idx, ax=ax0[2], title=title_corr)
 
+    ax1 = subfigs[1].subplots(1, 3, **share, subplot_kw=dict(projection="3d"))
+    subfigs[1].suptitle("3D Patterns (Cartesian Projection)")
+    plot_ff_3d(target_power_db, ax=ax1[0], title=title_target)
+    plot_ff_3d(dist_power_db, ax=ax1[1], title=title_dist)
+    plot_ff_3d(corr_power_db, ax=ax1[2], title=title_corr)
+
+    ax2 = subfigs[2].subplots(1, 3, **share)
+    subfigs[2].suptitle("Sine-Space Patterns")
+    im = plot_sine_space(target_power_db, ax=ax2[0], title=title_target, colorbar=False)
+    im = plot_sine_space(dist_power_db, ax=ax2[1], title=title_dist, colorbar=False)
+    im = plot_sine_space(corr_power_db, ax=ax2[2], title=title_corr, colorbar=False)
+    subfigs[2].colorbar(im, ax=ax2, label="Normalized Db")
+
+    ax3 = subfigs[3].subplots(1, 3, **share)
+    subfigs[3].suptitle("2D Patterns (Cartesian Projection)")
+    im = plot_ff_2d(target_power_db, ax=ax3[0], title=title_target, colorbar=False)
+    im = plot_ff_2d(dist_power_db, ax=ax3[1], title=title_dist, colorbar=False)
+    im = plot_ff_2d(corr_power_db, ax=ax3[2], title=title_corr, colorbar=False)
+    subfigs[3].colorbar(im, ax=ax3, label="Normalized Db")
+
+    steering_deg = np.degrees(steering_rad)
+    title = (
+        f"Correcting CST Patterns (θ={steering_deg[0]:.1f}°, φ={steering_deg[1]:.1f}°)"
+    )
+    fig.suptitle(title, fontweight="bold")
     filename = "demo_cst_patterns.png"
     fig.savefig(filename, dpi=250)
     logger.info(f"Saved CST demo plot to {filename}")
