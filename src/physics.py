@@ -326,16 +326,21 @@ def normalize_patterns(patterns: ArrayLike) -> jax.Array:
     return patterns / (max_vals + 1e-8)
 
 
-@partial(jax.jit, static_argnames=("floor_db",))
-def convert_to_db(patterns: ArrayLike, floor_db: float | None = None) -> jax.Array:
-    """Converts linear power patterns to normalized dB scale."""
-    normalized = patterns / jnp.max(patterns)  # Normalize
+@partial(jax.jit, static_argnames=("floor_db", "normalize"))
+def convert_to_db(
+    patterns: ArrayLike,
+    floor_db: float | None = None,
+    normalize: bool = True,
+) -> jax.Array:
+    """Converts linear power patterns to dB scale."""
+    if normalize:
+        patterns = patterns / jnp.max(patterns)  # Normalize
 
     if floor_db is not None:
         linear_floor = 10.0 ** (floor_db / 10.0)
-        normalized = jnp.maximum(normalized, linear_floor)
+        patterns = jnp.maximum(patterns, linear_floor)
 
-    return 10.0 * jnp.log10(normalized)
+    return 10.0 * jnp.log10(patterns)  # Convert to dB scale
 
 
 # =============================================================================
@@ -374,13 +379,13 @@ def plot_E_plane(
     axp = typing.cast(PolarAxes, ax)
     axp.plot(theta_rad, pattern_cut, fmt, linewidth=1, label=label)
     axp.set_thetagrids(np.arange(0, 360, 30))
-    axp.set_rgrids(np.arange(-20, 20, 10))
-    axp.set_rlim(-30, 5)
+    # axp.set_rgrids(np.arange(-20, 20, 10))
+    # axp.set_rlim(-30, 5)
     axp.set_theta_offset(np.pi / 2)  # make 0 degree at the top
     axp.set_theta_direction(-1)  # clockwise
-    axp.set_rlabel_position(90)  # move radial label to the right
+    axp.set_rlabel_position(45)  # move radial label to the right
     axp.grid(True, linestyle="--")
-    axp.tick_params(labelsize=6)
+    # axp.tick_params(labelsize=6)
     if title:
         axp.set_title(title)
     if axp is None:
@@ -705,15 +710,15 @@ def demo_cst_patterns():
 
     target_field = synthesize_field(cst_orig_data.element_fields, weights_orig)
     target_power = field_to_power(target_field)
-    target_power_db = convert_to_db(target_power)
+    target_power_db = convert_to_db(target_power, floor_db=None, normalize=False)
     weights_corr = find_correction_weights(target_field, dist_elem_fields)
 
     dist_field = synthesize_field(dist_elem_fields, weights_orig)
     dist_power = field_to_power(dist_field)
-    dist_power_db = convert_to_db(dist_power)
+    dist_power_db = convert_to_db(dist_power, floor_db=None, normalize=False)
     corr_field = synthesize_field(dist_elem_fields, weights_corr)
     corr_power = field_to_power(corr_field)
-    corr_power_db = convert_to_db(corr_power)
+    corr_power_db = convert_to_db(corr_power, floor_db=None, normalize=False)
 
     phi_rad = cst_orig_data.config.phi_rad
 
