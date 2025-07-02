@@ -126,8 +126,10 @@ def load_cst(cst_path: Path) -> CstData:
     data = [v for _, v in sorted(data.items())]
     data = np.stack(data, axis=0)  # (16, 181 * 360, ...)
 
-    E_cross = data["abs_cross"] * np.exp(1j * np.radians(data["phase_cross_deg"]))
-    E_copol = data["abs_copol"] * np.exp(1j * np.radians(data["phase_copol_deg"]))
+    phase_copol = np.radians(data["phase_copol_deg"])
+    phase_cross = np.radians(data["phase_cross_deg"])
+    E_copol = np.sqrt(data["abs_copol"]) * np.exp(1j * phase_copol)
+    E_cross = np.sqrt(data["abs_cross"]) * np.exp(1j * phase_cross)
     fields = np.stack([E_copol, E_cross], axis=-1)
 
     fields = fields.reshape(-1, 360, 181, 2)  #  (n_element, phi, theta, n_pol)
@@ -196,6 +198,7 @@ def calculate_weights(
 
     weights = jnp.exp(-1j * phase_shifts)  # (n_x, n_y, n_beams)
     weights = jnp.sum(weights, axis=-1)  # (n_x, n_y), assume no tapering
+    weights = weights / np.prod(weights.shape)  # Normalize weights
 
     return weights, phase_shifts
 
@@ -702,6 +705,7 @@ def demo_cst_patterns():
     steering_rad = np.radians([0, 0])
     weight_calc_orig = make_element_weight_calculator(cst_orig_data.config)
     weights_orig, _ = weight_calc_orig(steering_rad)
+    logger.info(f"{np.abs(weights_orig).sum()} total weights for original array")
 
     synthesize_field = partial(synthesize_pattern, power=False)
 
