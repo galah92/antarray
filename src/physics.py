@@ -1,6 +1,5 @@
 import logging
 import typing
-from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache, partial
 from pathlib import Path
@@ -203,14 +202,6 @@ def calculate_weights(
     return weights, phase_shifts
 
 
-def make_element_weight_calculator(config: ArrayConfig) -> Callable:
-    """Factory to create a function for calculating element weights."""
-    kx, ky = compute_spatial_phase_coeffs(config)
-    kx, ky = jnp.asarray(kx), jnp.asarray(ky)
-    calculate = partial(calculate_weights, kx, ky)
-    return calculate
-
-
 def compute_element_fields(
     element_patterns: np.ndarray,
     config: ArrayConfig,
@@ -243,17 +234,6 @@ def synthesize_pattern(
 
     power_pattern = jnp.sum(jnp.abs(total_field) ** 2, axis=-1)
     return power_pattern
-
-
-def make_pattern_synthesizer(
-    element_patterns: np.ndarray,
-    config: ArrayConfig,
-) -> Callable:
-    """Factory to create a pattern synthesis function."""
-    element_fields = compute_element_fields(element_patterns, config)
-    element_fields = jnp.asarray(element_fields)
-    synthesize = partial(synthesize_pattern, element_fields)
-    return synthesize
 
 
 @jax.jit
@@ -596,7 +576,7 @@ def steering_repr(steering_angles: np.ndarray):
 def demo_phase_shifts():
     """Demonstrate phase shift calculations and visualization."""
     config = ArrayConfig()
-    compute_element_weights = make_element_weight_calculator(config)
+    kx, ky = compute_spatial_phase_coeffs(config)
 
     steering_angles = [
         [0, 0],  # Broadside
@@ -613,7 +593,7 @@ def demo_phase_shifts():
     # Use new element weight calculator
     phase_shifts_list = []
     for angle in steering_angles:
-        _, phase_shifts = compute_element_weights(np.radians(angle))
+        _, phase_shifts = calculate_weights(kx, ky, np.radians(angle))
         phase_shifts_list.append(phase_shifts)
 
     kw = dict(figsize=(15, 10), sharex=True, sharey=True, layout="compressed")
@@ -662,8 +642,8 @@ def demo_cst_patterns():
     dist_elem_fields = load_cst(cst_path / "disturbed_5").element_fields
 
     steering_rad = np.radians([0, 0])
-    weight_calc_orig = make_element_weight_calculator(cst_orig_data.config)
-    weights_orig, _ = weight_calc_orig(steering_rad)
+    kx, ky = compute_spatial_phase_coeffs(cst_orig_data.config)
+    weights_orig, _ = calculate_weights(kx, ky, steering_rad)
 
     synthesize_field = partial(synthesize_pattern, power=False)
 
