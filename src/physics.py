@@ -226,7 +226,7 @@ def compute_element_fields(
     geo_phase = phase_x[..., None] + phase_y[..., None, :]  # (n_theta, n_phi, n_x, n_y)
     geo_factor = np.exp(1j * geo_phase)  # (n_theta, n_phi, n_x, n_y)
 
-    element_fields = np.einsum("xytpz,tpxy->tpzxy", element_patterns, geo_factor)
+    element_fields = np.einsum("xytpz,tpxy->xytpz", element_patterns, geo_factor)
     return element_fields
 
 
@@ -292,7 +292,8 @@ def load_element_patterns(
     if openems_path is not None:
         E_field = load_openems_nf2ff(openems_path).E_field  # (n_theta, n_phi, 2)
 
-        E_field = np.tile(E_field[..., None, None], config.array_size)
+        reps = config.array_size + (1,) * E_field.ndim
+        E_field = np.tile(E_field[None, None, ...], reps)
         return E_field  # (n_x, n_y, n_theta, n_phi, n_pol)
 
     # Use existing synthetic generation (unchanged)
@@ -651,50 +652,27 @@ def demo_phase_shifts():
 def demo_openems_patterns():
     """Demonstrate OpenEMS pattern loading with new unified interface."""
     config = ArrayConfig()
+    element_patterns = load_element_patterns(config, openems_path=DEFAULT_SIM_PATH)
 
-    synthesize_ideal, compute_element_weights = make_physics_setup(
-        config, openems_path=DEFAULT_SIM_PATH
-    )
+    kx, ky = compute_spatial_phase_coeffs(config)
+    steering_deg = jnp.array([0.0, 0.0])  # Broadside steering
+    steering_rad = jnp.radians(steering_deg)
+    weights, _ = calculate_weights(kx, ky, steering_rad)
 
-    steering_deg = jnp.array([30, 45])
-    steering_angle = jnp.radians(steering_deg)
-    weights, _ = compute_element_weights(steering_angle)
-    power_pattern = synthesize_ideal(weights)
+    element_fields = compute_element_fields(element_patterns, config)
+    power_pattern = synthesize_pattern(element_fields, weights, power=True)
     power_dB = convert_to_db(power_pattern)
 
     fig = plt.figure(figsize=(15, 5), layout="compressed")
-    steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
+    steering_str = (
+        f"θ={np.degrees(steering_rad[0]):.1f}°, φ={np.degrees(steering_rad[1]):.1f}°"
+    )
     title = f"OpenEMS Radiation Pattern ({steering_str})"
     plot_pattern(power_dB, clip_min_db=-30, title=title, fig=fig)
 
-    fig_path = "test_openems.png"
+    fig_path = "demo_openems.png"
     fig.savefig(fig_path, dpi=250)
     logger.info(f"Saved OpenEMS sample plot to {fig_path}")
-
-
-def demo_physics_patterns():
-    """Demonstrate the physics simulation functions."""
-    steering_angle = jnp.array([jnp.pi / 6, jnp.pi / 4])  # 30°, 45°
-
-    config = ArrayConfig()
-    synthesize_ideal, compute_element_weights = make_physics_setup(config)
-    weights, _ = compute_element_weights(steering_angle)
-    ideal_pattern = synthesize_ideal(weights)
-
-    floor_db = -60.0  # dB floor for clipping
-    linear_floor = 10.0 ** (floor_db / 10.0)
-    ideal_pattern = 10.0 * jnp.log10(jnp.maximum(ideal_pattern, linear_floor))
-
-    fig = plt.figure(figsize=(15, 10), layout="compressed")
-    subfigs = typing.cast(list[SubFigure], fig.subfigures(2, 1))
-
-    plot_pattern(ideal_pattern, title="Ideal Pattern", clip_min_db=-10, fig=subfigs[0])
-
-    steering_str = f"θ={np.degrees(steering_angle[0]):.1f}°, φ={np.degrees(steering_angle[1]):.1f}°"
-    fig.suptitle(f"Ideal Patterns ({steering_str})")
-    filename = "demo_physics.png"
-    fig.savefig(filename, dpi=250)
-    logger.info(f"Saved {filename}")
 
 
 def demo_cst_patterns():
@@ -705,7 +683,6 @@ def demo_cst_patterns():
     steering_rad = np.radians([0, 0])
     weight_calc_orig = make_element_weight_calculator(cst_orig_data.config)
     weights_orig, _ = weight_calc_orig(steering_rad)
-    logger.info(f"{np.abs(weights_orig).sum()} total weights for original array")
 
     synthesize_field = partial(synthesize_pattern, power=False)
 
@@ -777,6 +754,5 @@ if __name__ == "__main__":
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
         demo_phase_shifts()
-        # demo_openems_patterns()
-        # demo_physics_patterns()
+        demo_openems_patterns()
         demo_cst_patterns()
