@@ -2,7 +2,7 @@ import logging
 import subprocess as sp
 from functools import partial
 from pathlib import Path
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import h5py
 import jax
@@ -139,7 +139,7 @@ class Dataset:
         radiation_pattern_max: float = 30.0,  # Maximum radiation pattern value in dB observed
         trig_encoding: bool = True,
         key: jax.Array | None = None,
-        use_openems: bool = False,  # New parameter to enable OpenEMS mode
+        kind: Literal["cst", "openems", "synthetic"] = "cst",
     ):
         self.batch_size = batch_size
         self.limit = limit
@@ -150,7 +150,7 @@ class Dataset:
         self.spacing_mm = spacing_mm
         self.theta_end = jnp.radians(theta_end)
         self.sim_path = sim_path
-        self.use_openems = use_openems
+        self.kind = kind
 
         self.clip = clip
         self.normalize = normalize
@@ -173,10 +173,12 @@ class Dataset:
         )
 
         config = physics.ArrayConfig()
-        openems_path = (self.sim_path if use_openems else None,)
-        element_patterns = physics.load_element_patterns(
-            config, openems_path=openems_path
-        )
+        if self.kind == "openems":
+            element_patterns = physics.load_element_patterns(
+                config, kind="openems", path=self.sim_path
+            )
+        else:
+            element_patterns = physics.load_element_patterns(config, kind="synthetic")
         kx, ky = physics.compute_spatial_phase_coeffs(config)
         element_fields = physics.compute_element_fields(element_patterns, config)
 
@@ -241,7 +243,7 @@ def generate_beamforming(
     dataset_name: str = DEFAULT_DATASET_NAME,
     overwrite: bool = False,
     seed: int = 42,
-    use_openems: bool = False,  # New parameter
+    kind: Literal["cst", "openems", "synthetic"] = "synthetic",
 ):
     array_size = (16, 16)
     theta_rad = np.radians(np.arange(90))
@@ -259,7 +261,7 @@ def generate_beamforming(
         clip=False,
         normalize=False,
         trig_encoding=False,
-        use_openems=use_openems,  # Pass through the parameter
+        kind=kind,  # Pass through the parameter
     )
 
     logger.info(f"Generating dataset with {n_samples} samples")

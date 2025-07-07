@@ -3,6 +3,7 @@ import typing
 from dataclasses import dataclass
 from functools import lru_cache, partial
 from pathlib import Path
+from typing import Literal
 
 import h5py
 import jax
@@ -266,27 +267,40 @@ def find_correction_weights(
 @lru_cache
 def load_element_patterns(
     config: ArrayConfig,
-    openems_path: Path | None = None,
+    kind: Literal["cst", "openems", "synthetic"] = "cst",
+    path: Path | None = None,
 ) -> np.ndarray:
-    """Simulates element patterns for ideal array, with optional OpenEMS data."""
-    if openems_path is not None:
-        E_field = load_openems_nf2ff(openems_path).E_field  # (n_theta, n_phi, 2)
+    """Load or simulates element patterns for an array."""
+    if kind == "openems":
+        if path is None:
+            raise ValueError("Path must be provided for openems kind")
+        E_field = load_openems_nf2ff(path).E_field  # (n_theta, n_phi, 2)
 
         reps = config.array_size + (1,) * E_field.ndim
-        E_field = np.tile(E_field[None, None, ...], reps)
-        return E_field  # (n_x, n_y, n_theta, n_phi, n_pol)
+        element_patterns = np.tile(E_field[None, None, ...], reps)
+        return element_patterns  # (n_x, n_y, n_theta, n_phi, n_pol)
 
-    # Use existing synthetic generation (unchanged)
-    theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
+    if kind == "cst":
+        if path is None:
+            raise ValueError("Path must be provided for cst kind")
+        return load_cst(path).element_fields
 
-    # Base cosine model for field amplitude
-    amplitude = np.cos(config.theta_rad)
-    amplitude = np.where(config.theta_rad > np.pi / 2, 0, amplitude)
-    amplitude = amplitude[:, None] * np.ones((theta_size, phi_size))
+    if kind == "synthetic":
+        theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
 
-    E_field = amplitude[:, :, None]  # (n_theta, n_phi, 1)
-    E_field = np.tile(E_field[..., None, None], config.array_size)
-    return E_field.astype(np.complex64)  # (n_x, n_y, n_theta, n_phi, n_pol)
+        # Base cosine model for field amplitude
+        amplitude = np.cos(config.theta_rad)
+        amplitude = np.where(config.theta_rad > np.pi / 2, 0, amplitude)
+        amplitude = amplitude[:, None] * np.ones((theta_size, phi_size))
+
+        E_field = amplitude[..., None]  # (n_theta, n_phi, 1)
+
+        # Create element patterns for each element in the array
+        reps = config.array_size + (1,) * E_field.ndim
+        element_patterns = np.tile(E_field[None, None, ...], reps)
+        return element_patterns.astype(np.complex64)
+
+    raise ValueError(f"Unknown kind: {kind!r}")
 
 
 @jax.jit
@@ -613,7 +627,11 @@ def demo_phase_shifts():
 def demo_openems_patterns():
     """Demonstrate OpenEMS pattern loading with new unified interface."""
     config = ArrayConfig()
-    element_patterns = load_element_patterns(config, openems_path=DEFAULT_SIM_PATH)
+    element_patterns = load_element_patterns(
+        config,
+        kind="openems",
+        path=DEFAULT_SIM_PATH,
+    )
 
     kx, ky = compute_spatial_phase_coeffs(config)
     steering_deg = jnp.array([0.0, 0.0])  # Broadside steering

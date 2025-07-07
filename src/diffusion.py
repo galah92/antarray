@@ -271,7 +271,12 @@ def train(
 
     # Create physics setup with optional OpenEMS support
     config = ArrayConfig()
-    element_patterns = load_element_patterns(config, openems_path=openems_path)
+    if openems_path is not None:
+        element_patterns = load_element_patterns(
+            config, kind="openems", path=openems_path
+        )
+    else:
+        element_patterns = load_element_patterns(config, kind="synthetic")
     element_fields = compute_element_fields(element_patterns, config)
     kx, ky = compute_spatial_phase_coeffs(config)
 
@@ -350,7 +355,12 @@ def evaluate(
 
     # Create physics setup for evaluation with optional OpenEMS support
     config = ArrayConfig()
-    element_patterns = load_element_patterns(config, openems_path=openems_path)
+    if openems_path is not None:
+        element_patterns = load_element_patterns(
+            config, kind="openems", path=openems_path
+        )
+    else:
+        element_patterns = load_element_patterns(config, kind="synthetic")
     element_fields = compute_element_fields(element_patterns, config)
     kx, ky = compute_spatial_phase_coeffs(config)
 

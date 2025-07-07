@@ -267,7 +267,12 @@ def train(
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
     config = ArrayConfig()
-    element_patterns = load_element_patterns(config, openems_path=openems_path)
+    if openems_path is not None:
+        element_patterns = load_element_patterns(
+            config, kind="openems", path=openems_path
+        )
+    else:
+        element_patterns = load_element_patterns(config, kind="synthetic")
     element_fields = compute_element_fields(element_patterns, config)
     array_params = ArrayParams(element_fields=jnp.asarray(element_fields))
 
