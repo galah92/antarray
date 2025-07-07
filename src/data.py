@@ -7,11 +7,9 @@ from typing import NamedTuple
 import h5py
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
 import typer
 from jax.typing import ArrayLike
-from matplotlib import animation
 from tqdm import tqdm
 
 import physics
@@ -280,125 +278,6 @@ def generate_beamforming(
             n = min(batch_size, n_samples - k)  # Handle the last batch
             patterns_ds[k : k + n] = batch.radiation_patterns[:n]
             ex_ds[k : k + n] = batch.phase_shifts[:n]
-
-        # h5f.create_dataset("steering", data=steerings)
-
-
-@app.command()
-def plot_dataset_phase_shifts(
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: str = "ff_beamforming.h5",
-    gif_name: str = "beamforming_phase_shifts.gif",
-):
-    with h5py.File(dataset_dir / dataset_name, "r") as h5f:
-        excitations = h5f["excitations"]
-        steering = h5f["steering"]
-
-        fig, ax = plt.subplots()
-        fig.set_layout_engine("tight")
-
-        ax.set_xlabel("Element X index")
-        ax.set_ylabel("Element Y index")
-        title = ax.set_title("Phase Shifts")
-
-        # Create a colorbar
-        sm = plt.cm.ScalarMappable(cmap="twilight_shifted")
-        cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label("Degrees")
-        cbar.set_ticks(np.linspace(0, 1, 7))
-        cbar.set_ticklabels(np.linspace(-180, 180, 7, dtype=np.int32))
-
-        im = np.zeros_like(np.angle(excitations[0]))
-        cmap = "twilight_shifted"  # Cyclic colormap for phase values
-        im = ax.imshow(im, cmap=cmap, origin="lower", vmin=-180, vmax=180)
-
-        def animate(i):
-            logger.debug(f"Plotting {i}")
-            j = i * 111
-
-            # Update the data for the plot
-            phase_shifts = np.angle(excitations[j])
-            phase_shifts_clipped = (phase_shifts + np.pi) % (2 * np.pi) - np.pi
-            im.set_data(np.rad2deg(phase_shifts_clipped))
-
-            # Update the title with steering info
-            theta_s, phi_s = steering[j]
-            text = f"Phase Shifts (θ={theta_s:03.1f}°, φ={phi_s:03.1f}°) {i:04d}"
-            title.set_text(text)
-
-            return im, title
-
-        frames = len(excitations)
-        frames = 111 * 2
-        ani = animation.FuncAnimation(fig, animate, frames=frames, blit=True)
-
-        # To save the animation using Pillow as a gif
-        writer = animation.PillowWriter(fps=20, bitrate=1800)
-        ani.save(dataset_dir / gif_name, writer=writer)
-
-
-@app.command()
-def plot_sample(
-    idx: int,
-    dataset_dir: Path = DEFAULT_DATASET_DIR,
-    dataset_name: str = DEFAULT_DATASET_NAME,
-):
-    """
-    Visualize a single sample from the dataset.
-    """
-    dataset_path = dataset_dir / dataset_name
-    with h5py.File(dataset_path, "r") as h5f:
-        pattern = h5f["patterns"][idx]
-        phase_shifts = np.angle(h5f["excitations"][idx])
-        steering = h5f["steering"][idx]
-
-    fig, axs = plt.subplots(1, 3, figsize=[18, 6])
-
-    pattern = pattern.clip(min=0)
-
-    physics.plot_phase_shifts(phase_shifts, ax=axs[0])
-
-    physics.plot_ff_2d(pattern, ax=axs[1])
-
-    axs[2].remove()
-    axs[2] = fig.add_subplot(1, 3, 3, projection="3d")
-    physics.plot_ff_3d(pattern, ax=axs[2])
-
-    steering_str = physics.steering_repr(steering)
-    phase_shift_title = f"Phase Shifts ({steering_str})"
-    fig.suptitle(phase_shift_title)
-    fig.set_layout_engine("tight")
-
-    sample_path = dataset_dir / f"sample_{idx}.png"
-    fig.savefig(sample_path, dpi=600, bbox_inches="tight")
-    logger.info(f"Saved sample plot to {sample_path}")
-
-
-def visualize_dataset(batch_size: int = 4, seed: int = 42):
-    key = jax.random.key(seed)
-
-    dataset = Dataset(batch_size=batch_size, key=key)
-    batch = next(dataset)
-    patterns, phase_shifts = batch.radiation_patterns, batch.phase_shifts
-    steering_angles = batch.steering_angles
-
-    fig, axes = plt.subplots(batch_size, 2, figsize=(12, 3 * batch_size))
-    if batch_size == 1:
-        axes = axes.reshape(1, -1)
-
-    for i in range(batch_size):
-        steering_str = physics.steering_repr(np.degrees(steering_angles[i].T))
-        title = f"Radiation Pattern\n{steering_str}"
-        physics.plot_ff_2d(patterns[i], title=title, ax=axes[i, 0])
-        title = "Phase Shifts\n"
-        physics.plot_phase_shifts(phase_shifts[i], title=title, ax=axes[i, 1])
-
-    fig.suptitle("Batch Overview: Model Inputs")
-    fig.set_layout_engine("tight")
-
-    plot_path = "batch_overview.png"
-    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
-    logger.info(f"Saved batch overview {plot_path}")
 
 
 if __name__ == "__main__":
