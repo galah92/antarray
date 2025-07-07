@@ -309,20 +309,6 @@ def load_element_patterns(
     return E_field.astype(np.complex64)  # (n_x, n_y, n_theta, n_phi, n_pol)
 
 
-def make_physics_setup(
-    config: ArrayConfig,
-    openems_path: Path | None = None,
-) -> tuple[Callable, Callable]:
-    """Creates the physics simulation setup with optional OpenEMS data support."""
-
-    element_patterns = load_element_patterns(config, openems_path=openems_path)
-    synthesize_pattern = make_pattern_synthesizer(element_patterns, config)
-
-    compute_element_weights = make_element_weight_calculator(config)
-
-    return synthesize_pattern, compute_element_weights
-
-
 @jax.jit
 def normalize_patterns(patterns: ArrayLike) -> jax.Array:
     """Performs peak normalization on a batch of radiation patterns (linear scale)."""
@@ -605,11 +591,6 @@ def steering_repr(steering_angles: np.ndarray):
         + "]"
     )
     return f"[θ°, φ°] = {formatted}"
-
-
-# =============================================================================
-# Demo Functions
-# =============================================================================
 
 
 def demo_phase_shifts():
