@@ -617,17 +617,14 @@ def demo_openems_patterns():
 
     kx, ky = compute_spatial_phase_coeffs(config)
     steering_deg = jnp.array([0.0, 0.0])  # Broadside steering
-    steering_rad = jnp.radians(steering_deg)
-    weights, _ = calculate_weights(kx, ky, steering_rad)
+    weights, _ = calculate_weights(kx, ky, jnp.radians(steering_deg))
 
     element_fields = compute_element_fields(element_patterns, config)
     power_pattern = synthesize_pattern(element_fields, weights, power=True)
     power_dB = convert_to_db(power_pattern)
 
     fig = plt.figure(figsize=(15, 5), layout="compressed")
-    steering_str = (
-        f"θ={np.degrees(steering_rad[0]):.1f}°, φ={np.degrees(steering_rad[1]):.1f}°"
-    )
+    steering_str = f"θ={steering_deg[0]:.1f}°, φ={steering_deg[1]:.1f}°"
     title = f"OpenEMS Radiation Pattern ({steering_str})"
     plot_pattern(power_dB, clip_min_db=-30, title=title, fig=fig)
 
