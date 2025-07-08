@@ -244,7 +244,7 @@ def synthesize_pattern(
 
 
 @jax.jit
-def find_correction_weights(
+def solve_weights(
     target_field: jax.Array,
     element_fields: jax.Array,
     alpha: float | None = 1e-2,
@@ -711,75 +711,56 @@ def sum_cst():
 
 def demo_cst_patterns():
     cst_path = Path(__file__).parents[1] / "cst"
-    cst_orig_data = load_cst(cst_path / "classic")
+    cst_data = load_cst(cst_path / "classic")
+    orig_elem_fields = cst_data.element_fields
     dist_elem_fields = load_cst(cst_path / "disturbed_5").element_fields
 
     steering_rad = np.radians([0, 0])
-    kx, ky = compute_spatial_phase_coeffs(cst_orig_data.config)
+    kx, ky = compute_spatial_phase_coeffs(cst_data.config)
     weights_orig, _ = calculate_weights(kx, ky, steering_rad)
 
-    synthesize_field = partial(synthesize_pattern, power=False)
-
-    def field_to_power(field):
-        return jnp.sum(jnp.abs(field) ** 2, axis=-1)
-
-    target_field = synthesize_field(cst_orig_data.element_fields, weights_orig)
-    target_power = field_to_power(target_field)
+    target_field = synthesize_pattern(orig_elem_fields, weights_orig, power=False)
+    target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
     target_power_db = convert_to_db(target_power, floor_db=None, normalize=False)
-    weights_corr = find_correction_weights(target_field, dist_elem_fields)
+    weights_corr = solve_weights(target_field, dist_elem_fields)
 
-    dist_field = synthesize_field(dist_elem_fields, weights_orig)
-    dist_power = field_to_power(dist_field)
-    dist_power_db = convert_to_db(dist_power, floor_db=None, normalize=False)
-    corr_field = synthesize_field(dist_elem_fields, weights_corr)
-    corr_power = field_to_power(corr_field)
-    corr_power_db = convert_to_db(corr_power, floor_db=None, normalize=False)
+    dist_power = synthesize_pattern(dist_elem_fields, weights_orig)
+    corr_power = synthesize_pattern(dist_elem_fields, weights_corr)
 
-    phi_rad = cst_orig_data.config.phi_rad
+    dist_power_db = convert_to_db(dist_power, normalize=False)
+    corr_power_db = convert_to_db(corr_power, normalize=False)
 
-    fig = plt.figure(figsize=(16, 20), layout="constrained")
-    subfigs = typing.cast(list[SubFigure], fig.subfigures(4, 1))
-    share = dict(sharex=True, sharey=True)
+    phi_rad = cst_data.config.phi_rad
+    phi_idx = np.abs(phi_rad - steering_rad[1]).argmin()
+    logger.info(f"Using phi index {phi_idx} for steering angle {steering_rad[1]} rad")
+
+    fig = plt.figure(figsize=(15, 10), layout="constrained")
+    subfigs = typing.cast(list[SubFigure], fig.subfigures(2, 1))
+    kw = dict(sharex=True, sharey=True)
+
     title_target = "Target (Original Array)"
     title_dist = "Distorted Array (Uncorrected)"
     title_corr = "Distorted Array (Corrected)"
 
-    ax0 = subfigs[0].subplots(1, 3, **share, subplot_kw=dict(projection="polar"))
-    phi_idx = np.abs(phi_rad - steering_rad[1]).argmin()
-    logger.info(f"Using phi index {phi_idx} for steering angle {steering_rad[1]} rad")
-    phi_deg = np.degrees(phi_rad[phi_idx])
-    subfigs[0].suptitle(f"E-plane Patterns (Polar Projection) for {phi_deg:.1f}°")
-    plot_E_plane(target_power_db, phi_idx=phi_idx, ax=ax0[0], title=title_target)
-    plot_E_plane(dist_power_db, phi_idx=phi_idx, ax=ax0[1], title=title_dist)
-    plot_E_plane(corr_power_db, phi_idx=phi_idx, ax=ax0[2], title=title_corr)
+    axs = subfigs[0].subplots(1, 3, **kw, subplot_kw=dict(projection="polar"))
+    plot_E_plane(target_power_db, phi_idx=phi_idx, ax=axs[0], title=title_target)
+    plot_E_plane(dist_power_db, phi_idx=phi_idx, ax=axs[1], title=title_dist)
+    plot_E_plane(corr_power_db, phi_idx=phi_idx, ax=axs[2], title=title_corr)
 
-    ax1 = subfigs[1].subplots(1, 3, **share, subplot_kw=dict(projection="3d"))
-    subfigs[1].suptitle("3D Patterns (Cartesian Projection)")
-    plot_ff_3d(target_power_db, ax=ax1[0], title=title_target)
-    plot_ff_3d(dist_power_db, ax=ax1[1], title=title_dist)
-    plot_ff_3d(corr_power_db, ax=ax1[2], title=title_corr)
-
-    ax2 = subfigs[2].subplots(1, 3, **share)
-    subfigs[2].suptitle("Sine-Space Patterns")
-    im = plot_sine_space(target_power_db, ax=ax2[0], title=title_target, colorbar=False)
-    im = plot_sine_space(dist_power_db, ax=ax2[1], title=title_dist, colorbar=False)
-    im = plot_sine_space(corr_power_db, ax=ax2[2], title=title_corr, colorbar=False)
-    subfigs[2].colorbar(im, ax=ax2, label="Normalized Db")
-
-    ax3 = subfigs[3].subplots(1, 3, **share)
-    subfigs[3].suptitle("2D Patterns (Cartesian Projection)")
-    im = plot_ff_2d(target_power_db, ax=ax3[0], title=title_target, colorbar=False)
-    im = plot_ff_2d(dist_power_db, ax=ax3[1], title=title_dist, colorbar=False)
-    im = plot_ff_2d(corr_power_db, ax=ax3[2], title=title_corr, colorbar=False)
-    subfigs[3].colorbar(im, ax=ax3, label="Normalized Db")
+    axs = subfigs[1].subplots(1, 3, **kw)
+    plot_phase_shifts(np.angle(weights_orig), title=title_target, ax=axs[0])
+    plot_phase_shifts(np.angle(weights_corr), title=title_dist, ax=axs[1])
+    plot_phase_shifts(
+        np.angle(weights_corr) - np.angle(weights_orig),
+        title=title_corr,
+        ax=axs[2],
+    )
 
     steering_deg = np.degrees(steering_rad)
-    title = (
-        f"Correcting CST Patterns (θ={steering_deg[0]:.1f}°, φ={steering_deg[1]:.1f}°)"
-    )
+    title = f"CST Patterns (θ={steering_deg[0]:.1f}°, φ={steering_deg[1]:.1f}°)"
     fig.suptitle(title, fontweight="bold")
     filename = "demo_cst_patterns.png"
-    fig.savefig(filename, dpi=250)
+    fig.savefig(filename, dpi=250, bbox_inches="tight")
     logger.info(f"Saved CST demo plot to {filename}")
 
 
@@ -787,7 +768,7 @@ if __name__ == "__main__":
     setup_logging()
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
-        sum_cst()
-        demo_phase_shifts()
-        demo_openems_patterns()
+        # sum_cst()
+        # demo_phase_shifts()
+        # demo_openems_patterns()
         demo_cst_patterns()
