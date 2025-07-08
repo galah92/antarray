@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 from typing import NamedTuple
 
 import jax
@@ -8,7 +7,6 @@ import optax
 from flax import nnx
 
 from physics import (
-    DEFAULT_SIM_PATH,
     ArrayConfig,
     calculate_weights,
     compute_element_fields,
@@ -95,7 +93,6 @@ def train_pipeline(
     batch_size: int = 32,
     lr: float = 5e-4,
     seed: int = 42,
-    openems_path: Path | None = DEFAULT_SIM_PATH,
 ):
     """Main function to set up and run the training pipeline."""
     key = jax.random.key(seed)
@@ -104,12 +101,7 @@ def train_pipeline(
     logger.info("Performing one-time precomputation")
     config = ArrayConfig()
     kx, ky = compute_spatial_phase_coeffs(config)
-    if openems_path is not None:
-        element_patterns = load_element_patterns(
-            config, kind="openems", path=openems_path
-        )
-    else:
-        element_patterns = load_element_patterns(config, kind="synthetic")
+    element_patterns = load_element_patterns(config, kind="cst")
     element_fields = compute_element_fields(element_patterns, config)
 
     physics_params = PhysicsParams(
