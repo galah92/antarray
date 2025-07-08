@@ -264,16 +264,19 @@ def find_correction_weights(
     return w
 
 
+Kind = Literal["cst", "openems", "synthetic"]
+
+
 @lru_cache
 def load_element_patterns(
     config: ArrayConfig,
-    kind: Literal["cst", "openems", "synthetic"] = "cst",
+    kind: Kind = "cst",
     path: Path | None = None,
 ) -> np.ndarray:
     """Load or simulates element patterns for an array."""
     if kind == "openems":
         if path is None:
-            raise ValueError("Path must be provided for openems kind")
+            path = DEFAULT_SIM_PATH
         E_field = load_openems_nf2ff(path).E_field  # (n_theta, n_phi, 2)
 
         reps = config.array_size + (1,) * E_field.ndim
@@ -282,7 +285,7 @@ def load_element_patterns(
 
     if kind == "cst":
         if path is None:
-            raise ValueError("Path must be provided for cst kind")
+            path = Path(__file__).parents[1] / "cst" / "classic"
         return load_cst(path).element_fields
 
     if kind == "synthetic":
@@ -627,11 +630,7 @@ def demo_phase_shifts():
 def demo_openems_patterns():
     """Demonstrate OpenEMS pattern loading with new unified interface."""
     config = ArrayConfig()
-    element_patterns = load_element_patterns(
-        config,
-        kind="openems",
-        path=DEFAULT_SIM_PATH,
-    )
+    element_patterns = load_element_patterns(config, kind="openems")
 
     kx, ky = compute_spatial_phase_coeffs(config)
     steering_deg = jnp.array([0.0, 0.0])  # Broadside steering

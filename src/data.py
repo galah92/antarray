@@ -132,7 +132,6 @@ class Dataset:
         array_size: tuple[int, int] = (16, 16),
         spacing_mm: tuple[float, float] = (60, 60),
         theta_end: float = 65.0,
-        sim_path: Path = physics.DEFAULT_SIM_PATH,
         max_n_beams: int = 4,
         clip: bool = True,
         normalize: bool = True,
@@ -149,7 +148,6 @@ class Dataset:
         self.array_size = array_size
         self.spacing_mm = spacing_mm
         self.theta_end = jnp.radians(theta_end)
-        self.sim_path = sim_path
         self.kind = kind
 
         self.clip = clip
@@ -173,12 +171,7 @@ class Dataset:
         )
 
         config = physics.ArrayConfig()
-        if self.kind == "openems":
-            element_patterns = physics.load_element_patterns(
-                config, kind="openems", path=self.sim_path
-            )
-        else:
-            element_patterns = physics.load_element_patterns(config, kind="synthetic")
+        element_patterns = physics.load_element_patterns(config, kind=self.kind)
         kx, ky = physics.compute_spatial_phase_coeffs(config)
         element_fields = physics.compute_element_fields(element_patterns, config)
 
@@ -261,7 +254,7 @@ def generate_beamforming(
         clip=False,
         normalize=False,
         trig_encoding=False,
-        kind=kind,  # Pass through the parameter
+        kind=kind,
     )
 
     logger.info(f"Generating dataset with {n_samples} samples")
