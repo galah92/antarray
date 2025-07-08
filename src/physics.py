@@ -259,9 +259,13 @@ def solve_weights(
 
     if alpha is not None:
         # Solve the Ridge Regression problem: (A^H * A + alpha*I) * w = A^H * b
+        # Cost_normalized = (1 / n_points) * ||A*w - b||² + alpha * ||w||²
         A_H = A.T.conj()
+        # Scale down the matrix products by n_points
+        A_H_A = (A_H @ A) / n_points
+        A_H_b = (A_H @ b) / n_points
         I = jnp.eye(n_elements)
-        w = jnp.linalg.solve(A_H @ A + alpha * I, A_H @ b)  #  (n_elements,)
+        w = jnp.linalg.solve(A_H_A + alpha * I, A_H_b)  #  (n_elements,)
     else:
         # Solve the least-squares problem A * w = b for w
         w = jnp.linalg.lstsq(A, b, rcond=None)[0]  # (n_elements,)
@@ -722,7 +726,7 @@ def demo_cst_patterns():
     target_field = synthesize_pattern(orig_elem_fields, weights_orig, power=False)
     target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
     target_power_db = convert_to_db(target_power, floor_db=None, normalize=False)
-    weights_corr = solve_weights(target_field, dist_elem_fields)
+    weights_corr = solve_weights(target_field, dist_elem_fields, alpha=1e-1)
 
     dist_power = synthesize_pattern(dist_elem_fields, weights_orig)
     corr_power = synthesize_pattern(dist_elem_fields, weights_corr)
@@ -755,6 +759,10 @@ def demo_cst_patterns():
         title=title_corr,
         ax=axs[2],
     )
+
+    total_power_orig = np.sum(np.square(np.abs(weights_orig)))
+    total_power_corr = np.sum(np.square(np.abs(weights_corr)))
+    logger.info(f"{total_power_orig=:.2f}, {total_power_corr=:.2f}")
 
     steering_deg = np.degrees(steering_rad)
     title = f"CST Patterns (θ={steering_deg[0]:.1f}°, φ={steering_deg[1]:.1f}°)"
