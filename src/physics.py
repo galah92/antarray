@@ -105,9 +105,8 @@ class CstData(typing.NamedTuple):
     element_fields: jax.Array
 
 
-@lru_cache
-def load_cst(cst_path: Path) -> CstData:
-    logger.info(f"Loading antenna pattern from {cst_path}")
+def load_cst_file(cst_path: Path) -> np.ndarray:
+    """Load CST antenna pattern data from a file."""
     names = (
         "theta_deg",
         "phi_deg",
@@ -118,23 +117,30 @@ def load_cst(cst_path: Path) -> CstData:
         "phase_copol_deg",
         "ax_ratio",
     )
-    data = {}
-    for path in cst_path.iterdir():
-        i = int(path.stem.split()[-1][1:-1]) - 1
-        data[i] = np.genfromtxt(path, skip_header=2, dtype=np.float32, names=names)
-
-    data = [v for _, v in sorted(data.items())]
-    data = np.stack(data, axis=0)  # (16, 181 * 360, ...)
+    data = np.genfromtxt(cst_path, skip_header=2, dtype=np.float32, names=names)
 
     phase_copol = np.radians(data["phase_copol_deg"])
     phase_cross = np.radians(data["phase_cross_deg"])
     E_copol = np.sqrt(data["abs_copol"]) * np.exp(1j * phase_copol)
     E_cross = np.sqrt(data["abs_cross"]) * np.exp(1j * phase_cross)
-    fields = np.stack([E_copol, E_cross], axis=-1)
+    field = np.stack([E_copol, E_cross], axis=-1)
 
-    fields = fields.reshape(-1, 360, 181, 2)  #  (n_element, phi, theta, n_pol)
-    fields = fields.transpose((0, 2, 1, 3))  #  (n_element, theta, phi, n_pol)
-    fields = fields[:, :-1]  #  Remove last theta value
+    field = field.reshape(360, 181, 2)  #  (phi, theta, n_pol)
+    field = field.transpose((1, 0, 2))  #  (theta, phi, n_pol)
+    field = field[:-1]  #  Remove last theta value
+    return field
+
+
+@lru_cache
+def load_cst(cst_path: Path) -> CstData:
+    logger.info(f"Loading antenna pattern from {cst_path}")
+    data = {}
+    for path in cst_path.iterdir():
+        i = int(path.stem.split()[-1][1:-1]) - 1
+        data[i] = load_cst_file(path)
+
+    data = [v for _, v in sorted(data.items())]
+    fields = np.stack(data, axis=0)
     fields = fields.reshape(4, 4, *fields.shape[1:])
 
     config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
@@ -198,7 +204,7 @@ def calculate_weights(
 
     weights = jnp.exp(-1j * phase_shifts)  # (n_x, n_y, n_beams)
     weights = jnp.sum(weights, axis=-1)  # (n_x, n_y), assume no tapering
-    weights = weights / np.prod(weights.shape)  # Normalize weights
+    weights = weights / np.sqrt(np.prod(weights.shape))  # Normalize weights
 
     return weights, phase_shifts
 
@@ -650,6 +656,59 @@ def demo_openems_patterns():
     logger.info(f"Saved OpenEMS sample plot to {fig_path}")
 
 
+def sum_cst():
+    cst_path = Path(__file__).parents[1] / "cst"
+    cst_data = load_cst(cst_path / "classic")
+    fields = cst_data.element_fields
+    powers = jnp.sum(jnp.abs(fields) ** 2, axis=-1)
+    powers_db = convert_to_db(powers, floor_db=None, normalize=False)
+    n_x, n_y = fields.shape[:2]
+
+    # CST sum
+    p = (
+        Path(__file__).parents[2]
+        / "farfield (f=2400) [1[1,0]+2[1,0]+3[1,0]+4[1,0]+5[1,0]+6[1,0]+7[1,0]+8[1,0]+9[1,0]+10[1,0]+11[1,0...].txt"
+    )
+    g_field = load_cst_file(p)
+    g_power = jnp.sum(jnp.abs(g_field) ** 2, axis=-1)
+    g_power_db = convert_to_db(g_power, floor_db=None, normalize=False)
+
+    # direct sum of fields
+    fields_sum = jnp.sum(fields, axis=(0, 1)) / np.sqrt(n_x * n_y)
+    power_sum = jnp.sum(jnp.abs(fields_sum) ** 2, axis=-1)
+    power_sum_db = convert_to_db(power_sum, floor_db=None, normalize=False)
+
+    # proper sum of fields
+    steering_rad = np.radians([0, 0])
+    kx, ky = compute_spatial_phase_coeffs(cst_data.config)
+    weights, _ = calculate_weights(kx, ky, steering_rad)
+    p_fields = synthesize_pattern(fields, weights, power=False)
+    p_power = jnp.sum(jnp.abs(p_fields) ** 2, axis=-1)
+    p_power_db = convert_to_db(p_power, floor_db=None, normalize=False)
+
+    kw = dict(subplot_kw=dict(projection="polar"), figsize=(6, 6), layout="compressed")
+    fig, ax = plt.subplots(1, 1, **kw)
+    plot_E_plane(g_power_db, ax=ax, fmt="r-", label="CST Original")
+    plot_E_plane(power_sum_db, ax=ax, fmt="g-", label="Direct Sum")
+    plot_E_plane(p_power_db, ax=ax, fmt="b-", label="Proper Sum")
+    ax.set_title("CST Element Patterns (E-plane Cut)")
+    ax.legend(loc="upper right")
+    filename = "cst_compare.png"
+    fig.savefig(filename, dpi=150, bbox_inches="tight")
+    logger.info(f"Saved CST sum plot to {filename}")
+
+    fig = plt.figure(figsize=(16, 16), layout="compressed")
+    kw = dict(sharex=True, sharey=True, subplot_kw=dict(projection="polar"))
+    axs = fig.subplots(n_x, n_y, **kw)
+    for (i, j), ax in np.ndenumerate(axs):
+        title = f"Element ({i + 1}, {j + 1})"
+        plot_E_plane(powers_db[i, j], phi_idx=0, title=title, ax=ax)
+    fig.suptitle("CST Element Patterns (E-plane Cuts)")
+    filename = "cst_sum.png"
+    fig.savefig(filename, dpi=150, bbox_inches="tight")
+    logger.info(f"Saved CST sum plot to {filename}")
+
+
 def demo_cst_patterns():
     cst_path = Path(__file__).parents[1] / "cst"
     cst_orig_data = load_cst(cst_path / "classic")
@@ -728,6 +787,7 @@ if __name__ == "__main__":
     setup_logging()
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
+        sum_cst()
         demo_phase_shifts()
         demo_openems_patterns()
         demo_cst_patterns()
