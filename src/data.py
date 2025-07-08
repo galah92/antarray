@@ -2,7 +2,7 @@ import logging
 import subprocess as sp
 from functools import partial
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import NamedTuple
 
 import h5py
 import jax
@@ -138,7 +138,7 @@ class Dataset:
         radiation_pattern_max: float = 30.0,  # Maximum radiation pattern value in dB observed
         trig_encoding: bool = True,
         key: jax.Array | None = None,
-        kind: Literal["cst", "openems", "synthetic"] = "cst",
+        kind: physics.Kind = "cst",
     ):
         self.batch_size = batch_size
         self.limit = limit
@@ -236,7 +236,7 @@ def generate_beamforming(
     dataset_name: str = DEFAULT_DATASET_NAME,
     overwrite: bool = False,
     seed: int = 42,
-    kind: Literal["cst", "openems", "synthetic"] = "synthetic",
+    kind: physics.Kind = "cst",
 ):
     array_size = (16, 16)
     theta_rad = np.radians(np.arange(90))
