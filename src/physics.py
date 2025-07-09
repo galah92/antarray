@@ -100,9 +100,16 @@ def load_openems_nf2ff(nf2ff_path: Path):
     return OpenEMSData(theta_rad, phi_rad, r, Dmax, freq_hz, E_field, power_density)
 
 
-class CstData(typing.NamedTuple):
+Kind = Literal["cst", "openems", "synthetic"]
+
+
+@dataclass(frozen=True)
+class ElementPatternData:
+    """Dataclass for element pattern data."""
+
+    element_patterns: jax.Array
     config: ArrayConfig
-    element_fields: jax.Array
+    source: Kind
 
 
 def load_cst_file(cst_path: Path) -> np.ndarray:
@@ -132,7 +139,7 @@ def load_cst_file(cst_path: Path) -> np.ndarray:
 
 
 @lru_cache
-def load_cst(cst_path: Path) -> CstData:
+def load_cst(cst_path: Path) -> np.ndarray:
     logger.info(f"Loading antenna pattern from {cst_path}")
     data = {}
     for path in cst_path.iterdir():
@@ -142,9 +149,7 @@ def load_cst(cst_path: Path) -> CstData:
     data = [v for _, v in sorted(data.items())]
     fields = np.stack(data, axis=0)
     fields = fields.reshape(4, 4, *fields.shape[1:])
-
-    config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
-    return CstData(config=config, element_fields=fields)
+    return fields
 
 
 def get_wavenumber(freq_hz: float | None = None) -> float:
@@ -274,15 +279,12 @@ def solve_weights(
     return w
 
 
-Kind = Literal["cst", "openems", "synthetic"]
-
-
 @lru_cache
 def load_element_patterns(
     config: ArrayConfig,
     kind: Kind = "cst",
     path: Path | None = None,
-) -> np.ndarray:
+) -> ElementPatternData:
     """Load or simulates element patterns for an array."""
     if kind == "openems":
         if path is None:
@@ -291,12 +293,18 @@ def load_element_patterns(
 
         reps = config.array_size + (1,) * E_field.ndim
         element_patterns = np.tile(E_field[None, None, ...], reps)
-        return element_patterns  # (n_x, n_y, n_theta, n_phi, n_pol)
+        return ElementPatternData(
+            element_patterns=element_patterns, config=config, source=kind
+        )
 
     if kind == "cst":
         if path is None:
             path = Path(__file__).parents[1] / "cst" / "classic"
-        return load_cst(path).element_fields
+        element_fields = load_cst(path)
+        cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
+        return ElementPatternData(
+            element_patterns=element_fields, config=cst_config, source=kind
+        )
 
     if kind == "synthetic":
         theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
@@ -311,7 +319,10 @@ def load_element_patterns(
         # Create element patterns for each element in the array
         reps = config.array_size + (1,) * E_field.ndim
         element_patterns = np.tile(E_field[None, None, ...], reps)
-        return element_patterns.astype(np.complex64)
+        element_patterns = element_patterns.astype(np.complex64)
+        return ElementPatternData(
+            element_patterns=element_patterns, config=config, source=kind
+        )
 
     raise ValueError(f"Unknown kind: {kind!r}")
 
@@ -640,7 +651,9 @@ def demo_phase_shifts():
 def demo_openems_patterns():
     """Demonstrate OpenEMS pattern loading with new unified interface."""
     config = ArrayConfig()
-    element_patterns = load_element_patterns(config, kind="openems")
+    element_data = load_element_patterns(config, kind="openems")
+    element_patterns = element_data.element_patterns
+    config = element_data.config
 
     kx, ky = compute_spatial_phase_coeffs(config)
     steering_deg = jnp.array([0.0, 0.0])  # Broadside steering
@@ -662,11 +675,10 @@ def demo_openems_patterns():
 
 def sum_cst():
     cst_path = Path(__file__).parents[1] / "cst"
-    cst_data = load_cst(cst_path / "classic")
-    fields = cst_data.element_fields
-    powers = jnp.sum(jnp.abs(fields) ** 2, axis=-1)
+    element_fields = load_cst(cst_path / "classic")
+    powers = jnp.sum(jnp.abs(element_fields) ** 2, axis=-1)
     powers_db = convert_to_db(powers, floor_db=None, normalize=False)
-    n_x, n_y = fields.shape[:2]
+    n_x, n_y = element_fields.shape[:2]
 
     # CST sum
     p = (
@@ -678,15 +690,16 @@ def sum_cst():
     g_power_db = convert_to_db(g_power, floor_db=None, normalize=False)
 
     # direct sum of fields
-    fields_sum = jnp.sum(fields, axis=(0, 1)) / np.sqrt(n_x * n_y)
+    fields_sum = jnp.sum(element_fields, axis=(0, 1)) / np.sqrt(n_x * n_y)
     power_sum = jnp.sum(jnp.abs(fields_sum) ** 2, axis=-1)
     power_sum_db = convert_to_db(power_sum, floor_db=None, normalize=False)
 
     # proper sum of fields
     steering_rad = np.radians([0, 0])
-    kx, ky = compute_spatial_phase_coeffs(cst_data.config)
+    cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
+    kx, ky = compute_spatial_phase_coeffs(cst_config)
     weights, _ = calculate_weights(kx, ky, steering_rad)
-    p_fields = synthesize_pattern(fields, weights, power=False)
+    p_fields = synthesize_pattern(element_fields, weights, power=False)
     p_power = jnp.sum(jnp.abs(p_fields) ** 2, axis=-1)
     p_power_db = convert_to_db(p_power, floor_db=None, normalize=False)
 
@@ -715,12 +728,12 @@ def sum_cst():
 
 def demo_cst_patterns():
     cst_path = Path(__file__).parents[1] / "cst"
-    cst_data = load_cst(cst_path / "classic")
-    orig_elem_fields = cst_data.element_fields
-    dist_elem_fields = load_cst(cst_path / "disturbed_5").element_fields
+    orig_elem_fields = load_cst(cst_path / "classic")
+    dist_elem_fields = load_cst(cst_path / "disturbed_5")
 
     steering_rad = np.radians([0, 0])
-    kx, ky = compute_spatial_phase_coeffs(cst_data.config)
+    cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
+    kx, ky = compute_spatial_phase_coeffs(cst_config)
     weights_orig, _ = calculate_weights(kx, ky, steering_rad)
 
     target_field = synthesize_pattern(orig_elem_fields, weights_orig, power=False)
@@ -734,7 +747,7 @@ def demo_cst_patterns():
     dist_power_db = convert_to_db(dist_power, normalize=False)
     corr_power_db = convert_to_db(corr_power, normalize=False)
 
-    phi_rad = cst_data.config.phi_rad
+    phi_rad = cst_config.phi_rad
     phi_idx = np.abs(phi_rad - steering_rad[1]).argmin()
     logger.info(f"Using phi index {phi_idx} for steering angle {steering_rad[1]} rad")
 
@@ -776,7 +789,7 @@ if __name__ == "__main__":
     setup_logging()
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
-        # sum_cst()
-        # demo_phase_shifts()
-        # demo_openems_patterns()
+        sum_cst()
+        demo_phase_shifts()
+        demo_openems_patterns()
         demo_cst_patterns()

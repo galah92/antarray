@@ -100,8 +100,10 @@ def train_pipeline(
 
     logger.info("Performing one-time precomputation")
     config = ArrayConfig()
+    element_data = load_element_patterns(config, kind="cst")
+    element_patterns = element_data.element_patterns
+    config = element_data.config
     kx, ky = compute_spatial_phase_coeffs(config)
-    element_patterns = load_element_patterns(config, kind="cst")
     element_fields = compute_element_fields(element_patterns, config)
 
     physics_params = PhysicsParams(
