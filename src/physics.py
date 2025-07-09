@@ -750,7 +750,8 @@ def demo_cst_patterns():
     orig_elem_fields = load_cst(cst_path / "classic")
     dist_elem_fields = load_cst(cst_path / "disturbed_5")
 
-    steering_rad = np.radians([0, 0])
+    steering_deg = np.array([30.0, 0.0])
+    steering_rad = np.radians(steering_deg)
     cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
     kx, ky = compute_spatial_phase_coeffs(cst_config)
     weights_orig, _ = calculate_weights(kx, ky, steering_rad)
@@ -758,7 +759,7 @@ def demo_cst_patterns():
     target_field = synthesize_pattern(orig_elem_fields, weights_orig, power=False)
     target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
     target_power_db = convert_to_db(target_power, floor_db=None, normalize=False)
-    weights_corr = solve_weights(target_field, dist_elem_fields, alpha=1e-1)
+    weights_corr = solve_weights(target_field, dist_elem_fields, alpha=1e-2)
 
     dist_power = synthesize_pattern(dist_elem_fields, weights_orig)
     corr_power = synthesize_pattern(dist_elem_fields, weights_corr)
@@ -766,9 +767,9 @@ def demo_cst_patterns():
     dist_power_db = convert_to_db(dist_power, normalize=False)
     corr_power_db = convert_to_db(corr_power, normalize=False)
 
-    phi_rad = cst_config.phi_rad
-    phi_idx = np.abs(phi_rad - steering_rad[1]).argmin()
-    logger.info(f"Using phi index {phi_idx} for steering angle {steering_rad[1]} rad")
+    phi_slice = steering_rad[1] + np.pi / 2  # To view changes in theta
+    phi_idx = np.abs(cst_config.phi_rad - phi_slice).argmin()
+    logger.info(f"Using phi index {phi_idx}")
 
     fig = plt.figure(figsize=(15, 10), layout="constrained")
     subfigs = typing.cast(list[SubFigure], fig.subfigures(2, 1))
@@ -796,7 +797,6 @@ def demo_cst_patterns():
     total_power_corr = np.sum(np.square(np.abs(weights_corr)))
     logger.info(f"{total_power_orig=:.2f}, {total_power_corr=:.2f}")
 
-    steering_deg = np.degrees(steering_rad)
     title = f"CST Patterns (θ={steering_deg[0]:.1f}°, φ={steering_deg[1]:.1f}°)"
     fig.suptitle(title, fontweight="bold")
     filename = "demo_cst_patterns.png"
