@@ -770,14 +770,18 @@ def demo_cst_patterns():
     phi_idx = np.abs(orig_data.config.phi_rad - phi_slice).argmin()
     logger.info(f"Using phi index {phi_idx}")
 
+    dist_mse = np.mean(np.square(dist_power_db - target_power_db))
+    corr_mse = np.mean(np.square(corr_power_db - target_power_db))
+    logger.info(f"{dist_mse=:.2f}, {corr_mse=:.2f}")
+
     kw = dict(subplot_kw=dict(projection="polar"), layout="compressed")
     fig, ax = plt.subplots(figsize=(8, 8), **kw)
 
     plot = partial(plot_E_plane, phi_idx=phi_idx, ax=ax)
     plot(target_power_db, fmt="r-", label="Target Pattern")
-    plot(dist_power_db, fmt="g-", label="Distorted Pattern")
-    plot(corr_power_db, fmt="b-", label="Corrected Pattern")
-    ax.legend(loc="lower right")
+    plot(dist_power_db, fmt="g-", label=f"Distorted Pattern (MSE={dist_mse:.2f})")
+    plot(corr_power_db, fmt="b-", label=f"Corrected Pattern (MSE={corr_mse:.2f})")
+    ax.legend(loc="lower center")
 
     total_power_orig = np.sum(np.square(np.abs(weights_orig)))
     total_power_corr = np.sum(np.square(np.abs(weights_corr)))
@@ -785,7 +789,7 @@ def demo_cst_patterns():
 
     title = f"CST Patterns (θ={steering_deg[0]:.1f}°, φ={steering_deg[1]:.1f}°)"
     fig.suptitle(title, fontweight="bold")
-    filename = "demo_cst_patterns.png"
+    filename = f"demo_cst_patterns_{steering_deg[0]:.0f}_{steering_deg[1]:.0f}.png"
     fig.savefig(filename, dpi=250, bbox_inches="tight")
     logger.info(f"Saved CST demo plot to {filename}")
 
