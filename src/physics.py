@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from jax.typing import ArrayLike
 from matplotlib.colorizer import ColorizingArtist
-from matplotlib.figure import SubFigure
 from matplotlib.image import AxesImage
 from matplotlib.projections import PolarAxes
 from mpl_toolkits.mplot3d import Axes3D
@@ -746,52 +745,39 @@ def sum_cst():
 
 
 def demo_cst_patterns():
+    orig_data = ElementPatternData.from_cst()
     cst_path = Path(__file__).parents[1] / "cst"
-    orig_elem_fields = load_cst(cst_path / "classic")
-    dist_elem_fields = load_cst(cst_path / "disturbed_5")
+    dist_data = ElementPatternData.from_cst(cst_path / "disturbed_5")
 
     steering_deg = np.array([30.0, 0.0])
     steering_rad = np.radians(steering_deg)
-    cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
-    kx, ky = compute_spatial_phase_coeffs(cst_config)
+    kx, ky = compute_spatial_phase_coeffs(orig_data.config)
     weights_orig, _ = calculate_weights(kx, ky, steering_rad)
 
-    target_field = synthesize_pattern(orig_elem_fields, weights_orig, power=False)
+    to_db = partial(convert_to_db, normalize=False)
+
+    target_field = synthesize_pattern(
+        orig_data.element_patterns, weights_orig, power=False
+    )
     target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
-    target_power_db = convert_to_db(target_power, floor_db=None, normalize=False)
-    weights_corr = solve_weights(target_field, dist_elem_fields, alpha=1e-2)
+    target_power_db = to_db(target_power)
+    weights_corr = solve_weights(target_field, dist_data.element_patterns, alpha=None)
 
-    dist_power = synthesize_pattern(dist_elem_fields, weights_orig)
-    corr_power = synthesize_pattern(dist_elem_fields, weights_corr)
-
-    dist_power_db = convert_to_db(dist_power, normalize=False)
-    corr_power_db = convert_to_db(corr_power, normalize=False)
+    dist_power_db = to_db(synthesize_pattern(dist_data.element_patterns, weights_orig))
+    corr_power_db = to_db(synthesize_pattern(dist_data.element_patterns, weights_corr))
 
     phi_slice = steering_rad[1] + np.pi / 2  # To view changes in theta
-    phi_idx = np.abs(cst_config.phi_rad - phi_slice).argmin()
+    phi_idx = np.abs(orig_data.config.phi_rad - phi_slice).argmin()
     logger.info(f"Using phi index {phi_idx}")
 
-    fig = plt.figure(figsize=(15, 10), layout="constrained")
-    subfigs = typing.cast(list[SubFigure], fig.subfigures(2, 1))
-    kw = dict(sharex=True, sharey=True)
+    kw = dict(subplot_kw=dict(projection="polar"), layout="compressed")
+    fig, ax = plt.subplots(figsize=(8, 8), **kw)
 
-    title_target = "Target (Original Array)"
-    title_dist = "Distorted Array (Uncorrected)"
-    title_corr = "Distorted Array (Corrected)"
-
-    axs = subfigs[0].subplots(1, 3, **kw, subplot_kw=dict(projection="polar"))
-    plot_E_plane(target_power_db, phi_idx=phi_idx, ax=axs[0], title=title_target)
-    plot_E_plane(dist_power_db, phi_idx=phi_idx, ax=axs[1], title=title_dist)
-    plot_E_plane(corr_power_db, phi_idx=phi_idx, ax=axs[2], title=title_corr)
-
-    axs = subfigs[1].subplots(1, 3, **kw)
-    plot_phase_shifts(np.angle(weights_orig), title=title_target, ax=axs[0])
-    plot_phase_shifts(np.angle(weights_corr), title=title_dist, ax=axs[1])
-    plot_phase_shifts(
-        np.angle(weights_corr) - np.angle(weights_orig),
-        title=title_corr,
-        ax=axs[2],
-    )
+    plot = partial(plot_E_plane, phi_idx=phi_idx, ax=ax)
+    plot(target_power_db, fmt="r-", label="Target Pattern")
+    plot(dist_power_db, fmt="g-", label="Distorted Pattern")
+    plot(corr_power_db, fmt="b-", label="Corrected Pattern")
+    ax.legend(loc="lower right")
 
     total_power_orig = np.sum(np.square(np.abs(weights_orig)))
     total_power_corr = np.sum(np.square(np.abs(weights_corr)))
