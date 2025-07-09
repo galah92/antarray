@@ -918,7 +918,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2.2" },
     { name = "optax", marker = "extra == 'jax'", specifier = ">=0.2.4" },
     { name = "orbax-checkpoint", marker = "extra == 'jax'", specifier = ">=0.11.13" },
-    { name = "ruff", specifier = ">=0.9.5" },
+    { name = "ruff", specifier = ">=0.12.2" },
     { name = "scipy", specifier = ">=1.15.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "ty", specifier = ">=0.0.1a14" },

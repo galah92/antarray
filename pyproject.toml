@@ -9,7 +9,7 @@ dependencies = [
     "matplotlib>=3.10.0",
     "h5py>=3.13.0",
     "tqdm>=4.67.1",
-    "ruff>=0.9.5",
+    "ruff>=0.12.2",
     "ty>=0.0.1a14",
     "cyclopts>=3.22.1",
 ]
