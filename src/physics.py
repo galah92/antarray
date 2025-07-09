@@ -97,6 +97,60 @@ class ElementPatternData(NamedTuple):
     config: ArrayConfig
     source: Kind
 
+    @staticmethod
+    def from_cst(cst_path: Path | None = None) -> "ElementPatternData":
+        """Load CST antenna patterns from a directory."""
+        if cst_path is None:
+            cst_path = Path(__file__).parents[1] / "cst" / "classic"
+        element_fields = load_cst(cst_path)
+        # As given by Snir
+        cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
+        return ElementPatternData(
+            element_patterns=element_fields, config=cst_config, source="cst"
+        )
+
+    @staticmethod
+    def from_openems(
+        array_size: tuple[int, int] = (16, 16),
+        spacing_mm: tuple[float, float] = (60.0, 60.0),
+        path: Path | None = None,
+    ) -> "ElementPatternData":
+        if path is None:
+            path = DEFAULT_SIM_PATH
+        openems_data = load_openems_nf2ff(path)
+
+        E_field = openems_data.E_field  # (freq, n_theta, n_phi, 2)
+        reps = array_size + (1,) * E_field.ndim
+        element_patterns = np.tile(E_field[None, None, ...], reps)
+
+        openems_config = ArrayConfig(
+            array_size=element_patterns.shape[:2],
+            spacing_mm=spacing_mm,
+            freq_hz=openems_data.freq_hz.item(),
+            theta_rad=openems_data.theta_rad,
+            phi_rad=openems_data.phi_rad,
+        )
+
+        return ElementPatternData(
+            element_patterns=element_patterns, config=openems_config, source="openems"
+        )
+
+    @staticmethod
+    def from_kind(
+        kind: Kind = "cst",
+        path: Path | None = None,
+    ) -> "ElementPatternData":
+        """Factory method to create ElementPatternData from a specified kind."""
+        if kind == "cst":
+            return ElementPatternData.from_cst(path)
+        elif kind == "openems":
+            return ElementPatternData.from_openems(path=path)
+        elif kind == "synthetic":
+            config = ArrayConfig()
+            return load_element_patterns(config, kind=kind)
+        else:
+            raise ValueError(f"Unknown kind: {kind!r}")
+
 
 def load_cst_file(cst_path: Path) -> np.ndarray:
     """Load CST antenna pattern data from a file."""
@@ -617,16 +671,14 @@ def demo_phase_shifts():
 
 def demo_openems_patterns():
     """Demonstrate OpenEMS pattern loading with new unified interface."""
-    config = ArrayConfig()
-    element_data = load_element_patterns(config, kind="openems")
-    element_patterns = element_data.element_patterns
+    element_data = ElementPatternData.from_openems()
     config = element_data.config
 
     kx, ky = compute_spatial_phase_coeffs(config)
     steering_deg = jnp.array([0.0, 0.0])  # Broadside steering
     weights, _ = calculate_weights(kx, ky, jnp.radians(steering_deg))
 
-    element_fields = compute_element_fields(element_patterns, config)
+    element_fields = compute_element_fields(element_data.element_patterns, config)
     power_pattern = synthesize_pattern(element_fields, weights, power=True)
     power_dB = convert_to_db(power_pattern)
 
