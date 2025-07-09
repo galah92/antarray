@@ -5,12 +5,10 @@ import time
 from collections.abc import Iterator, Sequence
 from datetime import datetime, timedelta
 from functools import partial
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optax
 import orbax.checkpoint as ocp
 from flax import nnx
 from jax.experimental.compilation_cache import compilation_cache as cc
@@ -171,47 +169,6 @@ class UNetCore(nnx.Module):
         up1 = self.up1(up1)
 
         return up1
-
-
-class VelocityNet(nnx.Module):
-    """Neural network that predicts velocity field for flow matching."""
-
-    def __init__(self, base_channels: int = 64, *, rngs: nnx.Rngs):
-        self.pattern_encoder = PatternEncoder(base_channels, rngs=rngs)
-        self.weights_processor = WeightsProcessor(base_channels, rngs=rngs)
-        self.unet_core = UNetCore(base_channels, rngs=rngs)
-
-        # Time embedding for flow time t ∈ [0, 1]
-        self.time_mlp = nnx.Sequential(
-            nnx.Linear(1, base_channels, rngs=rngs),
-            nnx.relu,
-            nnx.Linear(base_channels, base_channels * 2, rngs=rngs),
-        )
-
-        # Output velocity field
-        self.output = nnx.Conv(base_channels, 2, (1, 1), rngs=rngs)
-
-    def __call__(
-        self, weights: ArrayLike, target_pattern: ArrayLike, time: ArrayLike
-    ) -> jax.Array:
-        # Encode inputs
-        pattern_features = self.pattern_encoder(target_pattern)
-        weights_features = self.weights_processor(weights)
-
-        # Time embedding
-        time_emb = self.time_mlp(time[..., None])
-        time_emb = time_emb[:, None, None, :]
-
-        # Combine features
-        x = jnp.concatenate([pattern_features, weights_features], axis=-1)
-        x = x + time_emb
-
-        # UNet processing
-        x = self.unet_core(x)
-
-        # Output
-        output = self.output(x)
-        return output[..., 0] + 1j * output[..., 1]
 
 
 class DenoisingUNet(nnx.Module):
@@ -384,25 +341,6 @@ def restore_checkpoint(
     return step
 
 
-def create_checkpoint_manager(
-    checkpoint_dir: Path,
-    max_to_keep: int = 3,
-    save_interval_steps: int = 1,
-    read_only: bool = False,
-) -> ocp.CheckpointManager:
-    """Create a checkpoint manager with common settings."""
-    checkpoint_dir = checkpoint_dir.resolve()
-    if not read_only:
-        checkpoint_dir.mkdir(exist_ok=True)
-
-    options = ocp.CheckpointManagerOptions(
-        max_to_keep=max_to_keep,
-        save_interval_steps=save_interval_steps,
-        read_only=read_only,
-    )
-    return ocp.CheckpointManager(checkpoint_dir, options=options)
-
-
 # =============================================================================
 # Training Utilities
 # =============================================================================
@@ -426,36 +364,6 @@ def steering_angles_sampler(
         theta = uniform(theta_key, shape=(batch_size,), minval=minval, maxval=theta_end)
         phi = uniform(phi_key, shape=(batch_size,), minval=minval, maxval=phi_end)
         yield jnp.stack([theta, phi], axis=-1)
-
-
-@jax.jit
-def calculate_pattern_loss(
-    predicted_patterns: ArrayLike, target_patterns: ArrayLike
-) -> tuple[jax.Array, dict]:
-    """Calculates loss and metrics between predicted and target patterns."""
-    mse = optax.losses.squared_error(predicted_patterns, target_patterns).mean()
-    rmse = jnp.sqrt(mse)
-    return mse, {"mse": mse, "rmse": rmse}
-
-
-def create_standard_optimizer(
-    model: nnx.Module,
-    learning_rate: float,
-    n_steps: int,
-    weight_decay: float = 1e-6,
-) -> nnx.Optimizer:
-    """Creates a standard optimizer with learning rate scheduling."""
-    lr_schedule = optax.warmup_cosine_decay_schedule(
-        init_value=learning_rate * 0.1,
-        peak_value=learning_rate,
-        warmup_steps=500,
-        decay_steps=n_steps - 500,
-        end_value=learning_rate * 0.01,
-    )
-
-    return nnx.Optimizer(
-        model, optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay)
-    )
 
 
 def create_progress_logger(
