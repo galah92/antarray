@@ -92,7 +92,7 @@ Kind = Literal["cst", "openems", "synthetic"]
 class ElementPatternData(NamedTuple):
     """Hold element patterns and configuration."""
 
-    element_patterns: np.ndarray
+    aeps: np.ndarray  # Antenna Element Patterns
     config: ArrayConfig
     source: Kind
 
@@ -104,9 +104,7 @@ class ElementPatternData(NamedTuple):
         element_fields = load_cst(cst_path)
         # As given by Snir
         cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
-        return ElementPatternData(
-            element_patterns=element_fields, config=cst_config, source="cst"
-        )
+        return ElementPatternData(aeps=element_fields, config=cst_config, source="cst")
 
     @staticmethod
     def from_openems(
@@ -120,19 +118,17 @@ class ElementPatternData(NamedTuple):
 
         E_field = openems_data.E_field  # (freq, n_theta, n_phi, 2)
         reps = array_size + (1,) * E_field.ndim
-        element_patterns = np.tile(E_field[None, None, ...], reps)
+        aeps = np.tile(E_field[None, None, ...], reps)
 
         openems_config = ArrayConfig(
-            array_size=element_patterns.shape[:2],
+            array_size=aeps.shape[:2],
             spacing_mm=spacing_mm,
             freq_hz=openems_data.freq_hz.item(),
             theta_rad=openems_data.theta_rad,
             phi_rad=openems_data.phi_rad,
         )
 
-        return ElementPatternData(
-            element_patterns=element_patterns, config=openems_config, source="openems"
-        )
+        return ElementPatternData(aeps=aeps, config=openems_config, source="openems")
 
     @staticmethod
     def from_kind(
@@ -146,7 +142,7 @@ class ElementPatternData(NamedTuple):
             return ElementPatternData.from_openems(path=path)
         elif kind == "synthetic":
             config = ArrayConfig()
-            return load_element_patterns(config, kind=kind)
+            return load_aeps(config, kind=kind)
         else:
             raise ValueError(f"Unknown kind: {kind!r}")
 
@@ -244,7 +240,7 @@ def calculate_weights(
 
 
 def compute_element_fields(
-    element_patterns: np.ndarray,
+    aeps: np.ndarray,
     config: ArrayConfig,
 ) -> np.ndarray:
     """Create element field basis with geometric phase factors."""
@@ -258,7 +254,7 @@ def compute_element_fields(
     geo_phase = phase_x[..., None] + phase_y[..., None, :]  # (n_theta, n_phi, n_x, n_y)
     geo_factor = np.exp(1j * geo_phase)  # (n_theta, n_phi, n_x, n_y)
 
-    element_fields = np.einsum("xytpz,tpxy->xytpz", element_patterns, geo_factor)
+    element_fields = np.einsum("xytpz,tpxy->xytpz", aeps, geo_factor)
     return element_fields
 
 
@@ -309,7 +305,7 @@ def solve_weights(
 
 
 @lru_cache
-def load_element_patterns(
+def load_aeps(
     config: ArrayConfig,
     kind: Kind = "cst",
     path: Path | None = None,
@@ -322,19 +318,17 @@ def load_element_patterns(
 
         E_field = openems_data.E_field  # (freq, n_theta, n_phi, 2)
         reps = config.array_size + (1,) * E_field.ndim
-        element_patterns = np.tile(E_field[None, None, ...], reps)
+        aeps = np.tile(E_field[None, None, ...], reps)
 
         openems_config = ArrayConfig(
-            array_size=element_patterns.shape[:2],
+            array_size=aeps.shape[:2],
             spacing_mm=config.spacing_mm,
             freq_hz=openems_data.freq_hz,
             theta_rad=openems_data.theta_rad,
             phi_rad=openems_data.phi_rad,
         )
 
-        return ElementPatternData(
-            element_patterns=element_patterns, config=openems_config, source=kind
-        )
+        return ElementPatternData(aeps=aeps, config=openems_config, source=kind)
 
     if kind == "cst":
         if path is None:
@@ -342,9 +336,7 @@ def load_element_patterns(
         element_fields = load_cst(path)
         # As given by Snir
         cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
-        return ElementPatternData(
-            element_patterns=element_fields, config=cst_config, source=kind
-        )
+        return ElementPatternData(aeps=element_fields, config=cst_config, source=kind)
 
     if kind == "synthetic":
         theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
@@ -358,11 +350,9 @@ def load_element_patterns(
 
         # Create element patterns for each element in the array
         reps = config.array_size + (1,) * E_field.ndim
-        element_patterns = np.tile(E_field[None, None, ...], reps)
-        element_patterns = element_patterns.astype(np.complex64)
-        return ElementPatternData(
-            element_patterns=element_patterns, config=config, source=kind
-        )
+        aeps = np.tile(E_field[None, None, ...], reps)
+        aeps = aeps.astype(np.complex64)
+        return ElementPatternData(aeps=aeps, config=config, source=kind)
 
     raise ValueError(f"Unknown kind: {kind!r}")
 
@@ -677,7 +667,7 @@ def demo_openems_patterns():
     steering_deg = jnp.array([0.0, 0.0])  # Broadside steering
     weights, _ = calculate_weights(kx, ky, jnp.radians(steering_deg))
 
-    element_fields = compute_element_fields(element_data.element_patterns, config)
+    element_fields = compute_element_fields(element_data.aeps, config)
     power_pattern = synthesize_pattern(element_fields, weights, power=True)
     power_dB = convert_to_db(power_pattern)
 
@@ -756,15 +746,13 @@ def demo_cst_patterns():
 
     to_db = partial(convert_to_db, normalize=False)
 
-    target_field = synthesize_pattern(
-        orig_data.element_patterns, weights_orig, power=False
-    )
+    target_field = synthesize_pattern(orig_data.aeps, weights_orig, power=False)
     target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
     target_power_db = to_db(target_power)
-    weights_corr = solve_weights(target_field, dist_data.element_patterns, alpha=None)
+    weights_corr = solve_weights(target_field, dist_data.aeps, alpha=None)
 
-    dist_power_db = to_db(synthesize_pattern(dist_data.element_patterns, weights_orig))
-    corr_power_db = to_db(synthesize_pattern(dist_data.element_patterns, weights_corr))
+    dist_power_db = to_db(synthesize_pattern(dist_data.aeps, weights_orig))
+    corr_power_db = to_db(synthesize_pattern(dist_data.aeps, weights_corr))
 
     phi_slice = steering_rad[1] + np.pi / 2  # To view changes in theta
     phi_idx = np.abs(orig_data.config.phi_rad - phi_slice).argmin()

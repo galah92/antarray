@@ -16,7 +16,7 @@ from physics import (
     calculate_weights,
     compute_element_fields,
     compute_spatial_phase_coeffs,
-    load_element_patterns,
+    load_aeps,
     normalize_patterns,
     synthesize_pattern,
 )
@@ -268,12 +268,12 @@ def train(
     # Create physics setup with optional OpenEMS support
     config = ArrayConfig()
     if openems_path is not None:
-        element_data = load_element_patterns(config, kind="openems", path=openems_path)
+        element_data = load_aeps(config, kind="openems", path=openems_path)
     else:
-        element_data = load_element_patterns(config, kind="synthetic")
-    element_patterns = element_data.element_patterns
+        element_data = load_aeps(config, kind="synthetic")
+    aeps = element_data.aeps
     config = element_data.config
-    element_fields = compute_element_fields(element_patterns, config)
+    element_fields = compute_element_fields(aeps, config)
     kx, ky = compute_spatial_phase_coeffs(config)
 
     # Create scheduler and model
@@ -352,12 +352,12 @@ def evaluate(
     # Create physics setup for evaluation with optional OpenEMS support
     config = ArrayConfig()
     if openems_path is not None:
-        element_data = load_element_patterns(config, kind="openems", path=openems_path)
+        element_data = load_aeps(config, kind="openems", path=openems_path)
     else:
-        element_data = load_element_patterns(config, kind="synthetic")
-    element_patterns = element_data.element_patterns
+        element_data = load_aeps(config, kind="synthetic")
+    aeps = element_data.aeps
     config = element_data.config
-    element_fields = compute_element_fields(element_patterns, config)
+    element_fields = compute_element_fields(aeps, config)
     kx, ky = compute_spatial_phase_coeffs(config)
 
     # Create scheduler and model

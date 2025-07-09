@@ -12,7 +12,7 @@ from physics import (
     compute_element_fields,
     compute_spatial_phase_coeffs,
     convert_to_db,
-    load_element_patterns,
+    load_aeps,
     synthesize_pattern,
 )
 from training import (
@@ -100,11 +100,11 @@ def train_pipeline(
 
     logger.info("Performing one-time precomputation")
     config = ArrayConfig()
-    element_data = load_element_patterns(config, kind="cst")
-    element_patterns = element_data.element_patterns
+    element_data = load_aeps(config, kind="cst")
+    aeps = element_data.aeps
     config = element_data.config
     kx, ky = compute_spatial_phase_coeffs(config)
-    element_fields = compute_element_fields(element_patterns, config)
+    element_fields = compute_element_fields(aeps, config)
 
     physics_params = PhysicsParams(
         element_fields=jnp.asarray(element_fields),

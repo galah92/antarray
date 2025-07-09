@@ -16,7 +16,7 @@ import physics
 from physics import (
     ArrayConfig,
     compute_element_fields,
-    load_element_patterns,
+    load_aeps,
     synthesize_pattern,
 )
 from training import (
@@ -264,10 +264,10 @@ def train(
     dataset = data.Dataset(batch_size=batch_size, limit=n_steps, key=dataset_key)
 
     config = ArrayConfig()
-    element_data = load_element_patterns(config, kind=kind)
-    element_patterns = element_data.element_patterns
+    element_data = load_aeps(config, kind=kind)
+    aeps = element_data.aeps
     config = element_data.config
-    element_fields = compute_element_fields(element_patterns, config)
+    element_fields = compute_element_fields(aeps, config)
     array_params = ArrayParams(element_fields=jnp.asarray(element_fields))
 
     warmup_step(dataset, optimizer, array_params)
