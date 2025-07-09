@@ -91,9 +91,9 @@ Kind = Literal["cst", "openems", "synthetic"]
 
 
 class ElementPatternData(NamedTuple):
-    """Dataclass for element pattern data."""
+    """Hold element patterns and configuration."""
 
-    element_patterns: jax.Array
+    element_patterns: np.ndarray
     config: ArrayConfig
     source: Kind
 
@@ -265,18 +265,29 @@ def load_element_patterns(
     if kind == "openems":
         if path is None:
             path = DEFAULT_SIM_PATH
-        E_field = load_openems_nf2ff(path).E_field  # (n_theta, n_phi, 2)
+        openems_data = load_openems_nf2ff(path)
 
+        E_field = openems_data.E_field  # (freq, n_theta, n_phi, 2)
         reps = config.array_size + (1,) * E_field.ndim
         element_patterns = np.tile(E_field[None, None, ...], reps)
+
+        openems_config = ArrayConfig(
+            array_size=element_patterns.shape[:2],
+            spacing_mm=config.spacing_mm,
+            freq_hz=openems_data.freq_hz,
+            theta_rad=openems_data.theta_rad,
+            phi_rad=openems_data.phi_rad,
+        )
+
         return ElementPatternData(
-            element_patterns=element_patterns, config=config, source=kind
+            element_patterns=element_patterns, config=openems_config, source=kind
         )
 
     if kind == "cst":
         if path is None:
             path = Path(__file__).parents[1] / "cst" / "classic"
         element_fields = load_cst(path)
+        # As given by Snir
         cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
         return ElementPatternData(
             element_patterns=element_fields, config=cst_config, source=kind

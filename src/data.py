@@ -151,21 +151,11 @@ class Dataset:
         self.radiation_pattern_max = radiation_pattern_max
         self.trig_encoding = trig_encoding
 
-        self.theta_rad = jnp.radians(jnp.arange(180))
-        self.phi_rad = jnp.radians(jnp.arange(360))
-
         if key is None:
             key = jax.random.key(0)
         self.key = key
 
-        # Always use unified physics interface now
-        config = physics.ArrayConfig(
-            array_size=array_size,
-            spacing_mm=spacing_mm,
-            theta_rad=self.theta_rad,
-            phi_rad=self.phi_rad,
-        )
-
+        config = physics.ArrayConfig(array_size=array_size, spacing_mm=spacing_mm)
         element_data = physics.load_element_patterns(config, kind=self.kind)
         element_patterns = element_data.element_patterns
         config = element_data.config  # Use the config from the loaded data
