@@ -4,11 +4,11 @@ from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
+import cyclopts
 import jax
 import jax.numpy as jnp
 import optax
 import orbax.checkpoint as ocp
-import typer
 from flax import nnx
 
 from physics import (
@@ -31,11 +31,7 @@ from utils import setup_logging
 
 logger = logging.getLogger(__name__)
 
-app = typer.Typer(
-    no_args_is_help=True,
-    pretty_exceptions_enable=False,
-    add_completion=False,
-)
+app = cyclopts.App()
 
 
 class DiffusionParams(NamedTuple):

@@ -4,11 +4,11 @@ from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
+import cyclopts
 import h5py
 import jax
 import jax.numpy as jnp
 import numpy as np
-import typer
 from jax.typing import ArrayLike
 from tqdm import tqdm
 
@@ -16,11 +16,7 @@ import physics
 
 logger = logging.getLogger(__name__)
 
-app = typer.Typer(
-    no_args_is_help=True,
-    pretty_exceptions_enable=False,
-    add_completion=False,
-)
+app = cyclopts.App()
 
 root_dir = Path(__file__).parent.parent
 
