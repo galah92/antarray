@@ -1,9 +1,8 @@
 import logging
 import typing
-from dataclasses import dataclass
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import h5py
 import jax
@@ -27,37 +26,25 @@ DEFAULT_SIM_DIR = root_dir / "openems" / "sim" / "antenna_array"
 DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
 DEFAULT_SIM_PATH = DEFAULT_SIM_DIR / DEFAULT_SINGLE_ANT_FILENAME
 
+DEFAULT_THETA_RAD = np.radians(np.arange(180))
+DEFAULT_PHI_RAD = np.radians(np.arange(360))
 
-class ArrayConfig:
+
+class ArrayConfig(NamedTuple):
     """Configuration for antenna array parameters and simulation settings."""
 
     array_size: tuple[int, int] = (16, 16)
     spacing_mm: tuple[float, float] = (60.0, 60.0)
     freq_hz: float = 2.45e9
-    theta_rad: np.ndarray = np.radians(np.arange(180))
-    phi_rad: np.ndarray = np.radians(np.arange(360))
+    theta_rad: np.ndarray = DEFAULT_THETA_RAD
+    phi_rad: np.ndarray = DEFAULT_PHI_RAD
 
-    def __init__(
-        self,
-        array_size: tuple[int, int] = (16, 16),
-        spacing_mm: tuple[float, float] = (60.0, 60.0),
-        freq_hz: float = 2.45e9,
-        theta_rad: np.ndarray | None = None,
-        phi_rad: np.ndarray | None = None,
-    ):
-        self.array_size = array_size
-        self.spacing_mm = spacing_mm
-        self.freq_hz = freq_hz
-        if theta_rad is None:
-            theta_rad = np.radians(np.arange(180))
-        if phi_rad is None:
-            phi_rad = np.radians(np.arange(360))
-        self.theta_rad = np.asarray(theta_rad, dtype=np.float32)
-        self.phi_rad = np.asarray(phi_rad, dtype=np.float32)
+    def __hash__(self):
+        # We cannot hash numpy arrays
+        return hash((self.array_size, self.spacing_mm, self.freq_hz))
 
 
-@dataclass(frozen=True)
-class OpenEMSData:
+class OpenEMSData(NamedTuple):
     theta_rad: jax.Array
     phi_rad: jax.Array
     r: jax.Array
@@ -68,7 +55,7 @@ class OpenEMSData:
 
 
 @lru_cache
-def load_openems_nf2ff(nf2ff_path: Path):
+def load_openems_nf2ff(nf2ff_path: Path) -> OpenEMSData:
     logger.info(f"Loading antenna pattern from {nf2ff_path}")
     with h5py.File(nf2ff_path, "r") as h5:
         mesh = h5["Mesh"]
@@ -103,8 +90,7 @@ def load_openems_nf2ff(nf2ff_path: Path):
 Kind = Literal["cst", "openems", "synthetic"]
 
 
-@dataclass(frozen=True)
-class ElementPatternData:
+class ElementPatternData(NamedTuple):
     """Dataclass for element pattern data."""
 
     element_patterns: jax.Array
@@ -152,11 +138,8 @@ def load_cst(cst_path: Path) -> np.ndarray:
     return fields
 
 
-def get_wavenumber(freq_hz: float | None = None) -> float:
-    """Calculate the wavenumber for a given frequency in Hz."""
-    if freq_hz is None:
-        freq_hz = ArrayConfig.freq_hz
-
+def get_wavenumber(freq_hz: float) -> float:
+    """Calculate the wavenumber for a given frequency."""
     c = 299792458  # Speed of light in m/s
     wavelength = c / freq_hz  # Wavelength in meters
     k = 2 * np.pi / wavelength  # Wavenumber in radians/meter
@@ -165,18 +148,11 @@ def get_wavenumber(freq_hz: float | None = None) -> float:
 
 @lru_cache
 def get_element_positions(
-    array_size: tuple[int, int] | None = None,
-    spacing_mm: tuple[float, float] | None = None,
+    array_size: tuple[int, int],
+    spacing_mm: tuple[float, float],
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Calculate element positions using config or explicit parameters."""
-    if array_size is None:
-        array_size = ArrayConfig.array_size
-    if spacing_mm is None:
-        spacing_mm = ArrayConfig.spacing_mm
-
-    xn, yn = array_size
-    dx_mm, dy_mm = spacing_mm
-    # Calculate the x and y positions of the elements in the array in meters, centered around (0, 0)
+    """Calculate the x and y positions of the elements in the array, centered around (0, 0)."""
+    (xn, yn), (dx_mm, dy_mm) = array_size, spacing_mm
     x_positions = (np.arange(xn) - (xn - 1) / 2) * dx_mm / 1000
     y_positions = (np.arange(yn) - (yn - 1) / 2) * dy_mm / 1000
     return x_positions, y_positions
@@ -420,19 +396,14 @@ def extend_pattern_to_360_theta(pattern: np.ndarray) -> np.ndarray:
 def plot_ff_3d(
     pattern: ArrayLike,
     *,
-    theta_rad: ArrayLike | None = None,
-    phi_rad: ArrayLike | None = None,
+    theta_rad: np.ndarray = DEFAULT_THETA_RAD,
+    phi_rad: np.ndarray = DEFAULT_PHI_RAD,
     clip_min_db: float | None = None,
     elev: float | None = None,
     azim: float | None = None,
     title: str = "3D Radiation Pattern",
     ax: plt.Axes | Axes3D | None = None,
 ):
-    if theta_rad is None:
-        theta_rad = ArrayConfig.theta_rad
-    if phi_rad is None:
-        phi_rad = ArrayConfig.phi_rad
-
     pattern = np.clip(
         pattern, a_min=clip_min_db, a_max=None
     )  # Clip to minimum dB value
@@ -459,19 +430,14 @@ def plot_ff_3d(
 def plot_ff_2d(
     pattern: ArrayLike,
     *,
-    theta_rad: ArrayLike | None = None,
-    phi_rad: ArrayLike | None = None,
+    theta_rad: np.ndarray = DEFAULT_THETA_RAD,
+    phi_rad: np.ndarray = DEFAULT_PHI_RAD,
     title: str = "2D Radiation Pattern",
     colorbar: bool = True,
     ax: plt.Axes | None = None,
 ) -> AxesImage:
     if ax is None:
         _, ax = plt.subplots(1, 1, figsize=(8, 6))
-
-    if theta_rad is None:
-        theta_rad = ArrayConfig.theta_rad
-    if phi_rad is None:
-        phi_rad = ArrayConfig.phi_rad
 
     theta_deg, phi_deg = np.degrees(theta_rad), np.degrees(phi_rad)
     extent = (np.min(theta_deg), np.max(theta_deg), np.min(phi_deg), np.max(phi_deg))
@@ -489,8 +455,8 @@ def plot_ff_2d(
 def plot_sine_space(
     pattern: ArrayLike,
     *,
-    theta_rad: ArrayLike | None = None,
-    phi_rad: ArrayLike | None = None,
+    theta_rad: np.ndarray = DEFAULT_THETA_RAD,
+    phi_rad: np.ndarray = DEFAULT_PHI_RAD,
     title: str = "Sine-Space Radiation Pattern",
     theta_circles: bool = True,
     phi_lines: bool = True,
@@ -499,11 +465,6 @@ def plot_sine_space(
 ) -> ColorizingArtist:
     if ax is None:
         _, ax = plt.subplots(1, 1, figsize=(8, 8))
-
-    if theta_rad is None:
-        theta_rad = ArrayConfig.theta_rad
-    if phi_rad is None:
-        phi_rad = ArrayConfig.phi_rad
 
     u = np.sin(theta_rad)[:, None] * np.cos(phi_rad)
     v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)
@@ -547,18 +508,13 @@ def plot_sine_space(
 def plot_pattern(
     pattern: ArrayLike,
     *,
-    theta_rad: ArrayLike | None = None,
-    phi_rad: ArrayLike | None = None,
+    theta_rad: np.ndarray = DEFAULT_THETA_RAD,
+    phi_rad: np.ndarray = DEFAULT_PHI_RAD,
     clip_min_db: float | None = None,
     title: str | None = None,
     colorbar: str | None = None,
     fig: plt.FigureBase | None = None,
 ) -> plt.FigureBase:
-    if theta_rad is None:
-        theta_rad = ArrayConfig.theta_rad
-    if phi_rad is None:
-        phi_rad = ArrayConfig.phi_rad
-
     if fig is None:
         fig = plt.figure(figsize=(15, 5), layout="compressed")
     axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
