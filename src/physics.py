@@ -739,14 +739,15 @@ def demo_cst_patterns():
     cst_path = Path(__file__).parents[1] / "cst"
     dist_data = ElementPatternData.from_cst(cst_path / "disturbed_5")
 
-    steering_deg = np.array([30.0, 0.0])
+    steering_deg = np.array([0.0, 0.0])
     steering_rad = np.radians(steering_deg)
     kx, ky = compute_spatial_phase_coeffs(orig_data.config)
     weights_orig, _ = calculate_weights(kx, ky, steering_rad)
 
     to_db = partial(convert_to_db, normalize=False)
 
-    target_field = synthesize_pattern(orig_data.aeps, weights_orig, power=False)
+    element_fields = compute_element_fields(orig_data.aeps, orig_data.config)
+    target_field = synthesize_pattern(element_fields, weights_orig, power=False)
     target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
     target_power_db = to_db(target_power)
     weights_corr = solve_weights(target_field, dist_data.aeps, alpha=None)
@@ -786,7 +787,7 @@ if __name__ == "__main__":
     setup_logging()
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
-        sum_cst()
-        demo_phase_shifts()
-        demo_openems_patterns()
+        # sum_cst()
+        # demo_phase_shifts()
+        # demo_openems_patterns()
         demo_cst_patterns()
