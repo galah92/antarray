@@ -208,12 +208,44 @@ def get_element_positions(
 
 
 @lru_cache
+def get_element_positions_2d(
+    array_size: tuple[int, int],
+    spacing_mm: tuple[float, float],
+) -> np.ndarray:
+    """Get 2D element positions for non-separable calculations.
+
+    Returns:
+        positions: Array of shape (n_x, n_y, 2) with [x, y] coordinates for each element
+    """
+    x_positions, y_positions = get_element_positions(array_size, spacing_mm)
+
+    # Create 2D grid of positions
+    x_grid, y_grid = np.meshgrid(x_positions, y_positions, indexing="ij")
+    positions = np.stack([x_grid, y_grid], axis=-1)  # (n_x, n_y, 2)
+
+    return positions
+
+
+@lru_cache
 def compute_spatial_phase_coeffs(config: ArrayConfig) -> tuple[np.ndarray, np.ndarray]:
-    """Compute spatial phase coefficients (kx, ky) for antenna array elements."""
+    """Compute spatial phase coefficients (kx, ky) for antenna array elements (separable case)."""
     k = get_wavenumber(config.freq_hz)
     x_pos, y_pos = get_element_positions(config.array_size, config.spacing_mm)
     kx, ky = k * x_pos, k * y_pos
     return kx, ky
+
+
+@lru_cache
+def compute_spatial_coeffs(config: ArrayConfig) -> np.ndarray:
+    """Compute spatial coefficients for non-separable calculations.
+
+    Returns:
+        spatial_coeffs: Array of shape (n_x, n_y, 2) with [k*x, k*y] for each element
+    """
+    k = get_wavenumber(config.freq_hz)
+    positions = get_element_positions_2d(config.array_size, config.spacing_mm)
+    spatial_coeffs = k * positions  # (n_x, n_y, 2)
+    return spatial_coeffs
 
 
 @jax.jit
@@ -222,14 +254,13 @@ def calculate_weights(
     ky: ArrayLike,
     steering_angles: ArrayLike,
 ) -> tuple[jax.Array, jax.Array]:
-    """Calculates element weights for given steering angles."""
+    """Calculates element weights for given steering angles (separable case)."""
     steering_angles = jnp.atleast_2d(steering_angles)
     theta, phi = steering_angles[:, 0], steering_angles[:, 1]
 
     sin_theta = jnp.sin(theta)
     x_phase = jnp.outer(kx, sin_theta * jnp.cos(phi))  # (n_x, n_beams)
     y_phase = jnp.outer(ky, sin_theta * jnp.sin(phi))  # (n_y, n_beams)
-
     phase_shifts = x_phase[:, None, :] + y_phase[None, :, :]  # (n_x, n_y, n_beams)
 
     weights = jnp.exp(-1j * phase_shifts)  # (n_x, n_y, n_beams)
@@ -239,21 +270,60 @@ def calculate_weights(
     return weights, phase_shifts
 
 
+@jax.jit
+def calculate_weights_2d(
+    spatial_coeffs: ArrayLike,
+    steering_angles: ArrayLike,
+) -> tuple[jax.Array, jax.Array]:
+    """Calculates element weights for given steering angles (non-separable case).
+
+    Args:
+        spatial_coeffs: Array of shape (n_x, n_y, 2) with [k*x, k*y] for each element
+        steering_angles: Array of shape (n_beams, 2) with [theta, phi] for each beam
+
+    Returns:
+        weights: Array of shape (n_x, n_y) for single beam or (n_x, n_y, n_beams) for multiple
+        phase_shifts: Array of shape (n_x, n_y) for single beam or (n_x, n_y, n_beams) for multiple
+    """
+    steering_angles = jnp.atleast_2d(steering_angles)
+    theta, phi = steering_angles.T
+
+    steerings = jnp.sin(theta) * jnp.stack([jnp.cos(phi), jnp.sin(phi)], axis=0)
+    phase_shifts = spatial_coeffs @ steerings  # (n_x, n_y, n_beams)
+
+    weights = jnp.exp(-1j * phase_shifts)  # (n_x, n_y, n_beams)
+    weights = jnp.sum(weights, axis=-1)  # (n_x, n_y), assume no tapering
+    weights = weights / np.sqrt(np.prod(weights.shape))  # Normalize weights
+
+    # Return weights as (n_x, n_y) and phase_shifts as (n_x, n_y, n_beams)
+    return weights, phase_shifts
+
+
 def compute_geps(
     aeps: np.ndarray,
     config: ArrayConfig,
+    separable: bool = True,
 ) -> np.ndarray:
     """Create geometric element patterns (GEPs) with spatial phase factors."""
-    kx, ky = compute_spatial_phase_coeffs(config)
-
     sin_theta = np.sin(config.theta_rad)
     sin_phi, cos_phi = np.sin(config.phi_rad), np.cos(config.phi_rad)
-    phase_x = np.einsum("t,p,x->tpx", sin_theta, cos_phi, kx)  # (n_theta, n_phi, n_x)
-    phase_y = np.einsum("t,p,y->tpy", sin_theta, sin_phi, ky)  # (n_theta, n_phi, n_y)
+    if separable:
+        kx, ky = compute_spatial_phase_coeffs(config)
+        phase_x = np.einsum("t,p,x->tpx", sin_theta, cos_phi, kx)
+        phase_y = np.einsum("t,p,y->tpy", sin_theta, sin_phi, ky)
 
-    geo_phase = phase_x[..., None] + phase_y[..., None, :]  # (n_theta, n_phi, n_x, n_y)
+        # (n_theta, n_phi, n_x, n_y)
+        geo_phase = phase_x[..., None] + phase_y[..., None, :]
+    else:
+        spatial_coeffs = compute_spatial_coeffs(config)  # (n_x, n_y, 2)
+        u = sin_theta[:, None] * cos_phi[None, :]  # (n_theta, n_phi)
+        v = sin_theta[:, None] * sin_phi[None, :]  # (n_theta, n_phi)
+        uv = np.stack([u, v], axis=-1)  # (n_theta, n_phi, 2)
+
+        # Compute geometric phase for each element and direction
+        geo_phase = np.einsum("xyk,tpk->tpxy", spatial_coeffs, uv)
+
     geo_factor = np.exp(1j * geo_phase)  # (n_theta, n_phi, n_x, n_y)
-
     geps = np.einsum("xytpz,tpxy->xytpz", aeps, geo_factor)
     return geps
 
