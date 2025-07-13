@@ -239,11 +239,11 @@ def calculate_weights(
     return weights, phase_shifts
 
 
-def compute_element_fields(
+def compute_geps(
     aeps: np.ndarray,
     config: ArrayConfig,
 ) -> np.ndarray:
-    """Create element field basis with geometric phase factors."""
+    """Create geometric element patterns (GEPs) with spatial phase factors."""
     kx, ky = compute_spatial_phase_coeffs(config)
 
     sin_theta = np.sin(config.theta_rad)
@@ -254,18 +254,18 @@ def compute_element_fields(
     geo_phase = phase_x[..., None] + phase_y[..., None, :]  # (n_theta, n_phi, n_x, n_y)
     geo_factor = np.exp(1j * geo_phase)  # (n_theta, n_phi, n_x, n_y)
 
-    element_fields = np.einsum("xytpz,tpxy->xytpz", aeps, geo_factor)
-    return element_fields
+    geps = np.einsum("xytpz,tpxy->xytpz", aeps, geo_factor)
+    return geps
 
 
 @partial(jax.jit, static_argnames=("power",))
 def synthesize_pattern(
-    element_fields: ArrayLike,
+    geps: ArrayLike,
     weights: ArrayLike,
     power: bool = True,
 ) -> jax.Array:
-    """Synthesizes a pattern from weights using the precomputed basis."""
-    total_field = jnp.einsum("xytpz,xy->tpz", element_fields, weights)
+    """Synthesizes a pattern from weights using the precomputed GEPs (geometric element patterns)."""
+    total_field = jnp.einsum("xytpz,xy->tpz", geps, weights)
     if not power:
         return total_field
 
@@ -276,15 +276,15 @@ def synthesize_pattern(
 @jax.jit
 def solve_weights(
     target_field: jax.Array,
-    element_fields: jax.Array,
+    geps: jax.Array,
     alpha: float | None = 1e-2,
 ) -> jax.Array:
     """Finds the optimal weights for the distorted array to match a target field using least-squares."""
-    n_x, n_y, n_theta, n_phi, n_pol = element_fields.shape
+    n_x, n_y, n_theta, n_phi, n_pol = geps.shape
     n_elements = n_x * n_y
     n_points = n_theta * n_phi * n_pol
 
-    A = element_fields.transpose(2, 3, 4, 0, 1).reshape(n_points, n_elements)
+    A = geps.transpose(2, 3, 4, 0, 1).reshape(n_points, n_elements)
     b = target_field.flatten()  # (n_points,)
 
     if alpha is not None:
@@ -667,8 +667,8 @@ def demo_openems_patterns():
     steering_deg = jnp.array([0.0, 0.0])  # Broadside steering
     weights, _ = calculate_weights(kx, ky, jnp.radians(steering_deg))
 
-    element_fields = compute_element_fields(element_data.aeps, config)
-    power_pattern = synthesize_pattern(element_fields, weights, power=True)
+    geps = compute_geps(element_data.aeps, config)
+    power_pattern = synthesize_pattern(geps, weights, power=True)
     power_dB = convert_to_db(power_pattern)
 
     fig = plt.figure(figsize=(15, 5), layout="compressed")
@@ -746,8 +746,8 @@ def demo_cst_patterns():
 
     to_db = partial(convert_to_db, normalize=False)
 
-    element_fields = compute_element_fields(orig_data.aeps, orig_data.config)
-    target_field = synthesize_pattern(element_fields, weights_orig, power=False)
+    geps = compute_geps(orig_data.aeps, orig_data.config)
+    target_field = synthesize_pattern(geps, weights_orig, power=False)
     target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
     target_power_db = to_db(target_power)
     weights_corr = solve_weights(target_field, dist_data.aeps, alpha=None)

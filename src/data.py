@@ -160,14 +160,12 @@ class Dataset:
         aeps = element_data.aeps
         config = element_data.config  # Use the config from the loaded data
         kx, ky = physics.compute_spatial_phase_coeffs(config)
-        element_fields = physics.compute_element_fields(aeps, config)
+        geps = physics.compute_geps(aeps, config)
 
         def unified_pattern_from_steering(steering_angles):
             """Generate patterns using unified physics interface."""
             weights, _ = physics.calculate_weights(kx, ky, steering_angles)
-            power_pattern = physics.synthesize_pattern(
-                element_fields, weights, power=True
-            )
+            power_pattern = physics.synthesize_pattern(geps, weights, power=True)
             return power_pattern, weights
 
         self.rad_pattern_from_steering = unified_pattern_from_steering

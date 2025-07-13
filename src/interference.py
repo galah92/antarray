@@ -9,7 +9,7 @@ from flax import nnx
 from physics import (
     ArrayConfig,
     calculate_weights,
-    compute_element_fields,
+    compute_geps,
     compute_spatial_phase_coeffs,
     convert_to_db,
     load_aeps,
@@ -104,10 +104,10 @@ def train_pipeline(
     aeps = element_data.aeps
     config = element_data.config
     kx, ky = compute_spatial_phase_coeffs(config)
-    element_fields = compute_element_fields(aeps, config)
+    geps = compute_geps(aeps, config)
 
     physics_params = PhysicsParams(
-        element_fields=jnp.asarray(element_fields),
+        element_fields=jnp.asarray(geps),
         kx=jnp.asarray(kx),
         ky=jnp.asarray(ky),
     )

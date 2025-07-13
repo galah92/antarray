@@ -47,9 +47,19 @@ ax.set_theta_direction(-1)  # Clockwise
 ax.legend()
 fig.savefig("individual_aeps.png", dpi=200, bbox_inches="tight")
 
-# Calculate Array Factor for broadside direction (no steering)
-phase_diff = k * np.outer(np.sin(theta), element_positions)
-array_factor = np.sum(np.exp(1j * phase_diff), axis=1)
+# Geometric component: spatial phase differences for all angles and elements
+phase_diff = k * np.outer(element_positions, np.sin(theta))  # (n_elements, n_angles)
+geometric_components = np.exp(1j * phase_diff)  # (n_elements, n_angles)
+
+# Create GEPs (geometric element patterns) that include spatial phase relationships
+geps = aeps * geometric_components  # (n_elements, n_angles)
+
+# For broadside (no steering): uniform weights
+broadside_weights = np.ones(n_elements)  # Uniform amplitude weighting
+combined_pattern = broadside_weights @ geps
+
+# Calculate broadside array factor for plotting
+array_factor = np.sum(geometric_components, axis=0)
 
 # Plot Array Factor
 fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={"projection": "polar"})
@@ -66,14 +76,6 @@ ax.set_theta_offset(np.pi / 2)
 ax.set_theta_direction(-1)
 ax.legend()
 fig.savefig("array_factor.png", dpi=200, bbox_inches="tight")
-
-# Combine AEPs with Array Factor to get total pattern
-# Total pattern = Element Pattern × Array Factor
-total_patterns = aeps * array_factor
-
-# Sum all element contributions using matrix multiplication
-weights = np.ones(n_elements)  # Uniform amplitude weighting
-combined_pattern = weights @ total_patterns
 
 # Convert to power pattern and dB
 power_pattern = np.abs(combined_pattern) ** 2
@@ -96,35 +98,16 @@ main_lobe_idx = np.argmax(power_pattern_db_norm)
 main_lobe_angle = np.degrees(theta[main_lobe_idx])
 print(f"Main lobe: {main_lobe_angle:.1f}° {power_pattern_db_norm[main_lobe_idx]:.1f}dB")
 
-# Create a steered beam by adding progressive phase to each element
+# Create a steered beam using superposition approach
 steer_angle_deg = 30  # Steer beam to 30 degrees
 steer_angle_rad = np.radians(steer_angle_deg)
 
-# Calculate progressive phase shifts for beam steering
+# Calculate progressive phase shifts for beam steering (steering component)
 steering_phases = -k * element_positions * np.sin(steer_angle_rad)
-
-# Apply steering phases to element patterns
-# Create steered element patterns (same amplitude pattern for all elements)
-steered_amplitude_base = 0.7 + 0.5 * np.cos(theta)  # (n_angles,)
-steered_aeps = np.outer(np.ones(n_elements), steered_amplitude_base).astype(
-    np.complex64
-)
-
-# Calculate steered array factor
-phase_diff_steered = k * np.outer(np.sin(theta), element_positions)
-
-# Apply steering phases to each element
 steered_weights = np.exp(1j * steering_phases)  # (n_elements,)
 
-# Calculate steered array factor using matrix multiplication
-steered_array_factor = (steered_weights @ np.exp(1j * phase_diff_steered.T)).T
-# Equivalent to: np.sum(steered_weights_matrix * np.exp(1j * phase_diff_steered), axis=1)
-
-# Combine element patterns with steered array factor
-steered_total_patterns = steered_aeps * steered_array_factor
-
-# Sum all element contributions using matrix multiplication
-steered_combined_pattern = weights @ steered_total_patterns
+# Apply steering weights to the pre-computed geometric element patterns
+steered_combined_pattern = steered_weights @ geps
 
 # Convert to power pattern and dB
 steered_power_pattern = np.abs(steered_combined_pattern) ** 2

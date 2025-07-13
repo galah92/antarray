@@ -14,7 +14,7 @@ from flax import nnx
 from physics import (
     ArrayConfig,
     calculate_weights,
-    compute_element_fields,
+    compute_geps,
     compute_spatial_phase_coeffs,
     load_aeps,
     normalize_patterns,
@@ -273,14 +273,14 @@ def train(
         element_data = load_aeps(config, kind="synthetic")
     aeps = element_data.aeps
     config = element_data.config
-    element_fields = compute_element_fields(aeps, config)
+    geps = compute_geps(aeps, config)
     kx, ky = compute_spatial_phase_coeffs(config)
 
     # Create scheduler and model
     scheduler = DDPMScheduler(num_train_timesteps=1000)
 
     params = DiffusionParams(
-        element_fields=jnp.asarray(element_fields),
+        element_fields=jnp.asarray(geps),
         kx=jnp.asarray(kx),
         ky=jnp.asarray(ky),
     )
@@ -357,14 +357,14 @@ def evaluate(
         element_data = load_aeps(config, kind="synthetic")
     aeps = element_data.aeps
     config = element_data.config
-    element_fields = compute_element_fields(aeps, config)
+    geps = compute_geps(aeps, config)
     kx, ky = compute_spatial_phase_coeffs(config)
 
     # Create scheduler and model
     scheduler = DDPMScheduler(num_train_timesteps=1000)
 
     params = DiffusionParams(
-        element_fields=jnp.asarray(element_fields),
+        element_fields=jnp.asarray(geps),
         kx=jnp.asarray(kx),
         ky=jnp.asarray(ky),
     )

@@ -15,7 +15,7 @@ import data
 import physics
 from physics import (
     ArrayConfig,
-    compute_element_fields,
+    compute_geps,
     load_aeps,
     synthesize_pattern,
 )
@@ -267,8 +267,8 @@ def train(
     element_data = load_aeps(config, kind=kind)
     aeps = element_data.aeps
     config = element_data.config
-    element_fields = compute_element_fields(aeps, config)
-    array_params = ArrayParams(element_fields=jnp.asarray(element_fields))
+    geps = compute_geps(aeps, config)
+    array_params = ArrayParams(element_fields=jnp.asarray(geps))
 
     warmup_step(dataset, optimizer, array_params)
 
