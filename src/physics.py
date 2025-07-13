@@ -744,13 +744,12 @@ def sum_cst():
     power_sum = jnp.sum(jnp.abs(fields_sum) ** 2, axis=-1)
     power_sum_db = convert_to_db(power_sum, floor_db=None, normalize=False)
 
-    # proper sum of fields
     steering_rad = np.radians([0, 0])
     cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
     kx, ky = compute_spatial_phase_coeffs(cst_config)
     weights, _ = calculate_weights(kx, ky, steering_rad)
-    p_fields = synthesize_pattern(element_fields, weights, power=False)
-    p_power = jnp.sum(jnp.abs(p_fields) ** 2, axis=-1)
+
+    p_power = synthesize_pattern(element_fields, weights)
     p_power_db = convert_to_db(p_power, floor_db=None, normalize=False)
 
     kw = dict(subplot_kw=dict(projection="polar"), figsize=(6, 6), layout="compressed")
@@ -792,15 +791,16 @@ def demo_cst_patterns():
     target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
     target_power_db = to_db(target_power)
 
-    # Since all data is now GEPs, use patterns directly
-    weights_corr = solve_weights(target_field, orig_data.geps, alpha=2e-1)
+    weights_corr = solve_weights(target_field, orig_data.geps, alpha=None)
 
     dist_power_db = to_db(synthesize_pattern(dist_data.geps, weights_orig))
     corr_power_db = to_db(synthesize_pattern(dist_data.geps, weights_corr))
 
-    phi_slice = steering_rad[1] + np.pi / 2  # To view changes in theta
-    phi_idx = np.abs(orig_data.config.phi_rad - phi_slice).argmin()
-    logger.info(f"Using phi index {phi_idx}")
+    # Always use the phi slice where the peak occurs for best visualization
+    assert abs(steering_rad[1]) < 1e-6, "Only theta steering supported"
+    phi_idx = np.unravel_index(np.argmax(target_power_db), target_power_db.shape)[1]
+    phi_deg = np.degrees(orig_data.config.phi_rad[phi_idx])
+    logger.info(f"{phi_idx=} (φ={phi_deg:.1f}°)")
 
     dist_mse = np.mean(np.square(dist_power_db - target_power_db))
     corr_mse = np.mean(np.square(corr_power_db - target_power_db))
@@ -830,7 +830,7 @@ if __name__ == "__main__":
     setup_logging()
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
-        # sum_cst()
+        sum_cst()
         # demo_phase_shifts()
         # demo_openems_patterns()
         demo_cst_patterns()
