@@ -156,11 +156,10 @@ class Dataset:
         self.key = key
 
         config = physics.ArrayConfig(array_size=array_size, spacing_mm=spacing_mm)
-        element_data = physics.load_aeps(config, kind=self.kind)
-        aeps = element_data.aeps
+        element_data = physics.load_element_patterns(kind=self.kind, config=config)
         config = element_data.config  # Use the config from the loaded data
         kx, ky = physics.compute_spatial_phase_coeffs(config)
-        geps = physics.compute_geps(aeps, config)
+        geps = element_data.geps
 
         def unified_pattern_from_steering(steering_angles):
             """Generate patterns using unified physics interface."""

@@ -90,61 +90,87 @@ Kind = Literal["cst", "openems", "synthetic"]
 
 
 class ElementPatternData(NamedTuple):
-    """Hold element patterns and configuration."""
+    """Hold element patterns and configuration.
 
-    aeps: np.ndarray  # Antenna Element Patterns
+    Always contains GEPs (Geometric Element Patterns) with spatial phase factors applied.
+    This ensures consistent behavior regardless of the data source.
+    """
+
+    geps: np.ndarray  # GEPs: (n_x, n_y, n_theta, n_phi, n_pol)
     config: ArrayConfig
     source: Kind
 
-    @staticmethod
-    def from_cst(cst_path: Path | None = None) -> "ElementPatternData":
-        """Load CST antenna patterns from a directory."""
-        if cst_path is None:
-            cst_path = Path(__file__).parents[1] / "cst" / "classic"
-        element_fields = load_cst(cst_path)
-        # As given by Snir
-        cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
-        return ElementPatternData(aeps=element_fields, config=cst_config, source="cst")
 
-    @staticmethod
-    def from_openems(
-        array_size: tuple[int, int] = (16, 16),
-        spacing_mm: tuple[float, float] = (60.0, 60.0),
-        path: Path | None = None,
-    ) -> "ElementPatternData":
-        if path is None:
-            path = DEFAULT_SIM_PATH
-        openems_data = load_openems_nf2ff(path)
+def load_element_patterns_from_cst(cst_path: Path | None = None) -> ElementPatternData:
+    """Load CST antenna patterns from a directory."""
+    if cst_path is None:
+        cst_path = Path(__file__).parents[1] / "cst" / "classic"
+    geps = load_cst(cst_path)
+    # As Given by Snir
+    cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
+    return ElementPatternData(geps=geps, config=cst_config, source="cst")
 
-        E_field = openems_data.E_field  # (freq, n_theta, n_phi, 2)
-        reps = array_size + (1,) * E_field.ndim
-        aeps = np.tile(E_field[None, None, ...], reps)
 
-        openems_config = ArrayConfig(
-            array_size=aeps.shape[:2],
-            spacing_mm=spacing_mm,
-            freq_hz=openems_data.freq_hz.item(),
-            theta_rad=openems_data.theta_rad,
-            phi_rad=openems_data.phi_rad,
-        )
+def load_element_patterns_from_openems(
+    array_size: tuple[int, int] = (16, 16),
+    spacing_mm: tuple[float, float] = (60.0, 60.0),
+    path: Path | None = None,
+) -> ElementPatternData:
+    """Load OpenEMS antenna patterns from simulation data."""
+    if path is None:
+        path = DEFAULT_SIM_PATH
+    openems_data = load_openems_nf2ff(path)
 
-        return ElementPatternData(aeps=aeps, config=openems_config, source="openems")
+    E_field = openems_data.E_field  # (freq, n_theta, n_phi, 2)
+    reps = array_size + (1,) * E_field.ndim
+    aeps = np.tile(E_field[None, None, ...], reps)
 
-    @staticmethod
-    def from_kind(
-        kind: Kind = "cst",
-        path: Path | None = None,
-    ) -> "ElementPatternData":
-        """Factory method to create ElementPatternData from a specified kind."""
-        if kind == "cst":
-            return ElementPatternData.from_cst(path)
-        elif kind == "openems":
-            return ElementPatternData.from_openems(path=path)
-        elif kind == "synthetic":
+    openems_config = ArrayConfig(
+        array_size=aeps.shape[:2],
+        spacing_mm=spacing_mm,
+        freq_hz=openems_data.freq_hz.item(),
+        theta_rad=openems_data.theta_rad,
+        phi_rad=openems_data.phi_rad,
+    )
+
+    # Convert AEPs to GEPs by computing geometric phase factors
+    geps = compute_geps(aeps, openems_config)
+    return ElementPatternData(geps=geps, config=openems_config, source="openems")
+
+
+def load_element_patterns(
+    kind: Kind = "cst",
+    path: Path | None = None,
+    config: ArrayConfig | None = None,
+) -> ElementPatternData:
+    """Factory function to create ElementPatternData from a specified kind."""
+    if kind == "cst":
+        return load_element_patterns_from_cst(path)
+    elif kind == "openems":
+        return load_element_patterns_from_openems(path=path)
+    elif kind == "synthetic":
+        if config is None:
             config = ArrayConfig()
-            return load_aeps(config, kind=kind)
-        else:
-            raise ValueError(f"Unknown kind: {kind!r}")
+
+        theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
+
+        # Base cosine model for field amplitude
+        amplitude = np.cos(config.theta_rad)
+        amplitude = np.where(config.theta_rad > np.pi / 2, 0, amplitude)
+        amplitude = amplitude[:, None] * np.ones((theta_size, phi_size))
+
+        E_field = amplitude[..., None]  # (n_theta, n_phi, 1)
+
+        # Create element patterns for each element in the array
+        reps = config.array_size + (1,) * E_field.ndim
+        aeps = np.tile(E_field[None, None, ...], reps)
+        aeps = aeps.astype(np.complex64)
+
+        # Convert AEPs to GEPs
+        geps = compute_geps(aeps, config)
+        return ElementPatternData(geps=geps, config=config, source=kind)
+    else:
+        raise ValueError(f"Unknown kind: {kind!r}")
 
 
 def load_cst_file(cst_path: Path) -> np.ndarray:
@@ -372,59 +398,6 @@ def solve_weights(
 
     w = w.reshape(n_x, n_y)  # (n_x, n_y)
     return w
-
-
-@lru_cache
-def load_aeps(
-    config: ArrayConfig,
-    kind: Kind = "cst",
-    path: Path | None = None,
-) -> ElementPatternData:
-    """Load or simulates element patterns for an array."""
-    if kind == "openems":
-        if path is None:
-            path = DEFAULT_SIM_PATH
-        openems_data = load_openems_nf2ff(path)
-
-        E_field = openems_data.E_field  # (freq, n_theta, n_phi, 2)
-        reps = config.array_size + (1,) * E_field.ndim
-        aeps = np.tile(E_field[None, None, ...], reps)
-
-        openems_config = ArrayConfig(
-            array_size=aeps.shape[:2],
-            spacing_mm=config.spacing_mm,
-            freq_hz=openems_data.freq_hz,
-            theta_rad=openems_data.theta_rad,
-            phi_rad=openems_data.phi_rad,
-        )
-
-        return ElementPatternData(aeps=aeps, config=openems_config, source=kind)
-
-    if kind == "cst":
-        if path is None:
-            path = Path(__file__).parents[1] / "cst" / "classic"
-        element_fields = load_cst(path)
-        # As given by Snir
-        cst_config = ArrayConfig(array_size=(4, 4), spacing_mm=(75, 75), freq_hz=2.4e9)
-        return ElementPatternData(aeps=element_fields, config=cst_config, source=kind)
-
-    if kind == "synthetic":
-        theta_size, phi_size = config.theta_rad.size, config.phi_rad.size
-
-        # Base cosine model for field amplitude
-        amplitude = np.cos(config.theta_rad)
-        amplitude = np.where(config.theta_rad > np.pi / 2, 0, amplitude)
-        amplitude = amplitude[:, None] * np.ones((theta_size, phi_size))
-
-        E_field = amplitude[..., None]  # (n_theta, n_phi, 1)
-
-        # Create element patterns for each element in the array
-        reps = config.array_size + (1,) * E_field.ndim
-        aeps = np.tile(E_field[None, None, ...], reps)
-        aeps = aeps.astype(np.complex64)
-        return ElementPatternData(aeps=aeps, config=config, source=kind)
-
-    raise ValueError(f"Unknown kind: {kind!r}")
 
 
 @jax.jit
@@ -730,15 +703,14 @@ def demo_phase_shifts():
 
 def demo_openems_patterns():
     """Demonstrate OpenEMS pattern loading with new unified interface."""
-    element_data = ElementPatternData.from_openems()
+    element_data = load_element_patterns_from_openems()
     config = element_data.config
 
     kx, ky = compute_spatial_phase_coeffs(config)
     steering_deg = jnp.array([0.0, 0.0])  # Broadside steering
     weights, _ = calculate_weights(kx, ky, jnp.radians(steering_deg))
 
-    geps = compute_geps(element_data.aeps, config)
-    power_pattern = synthesize_pattern(geps, weights, power=True)
+    power_pattern = synthesize_pattern(element_data.geps, weights, power=True)
     power_dB = convert_to_db(power_pattern)
 
     fig = plt.figure(figsize=(15, 5), layout="compressed")
@@ -805,9 +777,9 @@ def sum_cst():
 
 
 def demo_cst_patterns():
-    orig_data = ElementPatternData.from_cst()
+    orig_data = load_element_patterns_from_cst()
     cst_path = Path(__file__).parents[1] / "cst"
-    dist_data = ElementPatternData.from_cst(cst_path / "disturbed_5")
+    dist_data = load_element_patterns_from_cst(cst_path / "disturbed_5")
 
     steering_deg = np.array([0.0, 0.0])
     steering_rad = np.radians(steering_deg)
@@ -816,14 +788,15 @@ def demo_cst_patterns():
 
     to_db = partial(convert_to_db, normalize=False)
 
-    geps = compute_geps(orig_data.aeps, orig_data.config)
-    target_field = synthesize_pattern(geps, weights_orig, power=False)
+    target_field = synthesize_pattern(orig_data.geps, weights_orig, power=False)
     target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
     target_power_db = to_db(target_power)
-    weights_corr = solve_weights(target_field, dist_data.aeps, alpha=None)
 
-    dist_power_db = to_db(synthesize_pattern(dist_data.aeps, weights_orig))
-    corr_power_db = to_db(synthesize_pattern(dist_data.aeps, weights_corr))
+    # Since all data is now GEPs, use patterns directly
+    weights_corr = solve_weights(target_field, orig_data.geps, alpha=2e-1)
+
+    dist_power_db = to_db(synthesize_pattern(dist_data.geps, weights_orig))
+    corr_power_db = to_db(synthesize_pattern(dist_data.geps, weights_corr))
 
     phi_slice = steering_rad[1] + np.pi / 2  # To view changes in theta
     phi_idx = np.abs(orig_data.config.phi_rad - phi_slice).argmin()

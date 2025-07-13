@@ -7,12 +7,10 @@ import optax
 from flax import nnx
 
 from physics import (
-    ArrayConfig,
     calculate_weights,
-    compute_geps,
     compute_spatial_phase_coeffs,
     convert_to_db,
-    load_aeps,
+    load_element_patterns,
     synthesize_pattern,
 )
 from training import (
@@ -99,12 +97,9 @@ def train_pipeline(
     key, model_key, data_key = jax.random.split(key, 3)
 
     logger.info("Performing one-time precomputation")
-    config = ArrayConfig()
-    element_data = load_aeps(config, kind="cst")
-    aeps = element_data.aeps
-    config = element_data.config
-    kx, ky = compute_spatial_phase_coeffs(config)
-    geps = compute_geps(aeps, config)
+    element_data = load_element_patterns(kind="cst")
+    kx, ky = compute_spatial_phase_coeffs(element_data.config)
+    geps = element_data.geps
 
     physics_params = PhysicsParams(
         element_fields=jnp.asarray(geps),

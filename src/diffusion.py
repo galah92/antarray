@@ -14,9 +14,8 @@ from flax import nnx
 from physics import (
     ArrayConfig,
     calculate_weights,
-    compute_geps,
     compute_spatial_phase_coeffs,
-    load_aeps,
+    load_element_patterns,
     normalize_patterns,
     synthesize_pattern,
 )
@@ -268,13 +267,11 @@ def train(
     # Create physics setup with optional OpenEMS support
     config = ArrayConfig()
     if openems_path is not None:
-        element_data = load_aeps(config, kind="openems", path=openems_path)
+        element_data = load_element_patterns(kind="openems", path=openems_path)
     else:
-        element_data = load_aeps(config, kind="synthetic")
-    aeps = element_data.aeps
-    config = element_data.config
-    geps = compute_geps(aeps, config)
-    kx, ky = compute_spatial_phase_coeffs(config)
+        element_data = load_element_patterns(kind="synthetic", config=config)
+    geps = element_data.geps
+    kx, ky = compute_spatial_phase_coeffs(element_data.config)
 
     # Create scheduler and model
     scheduler = DDPMScheduler(num_train_timesteps=1000)
@@ -352,12 +349,11 @@ def evaluate(
     # Create physics setup for evaluation with optional OpenEMS support
     config = ArrayConfig()
     if openems_path is not None:
-        element_data = load_aeps(config, kind="openems", path=openems_path)
+        element_data = load_element_patterns(kind="openems", path=openems_path)
     else:
-        element_data = load_aeps(config, kind="synthetic")
-    aeps = element_data.aeps
+        element_data = load_element_patterns(kind="synthetic", config=config)
     config = element_data.config
-    geps = compute_geps(aeps, config)
+    geps = element_data.geps
     kx, ky = compute_spatial_phase_coeffs(config)
 
     # Create scheduler and model
