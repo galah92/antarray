@@ -412,7 +412,7 @@ def normalize_patterns(patterns: ArrayLike) -> jax.Array:
 def convert_to_db(
     patterns: ArrayLike,
     floor_db: float | None = None,
-    normalize: bool = True,
+    normalize: bool = False,
 ) -> jax.Array:
     """Converts linear power patterns to dB scale."""
     if normalize:

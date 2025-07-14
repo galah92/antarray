@@ -182,4 +182,5 @@ dataset
 cst
 experiments
 checkpoints
+checkpoints_diffusion
 flow_matching_checkpoints

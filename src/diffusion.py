@@ -1,6 +1,4 @@
 import logging
-from collections.abc import Callable
-from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
@@ -10,17 +8,17 @@ import jax.numpy as jnp
 import optax
 import orbax.checkpoint as ocp
 from flax import nnx
+from jax.typing import ArrayLike
 
 from physics import (
-    ArrayConfig,
     calculate_weights,
     compute_spatial_phase_coeffs,
+    convert_to_db,
     load_element_patterns,
-    normalize_patterns,
     synthesize_pattern,
 )
 from training import (
-    DenoisingUNet,
+    ConvBlock,
     create_progress_logger,
     restore_checkpoint,
     save_checkpoint,
@@ -33,14 +31,68 @@ logger = logging.getLogger(__name__)
 app = cyclopts.App()
 
 
-class DiffusionParams(NamedTuple):
-    element_fields: jax.Array
-    kx: jax.Array
-    ky: jax.Array
+class Denoiser(nnx.Module):
+    def __init__(self, base_channels: int = 64, *, rngs: nnx.Rngs):
+        # Process complex weights (2 channels: real + imag)
+        # Input: (batch, x_n, y_n, 2) -> Output: (batch, x_n, y_n, base_channels)
+        self.weights_conv = nnx.Conv(
+            2, base_channels, (3, 3), padding="SAME", rngs=rngs
+        )
 
+        # Steering angle encoder - processes target steering angles (theta, phi)
+        # Input: (batch, 2) -> Output: (batch, base_channels)
+        self.angle_encoder = nnx.Sequential(
+            nnx.Linear(2, base_channels // 2, rngs=rngs),
+            nnx.relu,
+            nnx.Linear(base_channels // 2, base_channels, rngs=rngs),
+            nnx.relu,
+            nnx.Linear(base_channels, base_channels, rngs=rngs),
+        )
 
-vmapped_synthesize = jax.vmap(synthesize_pattern, in_axes=(None, 0))
-vmapped_calculate_weights = jax.vmap(calculate_weights, in_axes=(None, None, 0))
+        # Time embedding
+        self.time_mlp = nnx.Sequential(
+            nnx.Linear(1, base_channels, rngs=rngs),
+            nnx.relu,
+            nnx.Linear(base_channels, base_channels, rngs=rngs),
+        )
+
+        # Main processing network
+        self.net = nnx.Sequential(
+            ConvBlock(base_channels, base_channels, (3, 3), rngs=rngs),
+            ConvBlock(base_channels, base_channels, (3, 3), rngs=rngs),
+            ConvBlock(base_channels, base_channels, (3, 3), rngs=rngs),
+            nnx.Conv(base_channels, 2, (1, 1), rngs=rngs),
+        )
+
+    def __call__(
+        self,
+        weights: ArrayLike,
+        steering_angles: ArrayLike,
+        timestep: ArrayLike,
+    ) -> jax.Array:
+        # Convert complex weights to real/imag channels
+        weights = weights.view(jnp.float32).reshape(weights.shape + (2,))
+
+        # Process weights
+        x = self.weights_conv(weights)  # (batch, x_n, y_n, base_channels)
+
+        # Steering angles embedding
+        angle_features = self.angle_encoder(steering_angles)  # (batch, base_channels)
+        angle_emb = angle_features[:, None, None, :]  # (batch, 1, 1, channels)
+        angle_emb = jnp.broadcast_to(angle_emb, x.shape)  # (batch, x_n, y_n, channels)
+
+        # Time embedding
+        time_emb = self.time_mlp(timestep[..., None])
+        time_emb = time_emb[:, None, None, :]  # Broadcast to spatial dims
+        time_emb = jnp.broadcast_to(time_emb, x.shape)
+
+        # Combine all features via addition
+        x = x + angle_emb + time_emb
+        output = self.net(x)
+
+        # Convert back to complex
+        output = output.view(jnp.complex64).reshape(output.shape[:-1])
+        return output
 
 
 class DDPMScheduler:
@@ -52,7 +104,7 @@ class DDPMScheduler:
         beta_start: float = 1e-4,
         beta_end: float = 2e-2,
     ):
-        self.num_train_timesteps = num_train_timesteps
+        self.T = num_train_timesteps
 
         # Linear beta schedule
         self.betas = jnp.linspace(beta_start, beta_end, num_train_timesteps)
@@ -64,35 +116,41 @@ class DDPMScheduler:
         self.sqrt_one_minus_alphas_cumprod = jnp.sqrt(1.0 - self.alphas_cumprod)
 
     def add_noise(
-        self, original_samples: jax.Array, noise: jax.Array, timesteps: jax.Array
+        self,
+        samples: jax.Array,
+        noise: jax.Array,
+        timesteps: jax.Array,
     ) -> jax.Array:
         """Add noise to samples according to the noise schedule."""
-        sqrt_alpha_prod = self.sqrt_alphas_cumprod[timesteps]
-        sqrt_one_minus_alpha_prod = self.sqrt_one_minus_alphas_cumprod[timesteps]
-
-        # Reshape for broadcasting
-        sqrt_alpha_prod = sqrt_alpha_prod[:, None, None]
-        sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod[:, None, None]
-
-        noisy_samples = (
-            sqrt_alpha_prod * original_samples + sqrt_one_minus_alpha_prod * noise
-        )
+        alpha_t = self.sqrt_alphas_cumprod[timesteps]
+        beta_t = self.sqrt_one_minus_alphas_cumprod[timesteps]
+        noisy_samples = alpha_t[:, None, None] * samples + beta_t[:, None, None] * noise
         return noisy_samples
 
     def step(
-        self, model_output: jax.Array, timestep: int, sample: jax.Array, key: jax.Array
+        self,
+        model_output: jax.Array,
+        timestep: int,
+        sample: jax.Array,
+        key: jax.Array,
     ) -> jax.Array:
-        """Perform one denoising step."""
+        """Perform one complex-valued denoising step.
+
+        Adapted for complex-valued data following PhaseGen approach.
+        """
         alpha = self.alphas[timestep]
         alpha_cumprod = self.alphas_cumprod[timestep]
         beta = self.betas[timestep]
 
-        # Predict original sample
-        pred_original_sample = (
-            sample - jnp.sqrt(1 - alpha_cumprod) * model_output
-        ) / jnp.sqrt(alpha_cumprod)
+        # Predict original sample using complex-aware operations
+        sqrt_alpha_cumprod = jnp.sqrt(alpha_cumprod)
+        sqrt_one_minus_alpha_cumprod = jnp.sqrt(1 - alpha_cumprod)
 
-        # Compute coefficients
+        pred_original_sample = (
+            sample - sqrt_one_minus_alpha_cumprod * model_output
+        ) / sqrt_alpha_cumprod
+
+        # Compute coefficients for complex diffusion
         pred_sample_coeff = (
             jnp.sqrt(alpha)
             * (1 - self.alphas_cumprod[timestep - 1])
@@ -107,75 +165,83 @@ class DDPMScheduler:
             pred_sample_coeff * sample + current_sample_coeff * pred_original_sample
         )
 
-        # Add noise if not the last timestep
+        # Add complex noise if not the last timestep
         if timestep > 0:
-            noise = jax.random.normal(key, sample.shape, dtype=sample.dtype)
+            # Generate complex-valued noise for the step
+            complex_noise = generate_complex_noise(key, sample.shape)
             variance = (
                 beta * (1 - self.alphas_cumprod[timestep - 1]) / (1 - alpha_cumprod)
             )
-            pred_prev_sample = pred_prev_sample + jnp.sqrt(variance) * noise
+            pred_prev_sample = pred_prev_sample + jnp.sqrt(variance) * complex_noise
 
         return pred_prev_sample
+
+
+class DiffusionParams(NamedTuple):
+    geps: jax.Array
+    kx: jax.Array
+    ky: jax.Array
+
+
+def generate_complex_noise(key: jax.Array, shape: tuple) -> jax.Array:
+    """Generate complex-valued noise suitable for diffusion.
+
+    Following PhaseGen paper: 𝒩_z = e^(i*ε); ε ~ U(-π, π)
+    This creates unit magnitude noise with uniformly distributed phase.
+    """
+    real = 0.5 * jax.random.normal(key, shape)
+    imag = 0.5 * jax.random.normal(key, shape)
+    noise = jnp.exp(1j * jnp.angle(real + 1j * imag))
+    return noise
+
+
+vmapped_synthesize = jax.vmap(synthesize_pattern, in_axes=(None, 0))
+vmapped_convert_to_db = jax.vmap(convert_to_db)
+vmapped_calculate_weights = jax.vmap(calculate_weights, in_axes=(None, None, 0))
 
 
 @nnx.jit(static_argnames="scheduler")
 def train_step(
     optimizer: nnx.Optimizer,
-    batch_of_angles_rad: jax.Array,
     scheduler: DDPMScheduler,
     params: DiffusionParams,
+    batch: jax.Array,
     key: jax.Array,
 ):
-    """Jitted training step for diffusion."""
-    model = optimizer.model
+    # Generate original weights (not normalized)
+    weights, _ = vmapped_calculate_weights(params.kx, params.ky, batch)
 
-    def loss_fn(model: DenoisingUNet, batch_of_angles_rad: jax.Array, key: jax.Array):
-        kx, ky, element_fields = params.kx, params.ky, params.element_fields
-        batch_size = batch_of_angles_rad.shape[0]
+    # Create target patterns from original weights for physics loss
+    target_patterns = vmapped_synthesize(params.geps, weights)
+    target_patterns = vmapped_convert_to_db(target_patterns)
 
-        # Generate element weights and target patterns
-        element_weights, _ = vmapped_calculate_weights(kx, ky, batch_of_angles_rad)
+    # Sample random timesteps and generate proper complex noise
+    key, timestep_key, noise_key = jax.random.split(key, 3)
+    timesteps = jax.random.randint(timestep_key, (batch.shape[0],), 0, scheduler.T)
 
-        # Create target patterns (ideal case)
-        ideal_patterns = vmapped_synthesize(element_fields, element_weights)
-        target_patterns = normalize_patterns(ideal_patterns)
+    noise = generate_complex_noise(noise_key, weights.shape)
+    # Normalize noise to match weights' scale
+    noise = noise * jnp.mean(jnp.abs(weights)) / jnp.mean(jnp.abs(noise))
+    noisy_weights = scheduler.add_noise(weights, noise, timesteps)
 
-        # Sample random timesteps
-        key, timestep_key, noise_key = jax.random.split(key, 3)
-        timesteps = jax.random.randint(
-            timestep_key, (batch_size,), 0, scheduler.num_train_timesteps
-        )
-
-        # Add noise to element weights
-        noise = jax.random.normal(
-            noise_key, element_weights.shape, dtype=element_weights.dtype
-        )
-        noisy_weights = scheduler.add_noise(element_weights, noise, timesteps)
-
-        # Model predicts the noise
-        predicted_noise = model(
-            noisy_weights, target_patterns, timesteps.astype(jnp.float32)
-        )
+    def loss_fn(model: Denoiser, batch: jax.Array):
+        predicted_noise = model(noisy_weights, batch, timesteps.astype(jnp.float32))
 
         # Physics-based guidance: evaluate predicted clean weights
-        predicted_clean_weights = (
-            noisy_weights
-            - scheduler.sqrt_one_minus_alphas_cumprod[timesteps][:, None, None]
-            * predicted_noise
-        ) / scheduler.sqrt_alphas_cumprod[timesteps][:, None, None]
+        k0 = scheduler.sqrt_alphas_cumprod[timesteps][:, None, None]
+        k1 = scheduler.sqrt_one_minus_alphas_cumprod[timesteps][:, None, None]
+        predicted_weights = (noisy_weights - k1 * predicted_noise) / k0
 
         # Synthesize patterns with predicted weights
-        predicted_patterns = vmapped_synthesize(element_fields, predicted_clean_weights)
+        predicted_patterns = vmapped_synthesize(params.geps, predicted_weights)
+        predicted_patterns = vmapped_convert_to_db(predicted_patterns)
 
-        # Scale the predicted patterns by the peak of the ideal patterns
-        # to ensure they are compared on the same scale for the physics loss.
-        ideal_max_vals = jnp.max(ideal_patterns, axis=(1, 2), keepdims=True)
-        scaled_predicted_patterns = predicted_patterns / (ideal_max_vals + 1e-8)
+        # Compute losses
+        noise_diff = predicted_noise - noise
+        denoising_loss = jnp.mean(jnp.real(noise_diff) ** 2 + jnp.imag(noise_diff) ** 2)
+        physics_loss = jnp.mean((predicted_patterns - target_patterns) ** 2)
 
-        denoising_loss = jnp.mean(jnp.abs(predicted_noise - noise) ** 2)
-        physics_loss = jnp.mean((scaled_predicted_patterns - target_patterns) ** 2)
-
-        total_loss = denoising_loss + 0.05 * physics_loss
+        total_loss = denoising_loss + 1e-3 * physics_loss
 
         metrics = {
             "denoising_loss": denoising_loss,
@@ -185,236 +251,94 @@ def train_step(
 
         return total_loss, metrics
 
-    (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
-        model, batch_of_angles_rad, key
-    )
+    model = optimizer.model
+    (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
     optimizer.update(grads)
     metrics["grad_norm"] = optax.global_norm(grads)
     return metrics
 
 
 def solve_with_diffusion(
-    model: DenoisingUNet,
-    target_pattern: jax.Array,
+    model: Denoiser,
+    steering_angles: jax.Array,
     scheduler: DDPMScheduler,
-    synthesize_embedded_pattern: Callable,
-    num_inference_steps: int = 200,
-    guidance_scale: float = 1.0,
+    array_size: tuple[int, int] = (4, 4),
+    n_steps: int = 200,
     key: jax.Array | None = None,
 ) -> jax.Array:
-    """Phase 2: Use trained model to solve for corrective weights."""
-
-    # Start with pure noise
-    sample_shape = (16, 16)  # Array size
-    sample = jax.random.normal(key, sample_shape, dtype=jnp.complex64)
+    if key is None:
+        key = jax.random.key(0)
+    sample = generate_complex_noise(key, array_size)
 
     # Create inference timesteps
-    inference_timesteps = jnp.linspace(
-        scheduler.num_train_timesteps - 1, 0, num_inference_steps, dtype=jnp.int32
-    )
+    inference_timesteps = jnp.linspace(scheduler.T - 1, 0, n_steps, dtype=jnp.int32)
 
-    target_pattern_batch = target_pattern[None, ...]  # Add batch dimension
-
-    for i, timestep in enumerate(inference_timesteps):
+    for timestep in inference_timesteps:
         key, step_key = jax.random.split(key)
 
-        # Model prediction
+        # Model prediction with steering angles
         timestep_batch = jnp.array([timestep], dtype=jnp.float32)
         sample_batch = sample[None, ...]
+        angles_batch = steering_angles[None, ...]  # (1, 2)
 
-        model_output = model(sample_batch, target_pattern_batch, timestep_batch)[0]
-
-        # Physics guidance
-        if guidance_scale > 1.0:
-            # Predict clean sample
-            alpha_cumprod = scheduler.alphas_cumprod[timestep]
-            predicted_clean = (
-                sample_batch - jnp.sqrt(1 - alpha_cumprod) * model_output
-            ) / jnp.sqrt(alpha_cumprod)
-
-            # Physics gradient
-            def physics_loss_fn(weights):
-                pattern = synthesize_embedded_pattern(weights)
-                pattern = normalize_patterns(pattern[None, ...])[0]
-                return jnp.mean((pattern - target_pattern) ** 2)
-
-            physics_grad = jax.grad(physics_loss_fn)(predicted_clean[0])
-
-            # Apply guidance
-            model_output = model_output - guidance_scale * physics_grad[None, ...]
+        model_output = model(sample_batch, angles_batch, timestep_batch)[0]
 
         # Denoising step
-        sample = scheduler.step(model_output[0], timestep, sample, step_key)
+        sample = scheduler.step(model_output, timestep, sample, step_key)
 
     return sample
 
 
 @app.command()
 def train(
-    n_steps: int = 10_000,
+    n_steps: int = 100_000,
     batch_size: int = 256,
-    lr: float = 1e-4,
+    lr: float = 5e-4,
     seed: int = 42,
-    restore: bool = True,
-    overwrite: bool = False,
-    openems_path: Path | None = None,
+    restore: bool = False,
 ):
-    """Main training function for the diffusion model."""
     key = jax.random.key(seed)
 
     logger.info("Setting up diffusion training pipeline")
-
-    # Create physics setup with optional OpenEMS support
-    config = ArrayConfig()
-    if openems_path is not None:
-        element_data = load_element_patterns(kind="openems", path=openems_path)
-    else:
-        element_data = load_element_patterns(kind="synthetic", config=config)
-    geps = element_data.geps
+    element_data = load_element_patterns(kind="cst")
     kx, ky = compute_spatial_phase_coeffs(element_data.config)
-
-    # Create scheduler and model
-    scheduler = DDPMScheduler(num_train_timesteps=1000)
-
     params = DiffusionParams(
-        element_fields=jnp.asarray(geps),
+        geps=jnp.asarray(element_data.geps),
         kx=jnp.asarray(kx),
         ky=jnp.asarray(ky),
     )
 
     key, model_key = jax.random.split(key)
-    model = DenoisingUNet(base_channels=64, rngs=nnx.Rngs(model_key))
-
-    # Use a learning rate schedule for better stability
-    lr_schedule = optax.warmup_cosine_decay_schedule(
-        init_value=lr * 0.1,  # Start with 10% of target LR
-        peak_value=lr,
-        warmup_steps=500,
-        decay_steps=n_steps - 500,
-        end_value=lr * 0.01,  # End with 1% of target LR
-    )
-
-    optimizer = nnx.Optimizer(
-        model, optax.adamw(learning_rate=lr_schedule, weight_decay=1e-6)
-    )
+    model = Denoiser(base_channels=32, rngs=nnx.Rngs(model_key))
+    scheduler = DDPMScheduler(num_train_timesteps=1000)
+    optimizer = nnx.Optimizer(model, optax.adamw(learning_rate=lr))
 
     ckpt_path = Path.cwd() / "checkpoints_diffusion"
-    ckpt_options = ocp.CheckpointManagerOptions(max_to_keep=1, save_interval_steps=100)
+    ckpt_options = ocp.CheckpointManagerOptions(max_to_keep=2, save_interval_steps=100)
     ckpt_mngr = ocp.CheckpointManager(ckpt_path, options=ckpt_options)
-
     start_step = 0
     if restore:
         start_step = restore_checkpoint(ckpt_mngr, optimizer, step=None)
         logger.info(f"Resuming from step {start_step}")
 
-    n_steps -= start_step
-
-    # Training data generator
     key, data_key = jax.random.split(key)
     sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
 
-    logger.info("Starting diffusion training")
-    log_progress = create_progress_logger(n_steps, log_every=100, start_step=start_step)
+    logger.info(f"Starting diffusion training for {n_steps} steps")
+    log_progress = create_progress_logger(n_steps, log_every=50, start_step=start_step)
 
     try:
         for step, batch in enumerate(sampler, start=start_step):
             key, step_key = jax.random.split(key)
-            metrics = train_step(
-                optimizer,
-                batch,
-                scheduler,
-                params,
-                step_key,
-            )
-            save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
+            metrics = train_step(optimizer, scheduler, params, batch, step_key)
             log_progress(step, metrics)
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
-        raise
     finally:
+        save_checkpoint(ckpt_mngr, optimizer, step, True)
         ckpt_mngr.wait_until_finished()
 
     logger.info("Diffusion training completed")
-
-
-@app.command()
-def evaluate(
-    n_eval_samples: int = 50,
-    seed: int = 123,
-    openems_path: Path | None = None,
-):
-    """Evaluate the trained diffusion model on test steering angles."""
-    key = jax.random.key(seed)
-
-    # Create physics setup for evaluation with optional OpenEMS support
-    config = ArrayConfig()
-    if openems_path is not None:
-        element_data = load_element_patterns(kind="openems", path=openems_path)
-    else:
-        element_data = load_element_patterns(kind="synthetic", config=config)
-    config = element_data.config
-    geps = element_data.geps
-    kx, ky = compute_spatial_phase_coeffs(config)
-
-    # Create scheduler and model
-    scheduler = DDPMScheduler(num_train_timesteps=1000)
-
-    params = DiffusionParams(
-        element_fields=jnp.asarray(geps),
-        kx=jnp.asarray(kx),
-        ky=jnp.asarray(ky),
-    )
-
-    key, model_key, data_key = jax.random.split(key, 3)
-    model = DenoisingUNet(base_channels=64, rngs=nnx.Rngs(model_key))
-
-    # Create a dummy optimizer to load the checkpoint
-    optimizer = nnx.Optimizer(model, optax.adamw(1e-4))
-
-    # Load the trained model
-    ckpt_path = Path.cwd() / "checkpoints_diffusion"
-    ckpt_mngr = ocp.CheckpointManager(ckpt_path)
-    step = restore_checkpoint(ckpt_mngr, optimizer)
-    if step == 0:
-        logger.error("No checkpoint found, cannot evaluate.")
-        return
-    logger.info(f"Loaded checkpoint from step {step}")
-    model = optimizer.model
-
-    # Create test data
-    sampler = steering_angles_sampler(data_key, n_eval_samples, limit=1)
-
-    logger.info(f"Evaluating diffusion model on {n_eval_samples} samples")
-
-    for i, steering_angles in enumerate(sampler):
-        logger.info(f"Sample {i + 1}/{n_eval_samples}")
-
-        # Create target pattern
-        element_weights, _ = vmapped_calculate_weights(
-            params.kx,
-            params.ky,
-            steering_angles,
-        )
-        target_pattern = vmapped_synthesize(params.element_fields, element_weights)
-        target_pattern = normalize_patterns(target_pattern)
-
-        # Solve for corrective weights
-        key, solve_key = jax.random.split(key)
-        synthesize_embedded = partial(synthesize_pattern, params.element_fields)
-        corrective_weights = solve_with_diffusion(
-            model,
-            target_pattern[0],
-            scheduler,
-            synthesize_embedded,
-            key=solve_key,
-        )
-
-        # Evaluate performance
-        corrected_weights = element_weights * corrective_weights[None, ...]
-        corrected_pattern = vmapped_synthesize(params.element_fields, corrected_weights)
-        corrected_pattern = normalize_patterns(corrected_pattern)
-
-        # ... plotting and logging ...
 
 
 if __name__ == "__main__":
