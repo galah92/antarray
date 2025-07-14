@@ -1,4 +1,5 @@
 import logging
+import time
 import typing
 from functools import lru_cache, partial
 from pathlib import Path
@@ -924,6 +925,88 @@ def compute_pattern_metrics(
     }
 
 
+def test_random_sampling():
+    """Simplified random weight sampling test - loads CST data and runs until Ctrl-C."""
+    # Load data
+    orig_data = load_element_patterns_from_cst()
+    cst_path = Path(__file__).parents[1] / "cst"
+    dist_data = load_element_patterns_from_cst(cst_path / "disturbed_5")
+
+    # Create target pattern
+    steering_rad = np.radians([0.0, 0.0])
+    kx, ky = compute_spatial_phase_coeffs(orig_data.config)
+    w_orig, _ = calculate_weights(kx, ky, steering_rad)
+    target_field = synthesize_pattern(orig_data.geps, w_orig, power=False)
+    target_power_db = convert_to_db(
+        np.sum(np.abs(target_field) ** 2, axis=-1), normalize=False
+    )
+    target_peak = np.max(target_power_db)
+    peak_idx = np.unravel_index(np.argmax(target_power_db), target_power_db.shape)
+
+    to_db = partial(convert_to_db, normalize=False)
+    w_lstsq = solve_weights(target_field, dist_data.geps, alpha=None)
+    power_lstsq_db = to_db(synthesize_pattern(dist_data.geps, w_lstsq))
+    lstsq_mse = np.mean(np.square(power_lstsq_db - target_power_db))
+    lstsq_peak = np.max(power_lstsq_db[peak_idx])
+    logger.info(
+        f"LstSq MSE: {lstsq_mse:.3f} | LstSq Peak: {lstsq_peak:.1f}dB | Target Peak: {target_peak:.1f}dB"
+    )
+
+    array_size = dist_data.geps.shape[:2]
+    best_mse, iteration = float("inf"), 0
+    start_time = time.time()
+
+    try:
+        while True:
+            iteration += 1
+            # Generate random weights
+            # amplitude = np.ones(array_size)
+            amplitude = np.random.uniform(size=array_size)
+            amplitude = amplitude / np.sum(amplitude) * np.prod(array_size)
+            phase = np.random.uniform(high=2 * np.pi, size=array_size)
+            w = amplitude * np.exp(1j * phase)
+            w = w / np.sqrt(np.prod(array_size))  # Normalize to sqrt(N)
+
+            rand_pattern_db = to_db(synthesize_pattern(dist_data.geps, w))
+            rand_mse = np.mean(np.square(rand_pattern_db - target_power_db))
+            rand_peak = np.max(rand_pattern_db[peak_idx])
+
+            if rand_mse < best_mse:
+                best_mse = rand_mse
+                logger.info(
+                    f"Iter {iteration:>5d} | {rand_mse=:.3f} | {rand_peak=:.1f}dB"
+                )
+
+                kw = dict(subplot_kw=dict(projection="polar"), layout="compressed")
+                fig, ax = plt.subplots(figsize=(8, 8), **kw)
+                plot = partial(plot_E_plane, phi_idx=0, ax=ax)
+
+                label = f"Target (Peak: {target_peak:.1f}dB)"
+                plot(target_power_db, fmt="r-", label=label)
+
+                label = f"LstSq (Peak: {lstsq_peak:.1f}dB, MSE: {lstsq_mse:.3f})"
+                plot(power_lstsq_db, fmt="g-", label=label)
+
+                label = f"Rand (Peak: {rand_peak:.1f}dB, MSE: {rand_mse:.3f})"
+                plot(rand_pattern_db, fmt="b-", label=label)
+
+                ax.legend(loc="lower center")
+                title = f"Rand Pattern ({iteration=}"
+                fig.suptitle(title, fontweight="bold")
+                filename = f"rand_pattern_{iteration}.png"
+                fig.savefig(filename, dpi=250, bbox_inches="tight")
+                logger.info(f"Saved random pattern plot to {filename}")
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        elapsed = time.time() - start_time
+        rate = iteration / elapsed
+        logger.info(
+            f"Iter {iteration:>5d} | Best MSE: {best_mse:.3f} | LstSq MSE: {lstsq_mse:.3f} | Rate: {rate:.0f} iter/s | Elapsed: {elapsed:.1f}s"
+        )
+
+
 if __name__ == "__main__":
     setup_logging()
     cpu = jax.devices("cpu")[0]
@@ -931,4 +1014,5 @@ if __name__ == "__main__":
         # sum_cst()
         # demo_phase_shifts()
         # demo_openems_patterns()
-        demo_cst_patterns()
+        # demo_cst_patterns()
+        test_random_sampling()
