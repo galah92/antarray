@@ -783,18 +783,18 @@ def demo_cst_patterns():
     steering_deg = np.array([0.0, 0.0])
     steering_rad = np.radians(steering_deg)
     kx, ky = compute_spatial_phase_coeffs(orig_data.config)
-    weights_orig, _ = calculate_weights(kx, ky, steering_rad)
+    w_orig, _ = calculate_weights(kx, ky, steering_rad)
 
     to_db = partial(convert_to_db, normalize=False)
 
-    target_field = synthesize_pattern(orig_data.geps, weights_orig, power=False)
+    target_field = synthesize_pattern(orig_data.geps, w_orig, power=False)
     target_power = jnp.sum(jnp.abs(target_field) ** 2, axis=-1)
     target_power_db = to_db(target_power)
 
-    weights_corr = solve_weights(target_field, orig_data.geps, alpha=None)
+    w_corr = solve_weights(target_field, dist_data.geps, alpha=None)
 
-    dist_power_db = to_db(synthesize_pattern(dist_data.geps, weights_orig))
-    corr_power_db = to_db(synthesize_pattern(dist_data.geps, weights_corr))
+    dist_power_db = to_db(synthesize_pattern(dist_data.geps, w_orig))
+    corr_power_db = to_db(synthesize_pattern(dist_data.geps, w_corr))
 
     # Always use the phi slice where the peak occurs for best visualization
     assert abs(steering_rad[1]) < 1e-6, "Only theta steering supported"
@@ -816,13 +816,25 @@ def demo_cst_patterns():
     fig, ax = plt.subplots(figsize=(8, 8), **kw)
 
     plot = partial(plot_E_plane, phi_idx=phi_idx, ax=ax)
-    plot(target_power_db, fmt="r-", label="Target Pattern")
-    plot(dist_power_db, fmt="g-", label=f"Distorted Pattern (MSE={dist_mse:.2f})")
-    plot(corr_power_db, fmt="b-", label=f"Corrected Pattern (MSE={corr_mse:.2f})")
+    plot(
+        target_power_db,
+        fmt="r-",
+        label=f"Target Pattern (Peak={target_metrics['peak_power_db']:.1f}dB)",
+    )
+    plot(
+        dist_power_db,
+        fmt="g-",
+        label=f"Distorted Pattern (Peak={dist_metrics['peak_power_db']:.1f}dB)",
+    )
+    plot(
+        corr_power_db,
+        fmt="b-",
+        label=f"Corrected Pattern (Peak={corr_metrics['peak_power_db']:.1f}dB)",
+    )
     ax.legend(loc="lower center")
 
-    total_power_orig = np.sum(np.square(np.abs(weights_orig)))
-    total_power_corr = np.sum(np.square(np.abs(weights_corr)))
+    total_power_orig = np.sum(np.square(np.abs(w_orig)))
+    total_power_corr = np.sum(np.square(np.abs(w_corr)))
     logger.info(f"{total_power_orig=:.2f}, {total_power_corr=:.2f}")
 
     title = f"CST Patterns (θ={steering_deg[0]:.1f}°, φ={steering_deg[1]:.1f}°)"
