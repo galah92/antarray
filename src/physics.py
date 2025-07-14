@@ -802,9 +802,15 @@ def demo_cst_patterns():
     phi_deg = np.degrees(orig_data.config.phi_rad[phi_idx])
     logger.info(f"{phi_idx=} (φ={phi_deg:.1f}°)")
 
+    # Calculate MSE metrics
     dist_mse = np.mean(np.square(dist_power_db - target_power_db))
     corr_mse = np.mean(np.square(corr_power_db - target_power_db))
     logger.info(f"{dist_mse=:.2f}, {corr_mse=:.2f}")
+
+    theta_rad, phi_rad = orig_data.config.theta_rad, orig_data.config.phi_rad
+    target_metrics = compute_pattern_metrics(target_power_db, theta_rad, phi_rad)
+    dist_metrics = compute_pattern_metrics(dist_power_db, theta_rad, phi_rad)
+    corr_metrics = compute_pattern_metrics(corr_power_db, theta_rad, phi_rad)
 
     kw = dict(subplot_kw=dict(projection="polar"), layout="compressed")
     fig, ax = plt.subplots(figsize=(8, 8), **kw)
@@ -826,11 +832,91 @@ def demo_cst_patterns():
     logger.info(f"Saved CST demo plot to {filename}")
 
 
+def compute_pattern_metrics(
+    pattern_db: np.ndarray,
+    theta_rad: np.ndarray,
+    phi_rad: np.ndarray,
+) -> dict:
+    """Compute comprehensive pattern analysis metrics.
+
+    Args:
+        pattern_db: Pattern in dB scale (n_theta, n_phi)
+        theta_rad: Theta angles in radians
+        phi_rad: Phi angles in radians
+        phi_idx: Phi index for E-plane cut analysis
+
+    Returns:
+        Dictionary with pattern metrics for both cut and full pattern
+    """
+    theta_deg, phi_deg = np.degrees(theta_rad), np.degrees(phi_rad)
+
+    global_peak_idx = np.unravel_index(np.argmax(pattern_db), pattern_db.shape)
+    peak_power_db = pattern_db[global_peak_idx]
+    peak_theta_deg = theta_deg[global_peak_idx[0]]
+    peak_phi_deg = phi_deg[global_peak_idx[1]]
+
+    # Global sidelobe level - find maximum sidelobe outside main beam region
+    # Define main beam region as ±10° around peak (adjustable)
+    main_beam_theta_width = 10.0  # degrees
+    main_beam_phi_width = 10.0  # degrees
+
+    theta_mask = np.abs(theta_deg - peak_theta_deg) <= main_beam_theta_width
+    phi_mask = np.abs(phi_deg - peak_phi_deg) <= main_beam_phi_width
+
+    # Handle phi wraparound at 0°/360°
+    if peak_phi_deg < main_beam_phi_width:
+        phi_mask |= phi_deg >= (360 - (main_beam_phi_width - peak_phi_deg))
+    elif peak_phi_deg > (360 - main_beam_phi_width):
+        phi_mask |= phi_deg <= (main_beam_phi_width - (360 - peak_phi_deg))
+
+    # Create 2D main beam mask
+    main_beam_mask = theta_mask[:, None] & phi_mask[None, :]
+    sidelobe_region = pattern_db[~main_beam_mask]
+    ssl_db = peak_power_db - np.max(sidelobe_region)
+
+    # 3D directivity estimate using solid angle integration
+    # Convert to linear scale for integration
+    pattern = 10 ** (pattern_db / 10)
+
+    # Compute solid angle weights: sin(θ) * dθ * dφ
+    dtheta = np.diff(theta_rad)[0] if len(theta_rad) > 1 else np.pi / 180
+    dphi = np.diff(phi_rad)[0] if len(phi_rad) > 1 else 2 * np.pi / 360
+
+    # sin(θ) weighting for spherical coordinates
+    solid_angle_weights = np.sin(theta_rad)[:, None] * dtheta * dphi
+
+    # Ensure weights have same shape as pattern
+    solid_angle_weights = np.broadcast_to(solid_angle_weights, pattern.shape)
+
+    # Total radiated power (integrate over sphere)
+    total_power = np.sum(pattern * solid_angle_weights)
+
+    # Directivity = 4π * peak_intensity / total_power
+    peak_linear = 10 ** (peak_power_db / 10)
+    directivity = 4 * np.pi * peak_linear / total_power
+    directivity_db = 10 * np.log10(directivity)
+
+    # Pattern efficiency (what fraction of power is in main beam)
+    main_beam_power = np.sum(
+        pattern[main_beam_mask] * solid_angle_weights[main_beam_mask]
+    )
+    pattern_efficiency = main_beam_power / total_power
+
+    return {
+        "peak_power_db": peak_power_db,
+        "peak_theta_deg": peak_theta_deg,
+        "peak_phi_deg": peak_phi_deg,
+        "ssl_db": ssl_db,
+        "directivity_db": directivity_db,
+        "pattern_efficiency": pattern_efficiency,
+    }
+
+
 if __name__ == "__main__":
     setup_logging()
     cpu = jax.devices("cpu")[0]
     with jax.default_device(cpu):
-        sum_cst()
+        # sum_cst()
         # demo_phase_shifts()
         # demo_openems_patterns()
         demo_cst_patterns()
