@@ -100,14 +100,14 @@ class DDPMScheduler:
 
     def __init__(
         self,
-        num_train_timesteps: int = 1000,
+        T: int = 1000,
         beta_start: float = 1e-4,
         beta_end: float = 2e-2,
     ):
-        self.T = num_train_timesteps
+        self.T = T
 
         # Linear beta schedule
-        self.betas = jnp.linspace(beta_start, beta_end, num_train_timesteps)
+        self.betas = jnp.linspace(beta_start, beta_end, T)
         self.alphas = 1.0 - self.betas
         self.alphas_cumprod = jnp.cumprod(self.alphas)
 
@@ -310,7 +310,7 @@ def train(
 
     key, model_key = jax.random.split(key)
     model = Denoiser(base_channels=32, rngs=nnx.Rngs(model_key))
-    scheduler = DDPMScheduler(num_train_timesteps=1000)
+    scheduler = DDPMScheduler(T=1000)
     optimizer = nnx.Optimizer(model, optax.adamw(learning_rate=lr))
 
     ckpt_path = Path.cwd() / "checkpoints_diffusion"
@@ -332,13 +332,80 @@ def train(
             key, step_key = jax.random.split(key)
             metrics = train_step(optimizer, scheduler, params, batch, step_key)
             log_progress(step, metrics)
+            if step % 100 == 0:
+                save_checkpoint(ckpt_mngr, optimizer, step, True)
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
     finally:
-        save_checkpoint(ckpt_mngr, optimizer, step, True)
         ckpt_mngr.wait_until_finished()
 
     logger.info("Diffusion training completed")
+
+
+@app.command()
+def pred(
+    theta: float = 0.0,
+    phi: float = 0.0,
+    seed: int = 42,
+    array_size: tuple[int, int] = (4, 4),
+):
+    """Generate antenna array weights for given steering angles using trained diffusion model."""
+    key = jax.random.key(seed)
+
+    logger.info(
+        f"Setting up diffusion prediction for steering angles: theta={theta}°, phi={phi}°"
+    )
+
+    # Load physics parameters
+    element_data = load_element_patterns(kind="cst")
+    kx, ky = compute_spatial_phase_coeffs(element_data.config)
+    params = DiffusionParams(
+        geps=jnp.asarray(element_data.geps),
+        kx=jnp.asarray(kx),
+        ky=jnp.asarray(ky),
+    )
+
+    key, model_key = jax.random.split(key)
+    model = Denoiser(base_channels=32, rngs=nnx.Rngs(model_key))
+    scheduler = DDPMScheduler(T=1000)
+    optimizer = nnx.Optimizer(model, optax.adamw(learning_rate=5e-4))
+
+    # Load trained checkpoint
+    ckpt_path = Path.cwd() / "checkpoints_diffusion"
+    ckpt_mngr = ocp.CheckpointManager(ckpt_path)
+    restore_checkpoint(ckpt_mngr, optimizer, step=None)
+    logger.info("Loaded trained model from checkpoint")
+
+    # Convert steering angles to radians
+    steering_angles = jnp.array([jnp.radians(theta), jnp.radians(phi)])
+
+    # Generate weights using diffusion
+    logger.info(f"Running diffusion sampling with {scheduler.T} steps...")
+    key, sample_key = jax.random.split(key)
+    generated_weights = solve_with_diffusion(
+        model=optimizer.model,
+        steering_angles=steering_angles,
+        scheduler=scheduler,
+        array_size=array_size,
+        n_steps=scheduler.T,
+        key=sample_key,
+    )
+
+    # Generate target weights for comparison
+    target_weights, _ = calculate_weights(kx, ky, steering_angles)
+
+    # Synthesize and compare patterns
+    generated_pattern = synthesize_pattern(params.geps, generated_weights)
+    target_pattern = synthesize_pattern(params.geps, target_weights)
+    generated_pattern_db = convert_to_db(generated_pattern)
+    target_pattern_db = convert_to_db(target_pattern)
+
+    # Calculate metrics
+    pattern_mse = float(jnp.mean((generated_pattern_db - target_pattern_db) ** 2))
+    weights_mse = float(jnp.mean(jnp.abs(generated_weights - target_weights) ** 2))
+    logger.info(generated_weights)
+    logger.info(f"Weights MSE: {weights_mse:.6f}")
+    logger.info(f"Pattern MSE (dB): {pattern_mse:.2f}")
 
 
 if __name__ == "__main__":
