@@ -5,6 +5,7 @@ from typing import NamedTuple
 import cyclopts
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import orbax.checkpoint as ocp
 from flax import nnx
@@ -186,11 +187,11 @@ class DiffusionParams(NamedTuple):
 def generate_complex_noise(key: jax.Array, shape: tuple) -> jax.Array:
     """Generate complex-valued noise suitable for diffusion.
 
-    Following PhaseGen paper: 𝒩_z = e^(i*ε); ε ~ U(-π, π)
-    This creates unit magnitude noise with uniformly distributed phase.
+    Based on torch.randn: https://docs.pytorch.org/docs/stable/generated/torch.randn.html#torch.randn)
     """
-    real = 0.5 * jax.random.normal(key, shape)
-    imag = 0.5 * jax.random.normal(key, shape)
+    real_key, imag_key = jax.random.split(key)
+    real = np.sqrt(0.5) * jax.random.normal(real_key, shape)
+    imag = np.sqrt(0.5) * jax.random.normal(imag_key, shape)
     noise = jnp.exp(1j * jnp.angle(real + 1j * imag))
     return noise
 
