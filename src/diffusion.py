@@ -16,6 +16,7 @@ from physics import (
     compute_spatial_phase_coeffs,
     convert_to_db,
     load_element_patterns,
+    solve_weights,
     synthesize_pattern,
 )
 from training import (
@@ -151,10 +152,28 @@ class DDPMScheduler:
         return x_t
 
 
-class DiffusionParams(NamedTuple):
+class ArrayParams(NamedTuple):
     geps: jax.Array
     kx: jax.Array
     ky: jax.Array
+
+
+class DiffusionParams(NamedTuple):
+    ref: ArrayParams  # Reference array
+    dis: ArrayParams  # Disturbed array
+
+
+def load_cst_params() -> DiffusionParams:
+    cst_ref = load_element_patterns(kind="cst")
+    cst_dist_path = Path.cwd() / "cst" / "disturbed_5"
+    cst_dis = load_element_patterns(kind="cst", path=cst_dist_path)
+    ref_kx, ref_ky = compute_spatial_phase_coeffs(cst_ref.config)
+    dis_kx, dis_ky = compute_spatial_phase_coeffs(cst_dis.config)
+    params = DiffusionParams(
+        ref=ArrayParams(geps=jnp.asarray(cst_ref.geps), kx=ref_kx, ky=ref_ky),
+        dis=ArrayParams(geps=jnp.asarray(cst_dis.geps), kx=dis_kx, ky=dis_ky),
+    )
+    return params
 
 
 def generate_complex_noise(key: jax.Array, shape: tuple) -> jax.Array:
@@ -187,8 +206,8 @@ def train_step(
     key: jax.Array,
 ):
     # Create target patterns for physics loss
-    weights, _ = vmapped_calculate_weights(params.kx, params.ky, batch)
-    target_patterns = synth_power_db(params.geps, weights)
+    weights, _ = vmapped_calculate_weights(params.ref.kx, params.ref.ky, batch)
+    target_patterns = synth_power_db(params.ref.geps, weights)
 
     # Sample random timesteps and generate proper complex noise
     key, timestep_key, noise_key = jax.random.split(key, 3)
@@ -208,7 +227,7 @@ def train_step(
         pred_weights = pred_weights / jnp.sqrt(
             jnp.sum(jnp.abs(pred_weights) ** 2, axis=(-2, -1), keepdims=True)
         )
-        pred_patterns = synth_power_db(params.geps, pred_weights)
+        pred_patterns = synth_power_db(params.dis.geps, pred_weights)
 
         # Compute losses
         noise_diff = pred_noise - noise
@@ -269,13 +288,7 @@ def train(
     key = jax.random.key(seed)
 
     logger.info("Setting up diffusion training pipeline")
-    element_data = load_element_patterns(kind="cst")
-    kx, ky = compute_spatial_phase_coeffs(element_data.config)
-    params = DiffusionParams(
-        geps=jnp.asarray(element_data.geps),
-        kx=jnp.asarray(kx),
-        ky=jnp.asarray(ky),
-    )
+    params = load_cst_params()
 
     key, model_key = jax.random.split(key)
     model = Denoiser(base_channels=32, rngs=nnx.Rngs(model_key))
@@ -321,18 +334,8 @@ def pred(
     """Generate antenna array weights for given steering angles using trained diffusion model."""
     key = jax.random.key(seed)
 
-    logger.info(
-        f"Setting up diffusion prediction for steering angles: theta={theta}°, phi={phi}°"
-    )
-
-    # Load physics parameters
-    element_data = load_element_patterns(kind="cst")
-    kx, ky = compute_spatial_phase_coeffs(element_data.config)
-    params = DiffusionParams(
-        geps=jnp.asarray(element_data.geps),
-        kx=jnp.asarray(kx),
-        ky=jnp.asarray(ky),
-    )
+    logger.info(f"Setting up diffusion prediction for {theta=:.1f}°, {phi=:.1f}°")
+    params = load_cst_params()
 
     key, model_key = jax.random.split(key)
     model = Denoiser(base_channels=32, rngs=nnx.Rngs(model_key))
@@ -351,7 +354,7 @@ def pred(
     # Generate weights using diffusion
     logger.info(f"Running diffusion sampling with {scheduler.T} steps...")
     key, sample_key = jax.random.split(key)
-    generated_weights = solve_with_diffusion(
+    pred_weights = solve_with_diffusion(
         model=optimizer.model,
         steering_angles=steering_angles,
         scheduler=scheduler,
@@ -360,21 +363,38 @@ def pred(
     )
 
     # Generate target weights for comparison
-    target_weights, _ = calculate_weights(kx, ky, steering_angles)
+    ref_weights, _ = calculate_weights(params.ref.kx, params.ref.ky, steering_angles)
 
-    # Synthesize and compare patterns
-    generated_pattern = synthesize_pattern(params.geps, generated_weights)
-    target_pattern = synthesize_pattern(params.geps, target_weights)
-    generated_pattern_db = convert_to_db(generated_pattern)
-    target_pattern_db = convert_to_db(target_pattern)
+    # Generate least-squares solution for comparison
+    target_field = synthesize_pattern(params.ref.geps, ref_weights, power=False)
+    lstsq_weights = solve_weights(target_field, params.dis.geps, alpha=1e-3)
 
-    # Calculate metrics
-    pattern_mse = float(jnp.mean((generated_pattern_db - target_pattern_db) ** 2))
-    weights_mse = float(jnp.mean(jnp.abs(generated_weights - target_weights) ** 2))
-    logger.info(f"{np.sum(np.abs(target_weights))=:.3f}")
-    logger.info(f"{np.sum(np.abs(generated_weights))=:.3f}")
-    logger.info(f"Weights MSE: {weights_mse:.4f}")
-    logger.info(f"Pattern MSE (dB): {pattern_mse:.2f}")
+    # Synthesize patterns for all methods
+    synth_to_db = lambda geps, w: convert_to_db(synthesize_pattern(geps, w))
+    target_pattern_db = synth_to_db(params.ref.geps, ref_weights)
+    pred_pattern_db = synth_to_db(params.dis.geps, pred_weights)
+    lstsq_pattern_db = synth_to_db(params.dis.geps, lstsq_weights)
+
+    # Calculate metrics for diffusion method
+    diffusion_pattern_mse = ((pred_pattern_db - target_pattern_db) ** 2).mean()
+    lstsq_pattern_mse = ((lstsq_pattern_db - target_pattern_db) ** 2).mean()
+
+    pattern_shape = target_pattern_db.shape
+    target_mainlobe_idx = np.unravel_index(np.argmax(target_pattern_db), pattern_shape)
+    target_mainlobe_power_db = target_pattern_db[target_mainlobe_idx]
+    pred_mainlobe_idx = np.unravel_index(np.argmax(pred_pattern_db), pattern_shape)
+    pred_mainlobe_power_db = pred_pattern_db[pred_mainlobe_idx]
+    lstsq_mainlobe_idx = np.unravel_index(np.argmax(lstsq_pattern_db), pattern_shape)
+    lstsq_mainlobe_power_db = lstsq_pattern_db[lstsq_mainlobe_idx]
+    logger.info(f"{target_mainlobe_idx=}, {target_mainlobe_power_db:.2f}")
+    logger.info(f"{pred_mainlobe_idx=}, {pred_mainlobe_power_db:.2f}")
+    logger.info(f"{lstsq_mainlobe_idx=}, {lstsq_mainlobe_power_db:.2f}")
+
+    logger.info(f"{np.sum(np.abs(ref_weights))=:.3f}")
+    logger.info(f"{np.sum(np.abs(pred_weights))=:.3f}")
+    logger.info(f"{np.sum(np.abs(lstsq_weights))=:.3f}")
+    logger.info(f"{diffusion_pattern_mse=:.2f}dB")
+    logger.info(f"{lstsq_pattern_mse=:.2f}dB")
 
 
 if __name__ == "__main__":
