@@ -99,83 +99,56 @@ class Denoiser(nnx.Module):
 class DDPMScheduler:
     """Denoising Diffusion Probabilistic Model scheduler."""
 
-    def __init__(
-        self,
-        T: int = 1000,
-        beta_start: float = 1e-4,
-        beta_end: float = 2e-2,
-    ):
+    def __init__(self, T: int = 1000, beta_start: float = 1e-4, beta_end: float = 2e-2):
         self.T = T
-
-        # Linear beta schedule
         self.betas = jnp.linspace(beta_start, beta_end, T)
         self.alphas = 1.0 - self.betas
-        self.alphas_cumprod = jnp.cumprod(self.alphas)
-
-        # Precompute values for sampling
-        self.sqrt_alphas_cumprod = jnp.sqrt(self.alphas_cumprod)
-        self.sqrt_one_minus_alphas_cumprod = jnp.sqrt(1.0 - self.alphas_cumprod)
+        self.alphas_bar = jnp.cumprod(self.alphas)
+        self.sqrt_alphas_bar = jnp.sqrt(self.alphas_bar)
+        self.sqrt_one_minus_alphas_bar = jnp.sqrt(1.0 - self.alphas_bar)
 
     def add_noise(
         self,
         samples: jax.Array,
         noise: jax.Array,
-        timesteps: jax.Array,
+        t: jax.Array,
     ) -> jax.Array:
         """Add noise to samples according to the noise schedule."""
-        alpha_t = self.sqrt_alphas_cumprod[timesteps]
-        beta_t = self.sqrt_one_minus_alphas_cumprod[timesteps]
+        alpha_t = self.sqrt_alphas_bar[t]
+        beta_t = self.sqrt_one_minus_alphas_bar[t]
         noisy_samples = alpha_t[:, None, None] * samples + beta_t[:, None, None] * noise
         return noisy_samples
 
+    def predict_x0(
+        self,
+        xt: jax.Array,
+        t: jax.Array,
+        noise_pred: jax.Array,
+    ) -> jax.Array:
+        """Predict x0 (original sample) from xt (noisy sample) and predicted noise."""
+        k0 = self.sqrt_alphas_bar[t][:, None, None]
+        k1 = self.sqrt_one_minus_alphas_bar[t][:, None, None]
+        x0_pred = (xt - k1 * noise_pred) / k0
+        return x0_pred
+
     def step(
         self,
-        model_output: jax.Array,
-        timestep: int,
+        pred_noise: jax.Array,
+        t: int,
         sample: jax.Array,
         key: jax.Array,
     ) -> jax.Array:
-        """Perform one complex-valued denoising step.
+        """Perform one denoising step."""
+        k0 = jnp.sqrt(self.alphas_bar[t])
+        k1 = (1 - self.alphas[t]) / jnp.sqrt(1 - self.alphas_bar[t])
+        x_t = k0 * sample - k1 * pred_noise
 
-        Adapted for complex-valued data following PhaseGen approach.
-        """
-        alpha = self.alphas[timestep]
-        alpha_cumprod = self.alphas_cumprod[timestep]
-        beta = self.betas[timestep]
+        if t > 0:
+            noise = generate_complex_noise(key, sample.shape)
+            noise = noise / jnp.sqrt(np.prod(sample.shape))  # Normalize noise
+            x_t = x_t + jnp.sqrt(self.betas[t]) * noise
 
-        # Predict original sample using complex-aware operations
-        sqrt_alpha_cumprod = jnp.sqrt(alpha_cumprod)
-        sqrt_one_minus_alpha_cumprod = jnp.sqrt(1 - alpha_cumprod)
-
-        pred_original_sample = (
-            sample - sqrt_one_minus_alpha_cumprod * model_output
-        ) / sqrt_alpha_cumprod
-
-        # Compute coefficients for complex diffusion
-        pred_sample_coeff = (
-            jnp.sqrt(alpha)
-            * (1 - self.alphas_cumprod[timestep - 1])
-            / (1 - alpha_cumprod)
-        )
-        current_sample_coeff = (
-            jnp.sqrt(self.alphas_cumprod[timestep - 1]) * beta / (1 - alpha_cumprod)
-        )
-
-        # Compute previous sample
-        pred_prev_sample = (
-            pred_sample_coeff * sample + current_sample_coeff * pred_original_sample
-        )
-
-        # Add complex noise if not the last timestep
-        if timestep > 0:
-            # Generate complex-valued noise for the step
-            complex_noise = generate_complex_noise(key, sample.shape)
-            variance = (
-                beta * (1 - self.alphas_cumprod[timestep - 1]) / (1 - alpha_cumprod)
-            )
-            pred_prev_sample = pred_prev_sample + jnp.sqrt(variance) * complex_noise
-
-        return pred_prev_sample
+        return x_t
 
 
 class DiffusionParams(NamedTuple):
@@ -201,6 +174,10 @@ vmapped_convert_to_db = jax.vmap(convert_to_db)
 vmapped_calculate_weights = jax.vmap(calculate_weights, in_axes=(None, None, 0))
 
 
+def synth_power_db(geps: jax.Array, weights: jax.Array) -> jax.Array:
+    return vmapped_convert_to_db(vmapped_synthesize(geps, weights))
+
+
 @nnx.jit(static_argnames="scheduler")
 def train_step(
     optimizer: nnx.Optimizer,
@@ -209,38 +186,30 @@ def train_step(
     batch: jax.Array,
     key: jax.Array,
 ):
-    # Generate original weights (not normalized)
+    # Create target patterns for physics loss
     weights, _ = vmapped_calculate_weights(params.kx, params.ky, batch)
-
-    # Create target patterns from original weights for physics loss
-    target_patterns = vmapped_synthesize(params.geps, weights)
-    target_patterns = vmapped_convert_to_db(target_patterns)
+    target_patterns = synth_power_db(params.geps, weights)
 
     # Sample random timesteps and generate proper complex noise
     key, timestep_key, noise_key = jax.random.split(key, 3)
-    timesteps = jax.random.randint(timestep_key, (batch.shape[0],), 0, scheduler.T)
+    batch_size, *array_size = weights.shape
+    timesteps = jax.random.randint(timestep_key, (batch_size,), 0, scheduler.T)
 
     noise = generate_complex_noise(noise_key, weights.shape)
-    # Normalize noise to match weights' scale
-    noise = noise * jnp.mean(jnp.abs(weights)) / jnp.mean(jnp.abs(noise))
+    noise = noise / np.sqrt(np.prod(array_size))  # Normalize to realistic amplitude
     noisy_weights = scheduler.add_noise(weights, noise, timesteps)
 
     def loss_fn(model: Denoiser, batch: jax.Array):
-        predicted_noise = model(noisy_weights, batch, timesteps.astype(jnp.float32))
+        pred_noise = model(noisy_weights, batch, timesteps.astype(jnp.float32))
 
-        # Physics-based guidance: evaluate predicted clean weights
-        k0 = scheduler.sqrt_alphas_cumprod[timesteps][:, None, None]
-        k1 = scheduler.sqrt_one_minus_alphas_cumprod[timesteps][:, None, None]
-        predicted_weights = (noisy_weights - k1 * predicted_noise) / k0
-
-        # Synthesize patterns with predicted weights
-        predicted_patterns = vmapped_synthesize(params.geps, predicted_weights)
-        predicted_patterns = vmapped_convert_to_db(predicted_patterns)
+        # Physics-based guidance: evaluate predicted weights
+        pred_weights = scheduler.predict_x0(noisy_weights, timesteps, pred_noise)
+        pred_patterns = synth_power_db(params.geps, pred_weights)
 
         # Compute losses
-        noise_diff = predicted_noise - noise
+        noise_diff = pred_noise - noise
         denoising_loss = jnp.mean(jnp.real(noise_diff) ** 2 + jnp.imag(noise_diff) ** 2)
-        physics_loss = jnp.mean((predicted_patterns - target_patterns) ** 2)
+        physics_loss = jnp.mean((pred_patterns - target_patterns) ** 2)
 
         total_loss = denoising_loss + 1e-3 * physics_loss
 
@@ -264,30 +233,21 @@ def solve_with_diffusion(
     steering_angles: jax.Array,
     scheduler: DDPMScheduler,
     array_size: tuple[int, int] = (4, 4),
-    n_steps: int = 200,
     key: jax.Array | None = None,
 ) -> jax.Array:
     if key is None:
         key = jax.random.key(0)
-    sample = generate_complex_noise(key, array_size)
+    x_t = generate_complex_noise(key, array_size)
 
-    # Create inference timesteps
-    inference_timesteps = jnp.linspace(scheduler.T - 1, 0, n_steps, dtype=jnp.int32)
-
-    for timestep in inference_timesteps:
-        key, step_key = jax.random.split(key)
-
-        # Model prediction with steering angles
-        timestep_batch = jnp.array([timestep], dtype=jnp.float32)
-        sample_batch = sample[None, ...]
-        angles_batch = steering_angles[None, ...]  # (1, 2)
-
-        model_output = model(sample_batch, angles_batch, timestep_batch)[0]
+    for t in reversed(range(scheduler.T)):
+        t_batch = jnp.array([t], dtype=jnp.float32)
+        pred_noise = model(x_t[None, ...], steering_angles[None, ...], t_batch)[0]
 
         # Denoising step
-        sample = scheduler.step(model_output, timestep, sample, step_key)
+        key, step_key = jax.random.split(key)
+        x_t = scheduler.step(pred_noise, t, x_t, step_key)
 
-    return sample
+    return x_t
 
 
 @app.command()
@@ -388,7 +348,6 @@ def pred(
         steering_angles=steering_angles,
         scheduler=scheduler,
         array_size=array_size,
-        n_steps=scheduler.T,
         key=sample_key,
     )
 
@@ -404,8 +363,9 @@ def pred(
     # Calculate metrics
     pattern_mse = float(jnp.mean((generated_pattern_db - target_pattern_db) ** 2))
     weights_mse = float(jnp.mean(jnp.abs(generated_weights - target_weights) ** 2))
-    logger.info(generated_weights)
-    logger.info(f"Weights MSE: {weights_mse:.6f}")
+    logger.info(f"{np.sum(np.abs(target_weights))=:.3f}")
+    logger.info(f"{np.sum(np.abs(generated_weights))=:.3f}")
+    logger.info(f"Weights MSE: {weights_mse:.4f}")
     logger.info(f"Pattern MSE (dB): {pattern_mse:.2f}")
 
 
