@@ -204,6 +204,10 @@ def train_step(
 
         # Physics-based guidance: evaluate predicted weights
         pred_weights = scheduler.predict_x0(noisy_weights, timesteps, pred_noise)
+        # Re-normalize predicted weights to have unit power, consistent with target
+        pred_weights = pred_weights / jnp.sqrt(
+            jnp.sum(jnp.abs(pred_weights) ** 2, axis=(-2, -1), keepdims=True)
+        )
         pred_patterns = synth_power_db(params.geps, pred_weights)
 
         # Compute losses
@@ -214,6 +218,8 @@ def train_step(
         total_loss = denoising_loss + 1e-3 * physics_loss
 
         metrics = {
+            "t_weights": jnp.mean(jnp.sum(jnp.abs(weights), axis=0)),
+            "p_weights": jnp.mean(jnp.sum(jnp.abs(pred_weights), axis=0)),
             "denoising_loss": denoising_loss,
             "physics_loss": physics_loss,
             "total_loss": total_loss,
@@ -238,6 +244,7 @@ def solve_with_diffusion(
     if key is None:
         key = jax.random.key(0)
     x_t = generate_complex_noise(key, array_size)
+    x_t = x_t / np.sqrt(np.prod(array_size))  # TODO: not sure if needed
 
     for t in reversed(range(scheduler.T)):
         t_batch = jnp.array([t], dtype=jnp.float32)
@@ -247,6 +254,7 @@ def solve_with_diffusion(
         key, step_key = jax.random.split(key)
         x_t = scheduler.step(pred_noise, t, x_t, step_key)
 
+    x_t = x_t / jnp.sqrt(jnp.sum(jnp.abs(x_t) ** 2, keepdims=True))
     return x_t
 
 
