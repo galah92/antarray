@@ -147,7 +147,7 @@ def optimize(
 
 
 @app.command()
-def dev(theta: float = 30.0, phi: float = 30.0):
+def dev(theta: float = 30.0, phi: float = 0.0):
     params = load_cst_params()
     steering_angles = np.array([np.radians(theta), np.radians(phi)])
     pattern_shape = params.ref.geps.shape[2:4]
@@ -184,16 +184,17 @@ def dev(theta: float = 30.0, phi: float = 30.0):
 
     kw = dict(subplot_kw=dict(projection="polar"), layout="compressed")
     fig, ax = plt.subplots(figsize=(8, 8), **kw)
-    plot = partial(py.plot_E_plane, phi_idx=30, ax=ax)
+    plot = partial(py.plot_E_plane, phi_idx=0, ax=ax)
 
-    label = f"Reference (Peak: {ref_peak:.1f}dB, Power: {w_ref_power:.3f})"
-    plot(ref_power_db, fmt="r-", label=label)
-    label = f"LstSq (Peak: {lstsq_peak:.1f}dB, MSE: {lstsq_mse:.3f}, Power: {w_lstsq_power:.3f})"
-    plot(power_lstsq_db, fmt="g-", label=label)
-    label = f"MF (Peak: {mf_peak:.1f}dB, MSE: {mf_mse:.3f}, Power: {w_mf_power:.3f})"
-    plot(power_mf_db, fmt="b-", label=label)
-    label = f"MF Ref (Peak: {mf_peak_ref:.1f}dB, MSE: {mf_ref_mse:.3f}, Power: {w_mf_ref_power:.3f})"
-    plot(power_mf_ref_db, fmt="c-", label=label)
+    ref_power_title = f"Reference Peak: {ref_peak_idx}° {ref_peak:.2f}dB, Power: {w_ref_power:.2f}, MSE: 0.0"
+    lstsq_title = f"LstSq Peak: {lstsq_peak_idx}° {lstsq_peak:.2f}dB, Power: {w_lstsq_power:.2f}, MSE: {lstsq_mse:.3f}"
+    mf_ref_title = f"MF Ref Peak: {mf_peak_ref_idx}° {mf_peak_ref:.2f}dB, Power: {w_mf_ref_power:.2f}, MSE: {mf_ref_mse:.3f}"
+    mf_title = f"MF Peak: {mf_peak_idx}° {mf_peak:.2f}dB, Power: {w_mf_power:.2f}, MSE: {mf_mse:.3f}"
+
+    plot(ref_power_db, fmt="r-", label=ref_power_title)
+    plot(power_lstsq_db, fmt="g-", label=lstsq_title)
+    plot(power_mf_db, fmt="b-", label=mf_title)
+    plot(power_mf_ref_db, fmt="c-", label=mf_ref_title)
 
     ax.legend(loc="lower center")
     title = f"Dev Pattern ({theta=:.1f}, {phi=:.1f})"
@@ -204,14 +205,10 @@ def dev(theta: float = 30.0, phi: float = 30.0):
 
     fig, axs = plt.subplots(2, 2, figsize=(10, 10), layout="compressed")
     fig.suptitle(f"Sine Space ({theta=:.1f}, {phi=:.1f})", fontweight="bold")
-    title = f"Reference (Peak: {ref_peak:.2f}dB, Loc: {ref_peak_idx}°)"
-    py.plot_sine_space(ref_power_db, ax=axs[0, 0], title=title)
-    title = f"LstSq (Peak: {lstsq_peak:.2f}dB, Loc: {lstsq_peak_idx}°)"
-    py.plot_sine_space(power_lstsq_db, ax=axs[0, 1], title=title)
-    title = f"MF Ref (Peak: {mf_peak_ref:.2f}dB, Loc: {mf_peak_ref_idx}°)"
-    py.plot_sine_space(power_mf_ref_db, ax=axs[1, 0], title=title)
-    title = f"MF (Peak: {mf_peak:.2f}dB, Loc: {mf_peak_idx}°)"
-    py.plot_sine_space(power_mf_db, ax=axs[1, 1], title=title)
+    py.plot_sine_space(ref_power_db, ax=axs[0, 0], title=ref_power_title)
+    py.plot_sine_space(power_lstsq_db, ax=axs[0, 1], title=lstsq_title)
+    py.plot_sine_space(power_mf_ref_db, ax=axs[1, 0], title=mf_ref_title)
+    py.plot_sine_space(power_mf_db, ax=axs[1, 1], title=mf_title)
 
     filename = "gd_dev_sine.png"
     fig.savefig(filename, dpi=250, bbox_inches="tight")

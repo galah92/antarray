@@ -215,6 +215,7 @@ def load_cst(cst_path: Path) -> np.ndarray:
     data = [v for _, v in sorted(data.items())]
     fields = np.stack(data, axis=0)
     fields = fields.reshape(4, 4, *fields.shape[1:])
+    fields = fields.transpose(1, 0, 2, 3, 4)  # (n_y, n_x) -> (n_x, n_y)
     return fields
 
 
