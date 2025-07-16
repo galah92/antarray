@@ -330,6 +330,22 @@ def calculate_weights_2d(
     return weights, phase_shifts
 
 
+def matched_filter_weights(geps: np.ndarray, steering_angles: np.ndarray) -> np.ndarray:
+    """Calculates matched filter weights for given steering angles using GEPs."""
+    assert steering_angles.ndim == 1, "Single steering angles expected"
+    theta_i32, phi_i32 = np.degrees(steering_angles).astype(np.int32)
+    weights = np.conj(geps[:, :, theta_i32, phi_i32, 1])  # Taking the copol component
+    weights /= np.linalg.norm(weights)
+    return weights
+
+
+def unravel_index(index: np.int64, shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Unravel a flat index into a multi-dimensional index."""
+    tup = np.unravel_index(index, shape)
+    tup = tuple(int(i) for i in tup)  # Convert from int64 to int
+    return tup
+
+
 def compute_geps(
     aeps: np.ndarray,
     config: ArrayConfig,
@@ -586,8 +602,7 @@ def plot_sine_space(
     if phi_lines:
         for phi_deg in range(0, 360, 30):
             phi_rad = np.radians(phi_deg)
-            offset = np.pi / 2
-            x, y = np.cos(-phi_rad + offset), np.sin(-phi_rad + offset)
+            x, y = np.cos(phi_rad), np.sin(phi_rad)
             ax.plot(*np.vstack(([0, 0], [x, y])).T, **axis_args)
             if phi_deg in [0, 90]:
                 continue  # Avoid label overlap with the title and colorbar

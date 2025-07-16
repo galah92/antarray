@@ -147,45 +147,53 @@ def optimize(
 
 
 @app.command()
-def dev(theta: float = 0.0, phi: float = 0.0):
+def dev(theta: float = 30.0, phi: float = 30.0):
     params = load_cst_params()
     steering_angles = np.array([np.radians(theta), np.radians(phi)])
+    pattern_shape = params.ref.geps.shape[2:4]
 
     synth_db = lambda geps, w: py.convert_to_db(py.synthesize_pattern(geps, w))
 
     w_ref, _ = py.calculate_weights(params.ref.kx, params.ref.ky, steering_angles)
-    target_field = py.synthesize_pattern(params.ref.geps, w_ref, power=False)
-    target_power_db = synth_db(params.ref.geps, w_ref)
-    target_peak = np.max(target_power_db)
-    peak_idx = np.unravel_index(np.argmax(target_power_db), target_power_db.shape)
+    ref_field = py.synthesize_pattern(params.ref.geps, w_ref, power=False)
+    ref_power_db = synth_db(params.ref.geps, w_ref)
+    ref_peak_idx = py.unravel_index(np.argmax(ref_power_db), pattern_shape)
+    ref_peak = ref_power_db[ref_peak_idx]
     w_ref_power = np.abs(w_ref).sum()
 
-    w_lstsq = py.solve_weights(target_field, params.dis.geps, alpha=None)
+    w_lstsq = py.solve_weights(ref_field, params.dis.geps, alpha=None)
     power_lstsq_db = synth_db(params.dis.geps, w_lstsq)
-    lstsq_mse = np.mean(np.square(power_lstsq_db - target_power_db))
-    lstsq_peak = np.max(power_lstsq_db[peak_idx])
+    lstsq_mse = np.mean(np.square(power_lstsq_db - ref_power_db))
+    lstsq_peak_idx = py.unravel_index(np.argmax(power_lstsq_db), pattern_shape)
+    lstsq_peak = power_lstsq_db[lstsq_peak_idx]
     w_lstsq_power = np.abs(w_lstsq).sum()
 
-    theta_u32, phi_u32 = np.uint32(theta), np.uint32(phi)
-    w_mf = np.conj(params.dis.geps[:, :, theta_u32, phi_u32, 1])
-    w_mf /= np.linalg.norm(w_mf)
+    w_mf = py.matched_filter_weights(np.asarray(params.dis.geps), steering_angles)
     power_mf_db = synth_db(params.dis.geps, w_mf)
-    mf_mse = np.mean(np.square(power_mf_db - target_power_db))
-    mf_peak = np.max(power_mf_db[peak_idx])
+    mf_mse = np.mean(np.square(power_mf_db - ref_power_db))
+    mf_peak_idx = py.unravel_index(np.argmax(power_mf_db), pattern_shape)
+    mf_peak = power_mf_db[mf_peak_idx]
     w_mf_power = np.abs(w_mf).sum()
+
+    w_mf_ref = py.matched_filter_weights(np.asarray(params.ref.geps), steering_angles)
+    power_mf_ref_db = synth_db(params.ref.geps, w_mf_ref)
+    mf_ref_mse = np.mean(np.square(power_mf_ref_db - ref_power_db))
+    mf_peak_ref_idx = py.unravel_index(np.argmax(power_mf_ref_db), pattern_shape)
+    mf_peak_ref = power_mf_ref_db[mf_peak_ref_idx]
+    w_mf_ref_power = np.abs(w_mf_ref).sum()
 
     kw = dict(subplot_kw=dict(projection="polar"), layout="compressed")
     fig, ax = plt.subplots(figsize=(8, 8), **kw)
-    plot = partial(py.plot_E_plane, phi_idx=0, ax=ax)
+    plot = partial(py.plot_E_plane, phi_idx=30, ax=ax)
 
-    label = f"Target (Peak: {target_peak:.1f}dB, Power: {w_ref_power:.3f})"
-    plot(target_power_db, fmt="r-", label=label)
-
+    label = f"Reference (Peak: {ref_peak:.1f}dB, Power: {w_ref_power:.3f})"
+    plot(ref_power_db, fmt="r-", label=label)
     label = f"LstSq (Peak: {lstsq_peak:.1f}dB, MSE: {lstsq_mse:.3f}, Power: {w_lstsq_power:.3f})"
     plot(power_lstsq_db, fmt="g-", label=label)
-
-    label = f"MatchedFilter (Peak: {mf_peak:.1f}dB, MSE: {mf_mse:.3f}, Power: {w_mf_power:.3f})"
+    label = f"MF (Peak: {mf_peak:.1f}dB, MSE: {mf_mse:.3f}, Power: {w_mf_power:.3f})"
     plot(power_mf_db, fmt="b-", label=label)
+    label = f"MF Ref (Peak: {mf_peak_ref:.1f}dB, MSE: {mf_ref_mse:.3f}, Power: {w_mf_ref_power:.3f})"
+    plot(power_mf_ref_db, fmt="c-", label=label)
 
     ax.legend(loc="lower center")
     title = f"Dev Pattern ({theta=:.1f}, {phi=:.1f})"
@@ -193,6 +201,21 @@ def dev(theta: float = 0.0, phi: float = 0.0):
     filename = "gd_dev.png"
     fig.savefig(filename, dpi=250, bbox_inches="tight")
     logger.info(f"Saved random pattern plot to {filename}")
+
+    fig, axs = plt.subplots(2, 2, figsize=(10, 10), layout="compressed")
+    fig.suptitle(f"Sine Space ({theta=:.1f}, {phi=:.1f})", fontweight="bold")
+    title = f"Reference (Peak: {ref_peak:.2f}dB, Loc: {ref_peak_idx}°)"
+    py.plot_sine_space(ref_power_db, ax=axs[0, 0], title=title)
+    title = f"LstSq (Peak: {lstsq_peak:.2f}dB, Loc: {lstsq_peak_idx}°)"
+    py.plot_sine_space(power_lstsq_db, ax=axs[0, 1], title=title)
+    title = f"MF Ref (Peak: {mf_peak_ref:.2f}dB, Loc: {mf_peak_ref_idx}°)"
+    py.plot_sine_space(power_mf_ref_db, ax=axs[1, 0], title=title)
+    title = f"MF (Peak: {mf_peak:.2f}dB, Loc: {mf_peak_idx}°)"
+    py.plot_sine_space(power_mf_db, ax=axs[1, 1], title=title)
+
+    filename = "gd_dev_sine.png"
+    fig.savefig(filename, dpi=250, bbox_inches="tight")
+    logger.info(f"Saved sine space plot to {filename}")
 
 
 if __name__ == "__main__":
