@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from jax.typing import ArrayLike
+from joblib import Memory
 from matplotlib.colorizer import ColorizingArtist
 from matplotlib.image import AxesImage
 from matplotlib.projections import PolarAxes
@@ -21,6 +22,8 @@ from utils import setup_logging
 logger = logging.getLogger(__name__)
 
 root_dir = Path(__file__).parent.parent
+memory_dir = root_dir / ".joblib_cache"
+memory = Memory(memory_dir, mmap_mode="r", verbose=0)
 
 DEFAULT_SIM_DIR = root_dir / "openems" / "sim" / "antenna_array"
 DEFAULT_SINGLE_ANT_FILENAME = "ff_1x1_60x60_2450_steer_t0_p0.h5"
@@ -174,6 +177,7 @@ def load_element_patterns(
         raise ValueError(f"Unknown kind: {kind!r}")
 
 
+@memory.cache
 def load_cst_file(cst_path: Path) -> np.ndarray:
     """Load CST antenna pattern data from a file."""
     names = (
@@ -200,7 +204,7 @@ def load_cst_file(cst_path: Path) -> np.ndarray:
     return field
 
 
-@lru_cache
+@memory.cache
 def load_cst(cst_path: Path) -> np.ndarray:
     logger.info(f"Loading antenna pattern from {cst_path}")
     data = {}

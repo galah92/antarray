@@ -12,6 +12,7 @@ dependencies = [
     "ruff>=0.12.2",
     "ty>=0.0.1a14",
     "cyclopts>=3.22.1",
+    "joblib>=1.5.1",
 ]
 
 [project.optional-dependencies]
