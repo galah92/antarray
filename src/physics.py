@@ -575,7 +575,7 @@ def plot_sine_space(
     axis_args = dict(color="gray", linestyle="--", linewidth=0.9)
 
     if theta_circles:
-        for theta_deg in np.array([30, 60]):
+        for theta_deg in [30, 60]:
             theta_rad = np.radians(theta_deg)
             radius = np.sin(theta_rad)
             ax.add_patch(plt.Circle((0, 0), radius, fill=False, **axis_args))
@@ -584,9 +584,10 @@ def plot_sine_space(
             ax.text(x, y, f"{theta_deg}°", ha="center", va="center", color="gray")
 
     if phi_lines:
-        for phi_deg in np.arange(0, 360, 30):
+        for phi_deg in range(0, 360, 30):
             phi_rad = np.radians(phi_deg)
-            x, y = np.cos(phi_rad), np.sin(phi_rad)
+            offset = np.pi / 2
+            x, y = np.cos(-phi_rad + offset), np.sin(-phi_rad + offset)
             ax.plot(*np.vstack(([0, 0], [x, y])).T, **axis_args)
             if phi_deg in [0, 90]:
                 continue  # Avoid label overlap with the title and colorbar
