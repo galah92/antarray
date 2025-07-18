@@ -17,90 +17,126 @@ logger = logging.getLogger(__name__)
 app = cyclopts.App()
 
 
-@jax.jit
-def complex_field_loss(
-    weights: jax.Array, target_field: jax.Array, geps: jax.Array
-) -> jax.Array:
-    """Loss function based on complex field matching (similar to least squares)."""
-    pred_field = py.synthesize_pattern(geps, weights, power=False)
-    field_diff = pred_field - target_field
-    # MSE loss on real and imaginary parts
-    loss = jnp.mean(jnp.real(field_diff) ** 2 + jnp.imag(field_diff) ** 2)
-    return loss
+def normalize_pattern(pattern: jax.Array) -> jax.Array:
+    """Normalize the input pattern to the range [0, 1]."""
+    min_val = pattern.min()
+    max_val = pattern.max()
+    return (pattern - min_val) / (max_val - min_val + 1e-10)
 
 
 @jax.jit
-def power_pattern_loss(
-    weights: jax.Array, target_pattern_db: jax.Array, geps: jax.Array
-) -> jax.Array:
-    pred_pattern = py.synthesize_pattern(geps, weights, power=True)
+def power_loss(weights: jax.Array, target: jax.Array, geps: jax.Array) -> jax.Array:
+    pred_pattern = py.synthesize_pattern(geps, weights)
     pred_pattern_db = py.convert_to_db(pred_pattern)
-    mse = ((pred_pattern_db - target_pattern_db) ** 2).mean()
+
+    pred_normalized = normalize_pattern(pred_pattern_db)
+
+    mse = ((pred_normalized - target) ** 2).mean()
     return mse
 
 
-@jax.jit
-def linear_power_loss(
-    weights: jax.Array, target_pattern: jax.Array, geps: jax.Array
-) -> jax.Array:
-    """Loss function based on linear power pattern matching (no dB conversion)."""
-    pred_pattern = py.synthesize_pattern(geps, weights, power=True)
-    mse = ((pred_pattern - target_pattern) ** 2).mean()
-    return mse
+def create_ideal_beam_pattern(
+    theta_rad: np.ndarray,
+    phi_rad: np.ndarray,
+    steering_theta: float,
+    steering_phi: float,
+    beam_width_deg: float = 10.0,
+) -> np.ndarray:
+    """Create an idealized beam pattern with sharp 0/1 transitions.
+
+    Args:
+        theta_rad: Theta angles in radians
+        phi_rad: Phi angles in radians
+        steering_theta: Steering angle theta in radians
+        steering_phi: Steering angle phi in radians
+        beam_width_deg: Main beam width in degrees (3dB beamwidth)
+
+    Returns:
+        Binary pattern with 1s in main beam, 0s elsewhere
+    """
+    theta_deg = np.degrees(theta_rad)
+    phi_deg = np.degrees(phi_rad)
+    steering_theta_deg = np.degrees(steering_theta)
+    steering_phi_deg = np.degrees(steering_phi)
+
+    # Create 2D grids
+    theta_grid, phi_grid = np.meshgrid(theta_deg, phi_deg, indexing="ij")
+
+    # Calculate angular distance from steering direction
+    # For simplicity, use a rectangular window in theta-phi space
+    half_beam_width = beam_width_deg / 2.0
+
+    theta_in_beam = np.abs(theta_grid - steering_theta_deg) <= half_beam_width
+    phi_in_beam = np.abs(phi_grid - steering_phi_deg) <= half_beam_width
+
+    # Handle phi wraparound at 0°/360°
+    phi_diff = np.abs(phi_grid - steering_phi_deg)
+    phi_dist = np.minimum(phi_diff, 360 - phi_diff)
+    phi_in_beam = phi_dist <= half_beam_width
+
+    # Combine conditions - beam is 1 where both theta and phi are within limits
+    beam_pattern = (theta_in_beam & phi_in_beam).astype(np.float32)
+
+    return beam_pattern
 
 
 @app.command()
 def optimize(
     theta: float = 0.0,
     phi: float = 0.0,
-    loss_type: str = "linear_power",  # "complex", "power", or "linear_power"
-    lr: float = 1e-3,
-    n_steps: int = 1000,
+    lr: float = 1e-4,
+    n_steps: int = 1_000,
+    beam_width: float = 10.0,
+    ideal_target: bool = True,
 ):
     params = load_cst_params()
-    steering_angles = jnp.array([jnp.radians(theta), jnp.radians(phi)])
+    steering_angles = np.array([np.radians(theta), np.radians(phi)])
 
-    # Generate target from reference array
-    ref_weights, _ = py.calculate_weights(params.ref.kx, params.ref.ky, steering_angles)
-    target_field = py.synthesize_pattern(params.ref.geps, ref_weights, power=False)
-    target_pattern = py.synthesize_pattern(params.ref.geps, ref_weights, power=True)
-    target_pattern_db = py.convert_to_db(target_pattern)
-
-    # Generate least-squares solution for comparison
-    lstsq_weights = py.solve_weights(target_field, params.dis.geps, alpha=1e-3)
-    lstsq_pattern_db = py.convert_to_db(
-        py.synthesize_pattern(params.dis.geps, lstsq_weights)
-    )
-    lstsq_mse = jnp.mean((lstsq_pattern_db - target_pattern_db) ** 2)
-
-    logger.info(f"Least squares baseline MSE: {lstsq_mse:.2f} dB²")
-
-    logger.info(f"Running {loss_type} optimization for {theta=:.1f}°, {phi=:.1f}°")
-
-    # Initialize with least squares solution + small perturbation for gradient descent
-    # Start from least squares solution as initial guess
-    init_weights = lstsq_weights.copy()
-    init_weights = init_weights / jnp.sqrt(jnp.sum(jnp.abs(init_weights) ** 2))
-
-    logger.info(f"Initializing with LSQ solution (MSE: {lstsq_mse:.2f} dB²)")
-
-    weights = init_weights
-
-    # Choose loss function and target
-    if loss_type == "complex":
-        loss_fn = lambda w: complex_field_loss(w, target_field, params.dis.geps)
-        target_name = "complex field"
-    elif loss_type == "power":
-        loss_fn = lambda w: power_pattern_loss(w, target_pattern_db, params.dis.geps)
-        target_name = "power pattern (dB)"
-    elif loss_type == "linear_power":
-        loss_fn = lambda w: linear_power_loss(w, target_pattern, params.dis.geps)
-        target_name = "linear power pattern"
+    if ideal_target:
+        # Generate idealized window pattern
+        theta_rad, phi_rad = np.radians(np.arange(180)), np.radians(np.arange(360))
+        target_pattern = create_ideal_beam_pattern(
+            theta_rad,
+            phi_rad,
+            steering_angles[0],
+            steering_angles[1],
+            beam_width,
+        )
+        target_pattern_db = target_pattern
+        target_pattern_norm = target_pattern
+        target_type = f"Ideal window (beam_width={beam_width}°)"
     else:
-        raise ValueError(f"Unknown loss_type: {loss_type}")
+        # Generate target from reference array
+        ref_weights, _ = py.calculate_weights(
+            params.ref.kx, params.ref.ky, steering_angles
+        )
+        target_pattern = py.synthesize_pattern(params.ref.geps, ref_weights, power=True)
+        target_pattern_db = py.convert_to_db(target_pattern)
+        target_pattern_norm = normalize_pattern(target_pattern_db)
+        target_type = "Reference array"
 
-    # Setup Adam optimizer
-    optimizer = optax.adam(learning_rate=lr)
+    # Generate matched filter solution for comparison
+    mf_weights = py.matched_filter_weights(np.asarray(params.dis.geps), steering_angles)
+    mf_pattern_db = py.convert_to_db(py.synthesize_pattern(params.dis.geps, mf_weights))
+    mf_pattern_norm = normalize_pattern(mf_pattern_db)
+    mf_mse = jnp.mean((mf_pattern_db - target_pattern_db) ** 2)
+
+    logger.info(f"Matched filter baseline MSE: {mf_mse:.2f} dB²")
+
+    logger.info(
+        f"Running optimization for {theta=:.1f}°, {phi=:.1f}° with target: {target_type}"
+    )
+
+    # Initialize with matched filter solution + small perturbation for gradient descent
+    # Start from matched filter solution as initial guess
+    weights = mf_weights.copy()
+    weights = weights / jnp.sqrt(jnp.sum(jnp.abs(weights) ** 2))
+
+    logger.info(f"Initializing with MF solution (MSE: {mf_mse:.2f} dB²)")
+
+    loss_fn = lambda w: power_loss(w, target_pattern_norm, params.dis.geps)
+
+    optimizer = optax.sgd(learning_rate=lr)
     opt_state = optimizer.init(weights)
 
     @jax.jit
@@ -126,6 +162,7 @@ def optimize(
     # Compute final metrics
     pred_pattern = py.synthesize_pattern(params.dis.geps, pred_weights, power=True)
     pred_pattern_db = py.convert_to_db(pred_pattern)
+    pred_pattern_norm = normalize_pattern(pred_pattern_db)
 
     # Calculate pattern MSE (always use this for comparison)
     pattern_mse = jnp.mean((pred_pattern_db - target_pattern_db) ** 2)
@@ -137,13 +174,28 @@ def optimize(
     pred_mainlobe_idx = np.unravel_index(np.argmax(pred_pattern_db), pattern_shape)
     pred_mainlobe_power_db = pred_pattern_db[pred_mainlobe_idx]
 
-    logger.info(f"Optimization completed ({target_name} loss)")
-    logger.info(f"Pattern MSE: {pattern_mse:.2f} dB² (vs LSQ: {lstsq_mse:.2f} dB²)")
+    logger.info(f"Pattern MSE: {pattern_mse:.2f} dB² (vs MF: {mf_mse:.2f} dB²)")
     logger.info(f"{target_mainlobe_idx=}, {target_mainlobe_power_db=:.2f} dB")
     logger.info(f"{pred_mainlobe_idx=}, {pred_mainlobe_power_db=:.2f} dB")
-    logger.info(f"Reference weights sum: {np.sum(np.abs(ref_weights)):.3f}")
+
+    if not ideal_target:
+        logger.info(f"Reference weights sum: {np.sum(np.abs(ref_weights)):.3f}")
+
     logger.info(f"Optimized weights sum: {np.sum(np.abs(pred_weights)):.3f}")
     logger.info(f"Loss decreased from {loss_history[0]:.6f} to {loss_history[-1]:.6f}")
+
+    fig, ax = plt.subplots(figsize=(8, 8), layout="constrained")
+    phi_idx = 0
+    ax.plot(target_pattern_norm[:, phi_idx], label="Target Pattern", color="blue")
+    ax.plot(pred_pattern_norm[:, phi_idx], label="Optimized Pattern", color="orange")
+    ax.plot(mf_pattern_norm[:, phi_idx], label="Matched Filter Pattern", color="green")
+    ax.set_title(f"Radiation Pattern Comparison\n{theta=:.1f}°, {phi=:.1f}°")
+    ax.set_xlabel("Angle (degrees)")
+    ax.set_ylabel("Power (dB)")
+    ax.legend()
+    filename = f"optimized_pattern_{theta:.1f}_{phi:.1f}.png"
+    fig.savefig(filename, dpi=250, bbox_inches="tight")
+    logger.info(f"Saved pattern plot to {filename}")
 
 
 @app.command()
