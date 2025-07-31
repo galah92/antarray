@@ -200,6 +200,7 @@ def synth_power_db(geps: jax.Array, weights: jax.Array) -> jax.Array:
 @nnx.jit(static_argnames="scheduler")
 def train_step(
     optimizer: nnx.Optimizer,
+    model: Denoiser,
     scheduler: DDPMScheduler,
     params: DiffusionParams,
     batch: jax.Array,
@@ -246,9 +247,8 @@ def train_step(
 
         return total_loss, metrics
 
-    model = optimizer.model
     (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
-    optimizer.update(grads)
+    optimizer.update(model, grads)
     metrics["grad_norm"] = optax.global_norm(grads)
     return metrics
 
@@ -293,7 +293,8 @@ def train(
     key, model_key = jax.random.split(key)
     model = Denoiser(base_channels=32, rngs=nnx.Rngs(model_key))
     scheduler = DDPMScheduler(T=1000)
-    optimizer = nnx.Optimizer(model, optax.adamw(learning_rate=lr))
+    adam = optax.adamw(learning_rate=lr)
+    optimizer = nnx.Optimizer(model, adam, wrt=nnx.Param)
 
     ckpt_path = Path.cwd() / "checkpoints_diffusion"
     ckpt_options = ocp.CheckpointManagerOptions(max_to_keep=2, save_interval_steps=100)
@@ -340,7 +341,8 @@ def pred(
     key, model_key = jax.random.split(key)
     model = Denoiser(base_channels=32, rngs=nnx.Rngs(model_key))
     scheduler = DDPMScheduler(T=1000)
-    optimizer = nnx.Optimizer(model, optax.adamw(learning_rate=5e-4))
+    adam = optax.adamw(learning_rate=5e-4)
+    optimizer = nnx.Optimizer(model, adam, wrt=nnx.Param)
 
     # Load trained checkpoint
     ckpt_path = Path.cwd() / "checkpoints_diffusion"
@@ -355,7 +357,7 @@ def pred(
     logger.info(f"Running diffusion sampling with {scheduler.T} steps...")
     key, sample_key = jax.random.split(key)
     pred_weights = solve_with_diffusion(
-        model=optimizer.model,
+        model=model,
         steering_angles=steering_angles,
         scheduler=scheduler,
         array_size=array_size,

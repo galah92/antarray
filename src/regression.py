@@ -183,11 +183,10 @@ class ArrayParams(NamedTuple):
 @nnx.jit
 def train_step(
     optimizer: nnx.Optimizer,
+    model: RegressionNet,
     batch: data.DataBatch,
     params: ArrayParams,
 ) -> dict[str, float]:
-    model = optimizer.model
-
     def loss_fn(model: RegressionNet, batch: data.DataBatch) -> tuple[jax.Array, dict]:
         pred_phase_shifts = model(batch.radiation_patterns)
 
@@ -209,7 +208,7 @@ def train_step(
         return loss, metrics
 
     (loss, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch)
-    optimizer.update(grads)
+    optimizer.update(model, grads)
     metrics["grad_norm"] = optax.global_norm(grads)
 
     return metrics
@@ -218,21 +217,28 @@ def train_step(
 def warmup_step(
     dataset: data.Dataset,
     optimizer: nnx.Optimizer,
+    model: RegressionNet,
     params: ArrayParams,
 ):
     logger.info("Warming up GPU kernels")
-    optimizer.model.eval()
+    model.eval()
     warmup_batch = next(dataset)
     _ = train_step(optimizer, warmup_batch, params)
-    optimizer.model.train()
+    model.train()
     logger.info("Warmup completed")
 
 
-def create_trainables(n_steps: int, lr: float, *, key: jax.Array) -> nnx.Optimizer:
+def create_trainables(
+    n_steps: int,
+    lr: float,
+    *,
+    key: jax.Array,
+) -> tuple[nnx.Optimizer, RegressionNet]:
     model = RegressionNet(rngs=nnx.Rngs(key))
     schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=n_steps)
-    optimizer = nnx.Optimizer(model, optax.adamw(schedule, weight_decay=1e-4))
-    return optimizer
+    adam = optax.adamw(schedule, weight_decay=1e-4)
+    optimizer = nnx.Optimizer(model, adam, wrt=nnx.Param)
+    return optimizer, model
 
 
 @app.command()
@@ -248,7 +254,7 @@ def train(
     key = jax.random.key(seed)
     key, dataset_key, model_key = jax.random.split(key, num=3)
 
-    optimizer = create_trainables(n_steps, lr, key=model_key)
+    optimizer, model = create_trainables(n_steps, lr, key=model_key)
 
     ckpt_path = Path.cwd() / "checkpoints"
     ckpt_options = ocp.CheckpointManagerOptions(max_to_keep=1, save_interval_steps=10)
@@ -267,7 +273,7 @@ def train(
     geps = element_data.geps
     array_params = ArrayParams(element_fields=jnp.asarray(geps))
 
-    warmup_step(dataset, optimizer, array_params)
+    warmup_step(dataset, optimizer, model, array_params)
 
     logger.info("Starting training")
     log_progress = create_progress_logger(
@@ -276,7 +282,7 @@ def train(
 
     try:
         for step, batch in enumerate(dataset, start=start_step):
-            metrics = train_step(optimizer, batch, array_params)
+            metrics = train_step(optimizer, model, batch, array_params)
             save_checkpoint(ckpt_mngr, optimizer, step, overwrite)
             log_progress(step, metrics)
     except KeyboardInterrupt:

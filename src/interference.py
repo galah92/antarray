@@ -46,11 +46,10 @@ class PhysicsParams(NamedTuple):
 @nnx.jit
 def train_step(
     optimizer: nnx.Optimizer,
+    model: InterferenceCorrector,
     batch: jax.Array,
     params: PhysicsParams,
 ) -> dict[str, float]:
-    model = optimizer.model
-
     target_weights, target_phase_shifts = calculate_weights_vm(
         params.kx, params.ky, batch
     )
@@ -81,7 +80,7 @@ def train_step(
     (_, metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
         model, target_patterns
     )
-    optimizer.update(grads)
+    optimizer.update(model, grads)
     metrics["grad_norm"] = optax.global_norm(grads)
     return metrics
 
@@ -108,7 +107,8 @@ def train_pipeline(
     )
 
     model = InterferenceCorrector(rngs=nnx.Rngs(model_key))
-    optimizer = nnx.Optimizer(model, optax.adam(learning_rate=lr))
+    adam = optax.adam(learning_rate=lr)
+    optimizer = nnx.Optimizer(model, adam, wrt=nnx.Param)
 
     sampler = steering_angles_sampler(data_key, batch_size, limit=n_steps)
 
