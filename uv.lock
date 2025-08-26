@@ -992,7 +992,7 @@ requires-dist = [
     { name = "ruff", specifier = ">=0.12.7" },
     { name = "scipy", specifier = ">=1.15.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "ty", specifier = ">=0.0.1a18" },
+    { name = "ty", specifier = ">=0.0.1a19" },
 ]
 provides-extras = ["jax"]
 
