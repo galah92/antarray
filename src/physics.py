@@ -522,7 +522,7 @@ def plot_ff_3d(
     azim: float | None = None,
     title: str = "3D Radiation Pattern",
     ax: plt.Axes | Axes3D | None = None,
-):
+) -> plt.Figure:
     pattern = np.clip(
         pattern, a_min=clip_min_db, a_max=None
     )  # Clip to minimum dB value
@@ -544,6 +544,8 @@ def plot_ff_3d(
     # ax3d.set_box_aspect(None, zoom=1.2)
     ax3d.set(xlim=(-1, 1), ylim=(-1, 1), zlim=(0, 1.8), xticks=[], yticks=[], zticks=[])
     ax3d.set_title(title)
+
+    return typing.cast(plt.Figure, ax.get_figure())
 
 
 def plot_ff_2d(
@@ -587,7 +589,7 @@ def plot_sine_space(
 
     u = np.sin(theta_rad)[:, None] * np.cos(phi_rad)
     v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)
-    im = ax.contourf(u, v, pattern, levels=128, cmap="viridis")
+    im = ax.contourf(u, v, pattern, levels=1024, cmap="viridis")
 
     axis_args = dict(color="gray", linestyle="--", linewidth=0.9)
 
@@ -627,13 +629,11 @@ def plot_sine_space(
 def plot_pattern(
     pattern: ArrayLike,
     *,
-    theta_rad: np.ndarray = DEFAULT_THETA_RAD,
-    phi_rad: np.ndarray = DEFAULT_PHI_RAD,
     clip_min_db: float | None = None,
     title: str | None = None,
     colorbar: str | None = None,
-    fig: plt.FigureBase | None = None,
-) -> plt.FigureBase:
+    fig: plt.Figure | None = None,
+) -> plt.Figure:
     if fig is None:
         fig = plt.figure(figsize=(15, 5), layout="compressed")
     axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})
