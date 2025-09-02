@@ -589,7 +589,7 @@ def plot_sine_space(
 
     u = np.sin(theta_rad)[:, None] * np.cos(phi_rad)
     v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)
-    im = ax.contourf(u, v, pattern, levels=1024, cmap="viridis")
+    im = ax.contourf(u, v, pattern, levels=512, cmap="viridis")
 
     axis_args = dict(color="gray", linestyle="--", linewidth=0.9)
 
