@@ -1,3 +1,5 @@
+import typing as tp
+from functools import partial
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -5,10 +7,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from joblib import Memory
+from matplotlib import colors
 from matplotlib import pyplot as plt
+from matplotlib.projections import PolarAxes
 
 import physics
-from tapering import hamming_taper, ideal_steering, uniform_taper  # noqa: F401
+from tapering import hamming_taper, ideal_steering, uniform_taper
 
 root_dir = Path(__file__).parent.parent
 memory_dir = root_dir / ".joblib_cache"
@@ -66,36 +70,56 @@ def argmax_nd(x: jax.Array) -> tuple[int, ...]:
     return indices
 
 
-def to_power_db(x: jax.Array) -> jax.Array:
+def to_power(x: jax.Array) -> jax.Array:
     x = jnp.abs(x) ** 2  # Convert to power (magnitude squared)
     x = jnp.sum(x, axis=-1)  # Sum over polarization
-    x = 10 * jnp.log10(x)  # Convert to dB
     return x
+
+
+def to_db(x: jax.Array) -> jax.Array:
+    return 10 * jnp.log10(x)  # Convert to dB
+
+
+def to_power_db(x: jax.Array) -> jax.Array:
+    return to_db(to_power(x))
 
 
 def plot_power_db(power_db: jax.Array, title: str | None = None, fig=None) -> None:
     indices = argmax_nd(power_db)
     fig = physics.plot_pattern(power_db, clip_min_db=-40.0, fig=fig)
     if title:
-        title = f"{title} | Peak {power_db[indices]:.3f} at {indices}"
+        title = f"{title} | Peak {power_db[indices]:.3f} at {indices=}"
         fig.suptitle(title)
 
 
-@jax.jit
+def mse_loss(pred_power: jax.Array, target_power: jax.Array) -> jax.Array:
+    return jnp.mean((pred_power - target_power) ** 2)
+
+
+LossFn = tp.Callable[[jax.Array, jax.Array], jax.Array]
+LossScale = tp.Literal["linear", "db"]
+
+
+@partial(jax.jit, static_argnames=("loss_fn", "loss_scale"))
 def train_step(
     w: jnp.ndarray,
     aeps: jax.Array,
-    target_power_db: jax.Array,
+    target_power: jax.Array,
     lr: float,
+    loss_fn: LossFn = mse_loss,
+    loss_scale: LossScale = "db",
 ) -> tuple[jnp.ndarray, float]:
-    def loss_fn(w: jax.Array) -> jax.Array:
-        pattern = jnp.einsum("xy,xytpz->tpz", w, aeps)
-        power_db = to_power_db(pattern)
+    if loss_scale == "db":
+        target_power = to_db(target_power)
 
-        mse = jnp.mean((power_db - target_power_db) ** 2)
-        return mse
+    def loss_wrapper(w: jax.Array) -> jax.Array:
+        pred_pattern = jnp.einsum("xy,xytpz->tpz", w, aeps)
+        pred_power = to_power(pred_pattern)
+        if loss_scale == "db":
+            pred_power = to_db(pred_power)
+        return loss_fn(pred_power, target_power)
 
-    loss, grads = jax.value_and_grad(loss_fn)(w)
+    loss, grads = jax.value_and_grad(loss_wrapper)(w)
     w = w - lr * grads
     # w = w / jnp.linalg.norm(w) * amplitude  # Re-normalize
     return w, loss
@@ -104,12 +128,14 @@ def train_step(
 def optimize(
     w_init: jax.Array,
     aeps: jax.Array,
-    target_power_db: jax.Array,
+    target_power: jax.Array,
+    loss_fn: LossFn = mse_loss,
+    loss_scale: LossScale = "db",
     lr: float = 1e-5,
 ) -> jax.Array:
     w = w_init
     for step in range(100):
-        w, loss = train_step(w, aeps, target_power_db, lr)
+        w, loss = train_step(w, aeps, target_power, lr, loss_fn, loss_scale)
         if step % 10 == 0:
             print(f"step {step}, loss: {loss:.3f}")
 
@@ -126,8 +152,9 @@ class OptParams(NamedTuple):
     azim_deg: float
     w: jax.Array
     aeps_env0: jax.Array
-    power_db_env0: jax.Array
-    power_db_env1: jax.Array
+    aeps_env1: jax.Array
+    power_env0: jax.Array
+    power_env1: jax.Array
 
 
 def init_params(
@@ -151,10 +178,10 @@ def init_params(
     phase = ideal_steering(nx=nx, ny=ny, elev_deg=elev_deg, azim_deg=azim_deg)
     w = amplitude * np.exp(1j * phase)
 
-    power_db_env0 = to_power_db(np.einsum("xy,xytpz->tpz", w, aeps_env0))
+    power_env0 = to_power(np.einsum("xy,xytpz->tpz", w, aeps_env0))
 
     aeps_env1 = load_cst(cst_dir / env1_name)
-    power_db_env1 = to_power_db(np.einsum("xy,xytpz->tpz", w, aeps_env1))
+    power_env1 = to_power(np.einsum("xy,xytpz->tpz", w, aeps_env1))
 
     return OptParams(
         taper=taper,
@@ -162,34 +189,174 @@ def init_params(
         azim_deg=azim_deg,
         w=jnp.asarray(w),
         aeps_env0=jnp.asarray(aeps_env0),
-        power_db_env0=jnp.asarray(power_db_env0),
-        power_db_env1=jnp.asarray(power_db_env1),
+        aeps_env1=jnp.asarray(aeps_env1),
+        power_env0=jnp.asarray(power_env0),
+        power_env1=jnp.asarray(power_env1),
     )
 
 
-def run(
+class OptResults(NamedTuple):
+    power_db_opt: jax.Array
+    mse_env1: float
+    mse_opt: float
+
+
+# @memory.cache
+def run_optimization(
+    env0_name: str = "no_env_rotated",
+    env1_name: str = "Env1_rotated",
     taper: Literal["hamming", "uniform"] = "uniform",
     elev_deg: float = 0.0,
     azim_deg: float = 0.0,
+    loss_fn: LossFn = mse_loss,
+    loss_scale: LossScale = "db",
+    lr: float = 1e-5,
+    plot: bool = True,
 ):
-    params = init_params(taper=taper, elev_deg=elev_deg, azim_deg=azim_deg)
-    power_db_opt = optimize(params.w, params.aeps_env0, params.power_db_env1)
+    print(f"Running optimization for elev {elev_deg}°, azim {azim_deg}°, {taper} taper")
+    params = init_params(
+        taper=taper,
+        elev_deg=elev_deg,
+        azim_deg=azim_deg,
+        env0_name=env0_name,
+        env1_name=env1_name,
+    )
+    w, aeps_env1, power_env0 = params.w, params.aeps_env1, params.power_env0
+    power_db_opt = optimize(w, aeps_env1, power_env0, loss_fn, loss_scale, lr)
 
-    fig = plt.figure(figsize=(15, 12), layout="compressed")
-    subfigs = fig.subfigures(3, 1)
+    power_db_env0, power_db_env1 = to_db(params.power_env0), to_db(params.power_env1)
+    mse_env1 = np.mean((power_db_env1 - power_db_env0) ** 2).item()
+    mse_opt = np.mean((power_db_opt - power_db_env0) ** 2).item()
 
-    plot_power_db(params.power_db_env0, fig=subfigs[0], title="No Env")
+    if plot:
+        fig = plt.figure(figsize=(15, 12), layout="compressed")
+        subfigs = fig.subfigures(3, 1)
 
-    mse_env0 = np.mean((params.power_db_env0 - params.power_db_env1) ** 2)
-    title = f"Env 1 | MSE {mse_env0:.3f}dB"
-    plot_power_db(params.power_db_env1, fig=subfigs[1], title=title)
+        plot_power_db(power_db_env0, fig=subfigs[0], title="No Env")
 
-    mse_opt = jnp.mean((power_db_opt - params.power_db_env1) ** 2)
-    title = f"Optimized | MSE {mse_opt:.3f}dB"
-    plot_power_db(power_db_opt, fig=subfigs[2], title=title)
+        title = f"Env 1 | MSE {mse_env1:.3f}dB"
+        plot_power_db(power_db_env1, fig=subfigs[1], title=title)
 
-    name = f"patterns_{taper}_elev_{int(elev_deg)}_azim_{int(azim_deg)}.png"
-    fig.savefig(name, dpi=200)
+        title = f"Optimized | MSE {mse_opt:.3f}dB"
+        plot_power_db(power_db_opt, fig=subfigs[2], title=title)
+
+        steer_title = f"Steering Elev {int(elev_deg)}°, Azim {int(azim_deg)}°"
+        title = f"{taper} taper | {steer_title}"
+        fig.suptitle(title, fontsize=16)
+
+        name = f"patterns_{taper}_elev_{int(elev_deg)}_azim_{int(azim_deg)}.png"
+        fig.savefig(name, dpi=200)
+        print(f"Saved figure to {name}")
+
+    return OptResults(
+        power_db_opt=power_db_opt,
+        mse_env1=mse_env1,
+        mse_opt=mse_opt,
+    )
 
 
-run(azim_deg=1.0, elev_deg=1.0)
+# run_optimization(
+#     taper="hamming",
+#     elev_deg=20,
+#     azim_deg=-45,
+#     loss_scale="db",
+#     lr=5e-6,
+# )
+
+
+def evaluate_grid(
+    env0_name: str = "no_env_rotated",
+    env1_name: str = "Env1_rotated",
+    taper: Literal["hamming", "uniform"] = "hamming",
+    loss_fn: LossFn = mse_loss,
+    loss_scale: LossScale = "db",
+    lr: float = 5e-6,
+) -> None:
+    elevs = np.arange(0, 45, 5)
+    azims = np.arange(0, 360, 10)
+    results = {}
+
+    opt = partial(
+        run_optimization,
+        env0_name=env0_name,
+        env1_name=env1_name,
+        taper=taper,
+        loss_fn=loss_fn,
+        loss_scale=loss_scale,
+        lr=lr,
+        plot=False,
+    )
+
+    for elev in elevs:
+        for azim in azims:
+            elev_deg, azim_deg = elev.item(), azim.item()
+            results[(elev, azim)] = opt(elev_deg=elev_deg, azim_deg=azim_deg)
+
+    mses_env1 = np.array([res.mse_env1 for res in results.values()]).reshape(
+        len(elevs), len(azims)
+    )
+    mses_opt = np.array([res.mse_opt for res in results.values()]).reshape(
+        len(elevs), len(azims)
+    )
+
+    mse_diff = mses_opt - mses_env1
+    rmse_diff = np.sqrt(np.abs(mse_diff)) * np.sign(mse_diff)
+    print(f"Mean RMSE Improvement: {rmse_diff.mean():.3f} dB")
+    print(f"Std RMSE Improvement: {rmse_diff.std():.3f} dB")
+    print(f"Max RMSE Improvement: {rmse_diff.max():.3f} dB")
+    print(f"Min RMSE Improvement: {rmse_diff.min():.3f} dB")
+
+    basic_plot = False
+    if basic_plot:
+        fig, ax = plt.subplots(figsize=(15, 5), layout="compressed")
+        im2 = ax.imshow(rmse_diff, cmap="viridis", origin="lower")
+        ax.set_xticks(np.arange(len(azims)), labels=azims)
+        ax.set_yticks(np.arange(len(elevs)), labels=elevs)
+        ax.set(title="RMAE Improvement", xlabel="Azim (deg)", ylabel="Elev (deg)")
+        fig.colorbar(im2, ax=ax, label="RMAE (dB)")
+        name = f"patterns_{taper}_rmse_grid.png"
+        fig.savefig(name, dpi=200)
+
+    polar_plot = True
+    if polar_plot:
+        kw = dict(layout="compressed", subplot_kw={"projection": "polar"})
+        fig, ax = plt.subplots(figsize=(8, 8), **kw)
+        axp = tp.cast(PolarAxes, ax)  # For type checker
+        azim_grid, elev_grid = np.meshgrid(np.radians(azims), elevs)
+        kw = dict(cmap="RdBu", norm=colors.CenteredNorm())  # Center colormap at 0
+        c = axp.pcolormesh(azim_grid, elev_grid, rmse_diff, **kw)
+        axp.set_theta_zero_location("N")
+        axp.set_theta_direction(-1)
+        fig.colorbar(c, ax=axp, label="RMAE (dB)")
+
+        envs = f"{env0_name} vs {env1_name}"
+        loss_fn_name = loss_fn.__name__.replace("_", " ")
+
+        title = f"ΔRMSE | {taper} taper | {envs} | {loss_fn_name} ({loss_scale}) | {lr=:.1e}"
+        fig.suptitle(title)
+
+        envs = envs.replace(" ", "_")
+        loss_fn_name = loss_fn.__name__
+        name = f"patterns_{taper}_{envs}_{loss_fn_name}_{loss_scale}_lr_{lr:.1e}.png"
+        fig.savefig(name, dpi=200)
+
+
+for env in [
+    "Env1_rotated",
+    "Env2_rotated",
+    "Env1_1_rotated",
+    "Env1_2_rotated",
+    "Env2_1_rotated",
+    "Env2_2_rotated",
+]:
+    for taper in ["hamming", "uniform"]:
+        for loss_fn in [mse_loss]:
+            for loss_scale in tp.get_args(LossScale):
+                for lr in [1e-5, 5e-6]:
+                    evaluate_grid(
+                        env1_name=env,
+                        taper=taper,
+                        loss_fn=loss_fn,
+                        loss_scale=loss_scale,
+                        lr=lr,
+                    )

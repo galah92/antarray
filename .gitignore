@@ -185,3 +185,4 @@ checkpoints
 checkpoints_diffusion
 flow_matching_checkpoints
 .joblib_cache
+.DS_Store
