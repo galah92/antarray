@@ -1,7 +1,7 @@
 import typing as tp
 from functools import partial
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, get_args
 
 import jax
 import jax.numpy as jnp
@@ -146,8 +146,11 @@ def optimize(
     return power_db_opt
 
 
+Taper = Literal["hamming", "uniform"]
+
+
 class OptParams(NamedTuple):
-    taper: Literal["hamming", "uniform"]
+    taper: Taper
     elev_deg: float
     azim_deg: float
     w: jax.Array
@@ -160,7 +163,7 @@ class OptParams(NamedTuple):
 def init_params(
     env0_name: str = "no_env_rotated",
     env1_name: str = "Env1_rotated",
-    taper: Literal["hamming", "uniform"] = "uniform",
+    taper: Taper = "uniform",
     elev_deg: float = 0.0,
     azim_deg: float = 0.0,
 ) -> OptParams:
@@ -205,7 +208,7 @@ class OptResults(NamedTuple):
 def run_optimization(
     env0_name: str = "no_env_rotated",
     env1_name: str = "Env1_rotated",
-    taper: Literal["hamming", "uniform"] = "uniform",
+    taper: Taper = "uniform",
     elev_deg: float = 0.0,
     azim_deg: float = 0.0,
     loss_fn: LossFn = mse_loss,
@@ -267,7 +270,7 @@ def run_optimization(
 def evaluate_grid(
     env0_name: str = "no_env_rotated",
     env1_name: str = "Env1_rotated",
-    taper: Literal["hamming", "uniform"] = "hamming",
+    taper: Taper = "hamming",
     loss_fn: LossFn = mse_loss,
     loss_scale: LossScale = "db",
     lr: float = 5e-6,
@@ -349,7 +352,7 @@ for env in [
     "Env2_1_rotated",
     "Env2_2_rotated",
 ]:
-    for taper in ["hamming", "uniform"]:
+    for taper in get_args(Taper):
         for loss_fn in [mse_loss]:
             for loss_scale in tp.get_args(LossScale):
                 for lr in [1e-5, 5e-6]:
