@@ -19,7 +19,7 @@ dependencies = [
 jax = [
     "jax[cuda12]>=0.7.0 ; platform_system == 'Linux'",
     "jax>=0.7.0 ; platform_system != 'Linux'",
-    "flax>=0.11.0",
+    "flax>=0.12.0",
     "optax>=0.2.4",
     "orbax-checkpoint>=0.11.13",
 ]
