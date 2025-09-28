@@ -200,8 +200,8 @@ def init_params(
 
 class OptResults(NamedTuple):
     power_db_opt: jax.Array
-    mse_env1: float
-    mse_opt: float
+    nmse_env1: float
+    nmse_opt: float
 
 
 # @memory.cache
@@ -228,8 +228,15 @@ def run_optimization(
     power_db_opt = optimize(w, aeps_env1, power_env0, loss_fn, loss_scale, lr)
 
     power_db_env0, power_db_env1 = to_db(params.power_env0), to_db(params.power_env1)
-    mse_env1 = np.mean((power_db_env1 - power_db_env0) ** 2).item()
-    mse_opt = np.mean((power_db_opt - power_db_env0) ** 2).item()
+
+    # Normalize by the mean square of the target pattern in dB
+    norm_factor = np.mean(power_db_env0**2)
+    mse_env1_raw = np.mean((power_db_env1 - power_db_env0) ** 2)
+    mse_opt_raw = np.mean((power_db_opt - power_db_env0) ** 2)
+
+    # Calculate NMSE in dB
+    nmse_env1 = 10 * np.log10(mse_env1_raw / norm_factor).item()
+    nmse_opt = 10 * np.log10(mse_opt_raw / norm_factor).item()
 
     if plot:
         fig = plt.figure(figsize=(15, 12), layout="compressed")
@@ -237,10 +244,10 @@ def run_optimization(
 
         plot_power_db(power_db_env0, fig=subfigs[0], title="No Env")
 
-        title = f"Env 1 | MSE {mse_env1:.3f}dB"
+        title = f"Env 1 | NMSE {nmse_env1:.3f}dB"
         plot_power_db(power_db_env1, fig=subfigs[1], title=title)
 
-        title = f"Optimized | MSE {mse_opt:.3f}dB"
+        title = f"Optimized | NMSE {nmse_opt:.3f}dB"
         plot_power_db(power_db_opt, fig=subfigs[2], title=title)
 
         steer_title = f"Steering Elev {int(elev_deg)}°, Azim {int(azim_deg)}°"
@@ -253,8 +260,8 @@ def run_optimization(
 
     return OptResults(
         power_db_opt=power_db_opt,
-        mse_env1=mse_env1,
-        mse_opt=mse_opt,
+        nmse_env1=nmse_env1,
+        nmse_opt=nmse_opt,
     )
 
 
@@ -295,29 +302,28 @@ def evaluate_grid(
             elev_deg, azim_deg = elev.item(), azim.item()
             results[(elev, azim)] = opt(elev_deg=elev_deg, azim_deg=azim_deg)
 
-    mses_env1 = np.array([res.mse_env1 for res in results.values()]).reshape(
+    nmses_env1 = np.array([res.nmse_env1 for res in results.values()]).reshape(
         len(elevs), len(azims)
     )
-    mses_opt = np.array([res.mse_opt for res in results.values()]).reshape(
+    nmses_opt = np.array([res.nmse_opt for res in results.values()]).reshape(
         len(elevs), len(azims)
     )
 
-    mse_diff = mses_opt - mses_env1
-    rmse_diff = np.sqrt(np.abs(mse_diff)) * np.sign(mse_diff)
-    print(f"Mean RMSE Improvement: {rmse_diff.mean():.3f} dB")
-    print(f"Std RMSE Improvement: {rmse_diff.std():.3f} dB")
-    print(f"Max RMSE Improvement: {rmse_diff.max():.3f} dB")
-    print(f"Min RMSE Improvement: {rmse_diff.min():.3f} dB")
+    nmse_diff = nmses_opt - nmses_env1
+    print(f"Mean NMSE Improvement: {nmse_diff.mean():.3f} dB")
+    print(f"Std NMSE Improvement: {nmse_diff.std():.3f} dB")
+    print(f"Max NMSE Improvement: {nmse_diff.max():.3f} dB")
+    print(f"Min NMSE Improvement: {nmse_diff.min():.3f} dB")
 
     basic_plot = False
     if basic_plot:
         fig, ax = plt.subplots(figsize=(15, 5), layout="compressed")
-        im2 = ax.imshow(rmse_diff, cmap="viridis", origin="lower")
+        im2 = ax.imshow(nmse_diff, cmap="viridis", origin="lower")
         ax.set_xticks(np.arange(len(azims)), labels=azims)
         ax.set_yticks(np.arange(len(elevs)), labels=elevs)
-        ax.set(title="RMAE Improvement", xlabel="Azim (deg)", ylabel="Elev (deg)")
-        fig.colorbar(im2, ax=ax, label="RMAE (dB)")
-        name = f"patterns_{taper}_rmse_grid.png"
+        ax.set(title="NMSE Improvement", xlabel="Azim (deg)", ylabel="Elev (deg)")
+        fig.colorbar(im2, ax=ax, label="NMSE (dB)")
+        name = f"patterns_{taper}_nmse_grid.png"
         fig.savefig(name, dpi=200)
 
     polar_plot = True
@@ -327,20 +333,22 @@ def evaluate_grid(
         axp = tp.cast(PolarAxes, ax)  # For type checker
         azim_grid, elev_grid = np.meshgrid(np.radians(azims), elevs)
         kw = dict(cmap="RdBu", norm=colors.CenteredNorm())  # Center colormap at 0
-        c = axp.pcolormesh(azim_grid, elev_grid, rmse_diff, **kw)
+        c = axp.pcolormesh(azim_grid, elev_grid, nmse_diff, **kw)
         axp.set_theta_zero_location("N")
         axp.set_theta_direction(-1)
-        fig.colorbar(c, ax=axp, label="RMAE (dB)")
+        fig.colorbar(c, ax=axp, label="NMSE (dB)")
 
         envs = f"{env0_name} vs {env1_name}"
         loss_fn_name = loss_fn.__name__.replace("_", " ")
 
-        title = f"ΔRMSE | {taper} taper | {envs} | {loss_fn_name} ({loss_scale}) | {lr=:.1e}"
+        title = f"ΔNMSE | {taper} taper | {envs} | {loss_fn_name} ({loss_scale}) | {lr=:.1e}"
         fig.suptitle(title)
 
         envs = envs.replace(" ", "_")
         loss_fn_name = loss_fn.__name__
-        name = f"patterns_{taper}_{envs}_{loss_fn_name}_{loss_scale}_lr_{lr:.1e}.png"
+        name = (
+            f"patterns_nmse_{taper}_{envs}_{loss_fn_name}_{loss_scale}_lr_{lr:.1e}.png"
+        )
         fig.savefig(name, dpi=200)
 
 
