@@ -13,6 +13,7 @@ import numpy as np
 from jax.typing import ArrayLike
 from joblib import Memory
 from matplotlib.colorizer import ColorizingArtist
+from matplotlib.figure import SubFigure
 from matplotlib.image import AxesImage
 from matplotlib.projections import PolarAxes
 from mpl_toolkits.mplot3d import Axes3D
@@ -632,8 +633,8 @@ def plot_pattern(
     clip_min_db: float | None = None,
     title: str | None = None,
     colorbar: str | None = None,
-    fig: plt.Figure | plt.SubFigure | None = None,
-) -> plt.Figure | plt.SubFigure:
+    fig: plt.Figure | SubFigure | None = None,
+) -> plt.Figure | SubFigure:
     if fig is None:
         fig = plt.figure(figsize=(15, 5), layout="compressed")
     axd = fig.subplot_mosaic("ABC", per_subplot_kw={"C": {"projection": "3d"}})

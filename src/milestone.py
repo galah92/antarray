@@ -79,6 +79,7 @@ import numpy as np
 from joblib import Memory
 from matplotlib import colors
 from matplotlib import pyplot as plt
+from matplotlib.figure import SubFigure
 from matplotlib.projections import PolarAxes
 
 import physics
@@ -157,7 +158,7 @@ def to_power_db(x: jax.Array) -> jax.Array:
 def plot_power_db(
     power_db: jax.Array,
     title: str | None = None,
-    fig: plt.Figure | plt.SubFigure | None = None,
+    fig: plt.Figure | SubFigure | None = None,
 ) -> None:
     indices = argmax_nd(power_db)
     fig = physics.plot_pattern(power_db, clip_min_db=-40.0, fig=fig)
@@ -174,6 +175,7 @@ def mse_loss(pred_power: jax.Array, target_power: jax.Array) -> jax.Array:
 LossFn = tp.Callable[[jax.Array, jax.Array], jax.Array]
 LossScale = Literal["linear", "db"]
 Taper = Literal["hamming", "uniform"]
+WeightInit = Literal["env0", "random", "uniform", "zeros"]
 Environment = Literal[
     "no_env_rotated",
     "Env1_rotated",
@@ -293,33 +295,62 @@ def init_params(
     env0_name: Environment = "no_env_rotated",
     env1_name: Environment = "Env1_rotated",
     taper: Taper = "uniform",
+    weight_init: WeightInit = "env0",
     elev_deg: float = 0.0,
     azim_deg: float = 0.0,
 ) -> OptParams:
     cst_dir = root_dir / "cst"
     aeps_env0 = load_cst(cst_dir / env0_name)
 
-    # Compute weights
+    # Compute weights based on initialization strategy
     nx, ny = aeps_env0.shape[:2]
+
+    # ALWAYS compute the env0 reference weights (for target pattern)
     if taper == "hamming":
         amplitude = hamming_taper(nx=nx, ny=ny)
     else:
         amplitude = uniform_taper(nx=nx, ny=ny)
     amplitude = amplitude / np.sqrt(np.sum(amplitude**2))  # Normalize power to 1
-
     phase = ideal_steering(nx=nx, ny=ny, elev_deg=elev_deg, azim_deg=azim_deg)
-    w = amplitude * np.exp(1j * phase)
+    w_env0 = amplitude * np.exp(1j * phase)
 
-    power_env0 = to_power(np.einsum("xy,xytpz->tpz", w, aeps_env0))
+    # Compute INITIAL weights based on strategy
+    if weight_init == "env0":
+        # Use env0 optimized weights (original behavior)
+        w_init = w_env0
+    elif weight_init == "random":
+        # Random complex weights with normalized power
+        key = jax.random.PRNGKey(42)
+        w_real = jax.random.normal(key, shape=(nx, ny))
+        w_imag = jax.random.normal(jax.random.split(key)[1], shape=(nx, ny))
+        w_init = w_real + 1j * w_imag
+        w_init = np.array(w_init)  # Convert to numpy for normalization
+        w_init = w_init / np.sqrt(np.sum(np.abs(w_init) ** 2))  # Normalize power to 1
+    elif weight_init == "uniform":
+        # All ones (uniform amplitude, zero phase)
+        w_init = np.ones((nx, ny), dtype=complex)
+        w_init = w_init / np.sqrt(np.sum(np.abs(w_init) ** 2))  # Normalize power to 1
+    elif weight_init == "zeros":
+        # Small random initialization near zero
+        key = jax.random.PRNGKey(42)
+        w_real = jax.random.normal(key, shape=(nx, ny)) * 0.01
+        w_imag = jax.random.normal(jax.random.split(key)[1], shape=(nx, ny)) * 0.01
+        w_init = w_real + 1j * w_imag
+        w_init = np.array(w_init)
+        w_init = w_init / np.sqrt(np.sum(np.abs(w_init) ** 2))  # Normalize power to 1
 
+    # Target pattern: ALWAYS use env0 reference weights in env0 environment
+    power_env0 = to_power(np.einsum("xy,xytpz->tpz", w_env0, aeps_env0))
+
+    # Initial pattern in env1: use INITIAL weights in env1 environment
     aeps_env1 = load_cst(cst_dir / env1_name)
-    power_env1 = to_power(np.einsum("xy,xytpz->tpz", w, aeps_env1))
+    power_env1 = to_power(np.einsum("xy,xytpz->tpz", w_init, aeps_env1))
 
     return OptParams(
         taper=taper,
         elev_deg=elev_deg,
         azim_deg=azim_deg,
-        w=jnp.asarray(w),
+        w=jnp.asarray(w_init),
         aeps_env0=jnp.asarray(aeps_env0),
         aeps_env1=jnp.asarray(aeps_env1),
         power_env0=jnp.asarray(power_env0),
@@ -338,6 +369,7 @@ def run_optimization(
     env0_name: Environment = "no_env_rotated",
     env1_name: Environment = "Env1_rotated",
     taper: Taper = "uniform",
+    weight_init: WeightInit = "env0",
     elev_deg: float = 0.0,
     azim_deg: float = 0.0,
     loss_fn: LossFn = mse_loss,
@@ -348,10 +380,11 @@ def run_optimization(
 ) -> OptResults:
     if verbose:
         print(
-            f"Running optimization for elev {elev_deg}°, azim {azim_deg}°, {taper} taper"
+            f"Running optimization for elev {elev_deg}°, azim {azim_deg}°, {taper} taper, {weight_init} init"
         )
     params = init_params(
         taper=taper,
+        weight_init=weight_init,
         elev_deg=elev_deg,
         azim_deg=azim_deg,
         env0_name=env0_name,
@@ -445,6 +478,7 @@ def evaluate_grid_vectorized(
     env0_name: Environment = "no_env_rotated",
     env1_name: Environment = "Env1_rotated",
     taper: Taper = "hamming",
+    weight_init: WeightInit = "env0",
     loss_fn: LossFn = mse_loss,
     loss_scale: LossScale = "linear",
     lr: float = 1e-5,
@@ -457,6 +491,7 @@ def evaluate_grid_vectorized(
     Processes multiple steering angles in parallel batches for significant speedup.
 
     Args:
+        weight_init: Weight initialization strategy ("env0", "random", "uniform", "zeros")
         batch_size: Number of optimizations to run in parallel (default 32).
                    Increase for more speedup, decrease if running out of memory.
     """
@@ -472,7 +507,9 @@ def evaluate_grid_vectorized(
     print(f"Grid: {len(elevs)} elevations × {len(azims)} azimuths = {n_points} points")
     print(f"Batch size: {batch_size} (processing {batch_size} points in parallel)")
     print(f"Environment: {env0_name} vs {env1_name}")
-    print(f"Taper: {taper}, Loss: {loss_scale}, LR: {lr:.1e}")
+    print(
+        f"Taper: {taper}, Weight Init: {weight_init}, Loss: {loss_scale}, LR: {lr:.1e}"
+    )
 
     # Load antenna patterns once (shared across all steering angles)
     cst_dir = root_dir / "cst"
@@ -480,12 +517,15 @@ def evaluate_grid_vectorized(
     aeps_env1 = load_cst(cst_dir / env1_name)
     nx, ny = aeps_env0.shape[:2]
 
-    # Compute amplitude taper once (same for all angles)
-    if taper == "hamming":
-        amplitude = hamming_taper(nx=nx, ny=ny)
+    # Compute amplitude taper once if using env0 initialization
+    if weight_init == "env0":
+        if taper == "hamming":
+            amplitude = hamming_taper(nx=nx, ny=ny)
+        else:
+            amplitude = uniform_taper(nx=nx, ny=ny)
+        amplitude = amplitude / np.sqrt(np.sum(amplitude**2))
     else:
-        amplitude = uniform_taper(nx=nx, ny=ny)
-    amplitude = amplitude / np.sqrt(np.sum(amplitude**2))
+        amplitude = None  # Will be set per weight_init strategy
 
     # Create all steering angle pairs
     angle_pairs = [(elev, azim) for elev in elevs for azim in azims]
@@ -507,14 +547,57 @@ def evaluate_grid_vectorized(
         w_init_batch = []
         power_env0_batch = []
 
-        for elev_deg, azim_deg in batch_angles:
-            # Compute phase steering for this angle
-            phase = ideal_steering(nx=nx, ny=ny, elev_deg=elev_deg, azim_deg=azim_deg)
-            w = amplitude * np.exp(1j * phase)
+        for idx, (elev_deg, azim_deg) in enumerate(batch_angles):
+            # Generate initial weights based on strategy
+            if weight_init == "env0":
+                # Use env0 optimized weights with steering
+                phase = ideal_steering(
+                    nx=nx, ny=ny, elev_deg=elev_deg, azim_deg=azim_deg
+                )
+                w = amplitude * np.exp(1j * phase)
+            elif weight_init == "random":
+                # Random complex weights (use different seed per angle for diversity)
+                seed = 42 + batch_start + idx
+                key = jax.random.PRNGKey(seed)
+                w_real = jax.random.normal(key, shape=(nx, ny))
+                w_imag = jax.random.normal(jax.random.split(key)[1], shape=(nx, ny))
+                w = w_real + 1j * w_imag
+                w = np.array(w)
+                w = w / np.sqrt(np.sum(np.abs(w) ** 2))
+            elif weight_init == "uniform":
+                # All ones (uniform amplitude, zero phase)
+                w = np.ones((nx, ny), dtype=complex)
+                w = w / np.sqrt(np.sum(np.abs(w) ** 2))
+            elif weight_init == "zeros":
+                # Small random initialization near zero
+                seed = 42 + batch_start + idx
+                key = jax.random.PRNGKey(seed)
+                w_real = jax.random.normal(key, shape=(nx, ny)) * 0.01
+                w_imag = (
+                    jax.random.normal(jax.random.split(key)[1], shape=(nx, ny)) * 0.01
+                )
+                w = w_real + 1j * w_imag
+                w = np.array(w)
+                w = w / np.sqrt(np.sum(np.abs(w) ** 2))
+
             w_init_batch.append(w)
 
-            # Compute target power for this angle
-            power_env0 = to_power(np.einsum("xy,xytpz->tpz", w, aeps_env0))
+            # Compute target power using env0 weights (always use env0 for target)
+            if weight_init == "env0":
+                w_env0 = w  # Already computed above
+            else:
+                # For other inits, compute env0 pattern separately for target
+                phase = ideal_steering(
+                    nx=nx, ny=ny, elev_deg=elev_deg, azim_deg=azim_deg
+                )
+                if taper == "hamming":
+                    amp = hamming_taper(nx=nx, ny=ny)
+                else:
+                    amp = uniform_taper(nx=nx, ny=ny)
+                amp = amp / np.sqrt(np.sum(amp**2))
+                w_env0 = amp * np.exp(1j * phase)
+
+            power_env0 = to_power(np.einsum("xy,xytpz->tpz", w_env0, aeps_env0))
             power_env0_batch.append(power_env0)
 
         # Convert to JAX arrays
@@ -537,11 +620,16 @@ def evaluate_grid_vectorized(
         power_opt_batch = 10 ** (power_db_opt_batch / 10)  # Convert from dB
 
         for i, (elev_deg, azim_deg) in enumerate(batch_angles):
-            # Recompute for this specific angle
+            # Recompute env0 pattern for this specific angle (for NMSE target)
             phase = ideal_steering(nx=nx, ny=ny, elev_deg=elev_deg, azim_deg=azim_deg)
-            w = amplitude * np.exp(1j * phase)
-            power_env0 = to_power(np.einsum("xy,xytpz->tpz", w, aeps_env0))
-            power_env1 = to_power(np.einsum("xy,xytpz->tpz", w, aeps_env1))
+            if taper == "hamming":
+                amp = hamming_taper(nx=nx, ny=ny)
+            else:
+                amp = uniform_taper(nx=nx, ny=ny)
+            amp = amp / np.sqrt(np.sum(amp**2))
+            w_env0 = amp * np.exp(1j * phase)
+            power_env0 = to_power(np.einsum("xy,xytpz->tpz", w_env0, aeps_env0))
+            power_env1 = to_power(np.einsum("xy,xytpz->tpz", w_env0, aeps_env1))
 
             # Compute NMSE
             mse_env1 = np.mean((power_env1 - power_env0) ** 2)
@@ -573,7 +661,9 @@ def evaluate_grid_vectorized(
     print("GRID EVALUATION SUMMARY")
     print(f"{'=' * 60}")
     print(f"Environment: {env0_name} vs {env1_name}")
-    print(f"Taper: {taper}, Loss: {loss_scale}, LR: {lr:.1e}")
+    print(
+        f"Taper: {taper}, Weight Init: {weight_init}, Loss: {loss_scale}, LR: {lr:.1e}"
+    )
     print(
         f"Grid: {len(elevs)} elevs × {len(azims)} azims = {len(elevs) * len(azims)} points"
     )
@@ -659,14 +749,12 @@ def evaluate_grid_vectorized(
 
         envs = f"{env0_name} vs {env1_name}"
         loss_fn_name = loss_fn.__name__.replace("_", " ")
-        title = f"ΔNMSE | {taper} taper | {envs} | {loss_fn_name} ({loss_scale}) | {lr=:.1e}"
+        title = f"ΔNMSE | {taper} taper | {weight_init} init | {envs} | {loss_fn_name} ({loss_scale}) | {lr=:.1e}"
         fig.suptitle(title)
 
         envs = envs.replace(" ", "_")
         loss_fn_name = loss_fn.__name__
-        name = (
-            f"patterns_nmse_{taper}_{envs}_{loss_fn_name}_{loss_scale}_lr_{lr:.1e}.png"
-        )
+        name = f"patterns_nmse_{taper}_{weight_init}_init_{envs}_{loss_fn_name}_{loss_scale}_lr_{lr:.1e}.png"
         fig.savefig(name, dpi=200)
         print(f"Saved plot to {name}")
 
