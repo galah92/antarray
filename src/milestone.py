@@ -1,3 +1,39 @@
+"""
+Phased Array Beamforming Optimization
+
+This module optimizes phased array element weights to match radiation patterns
+between different environments (e.g., with defects/concealments).
+
+EVALUATION METRICS:
+------------------
+NMSE (Normalized Mean Square Error):
+    Definition: NMSE = mean((pred - target)²) / mean(target²)
+
+    Physical meaning: Ratio of prediction error power to target signal power
+
+    Reported in two forms:
+    1. Linear (percentage): NMSE × 100%
+       - 2.85% means error power is 2.85% of signal power
+       - Lower is better, 0% is perfect
+
+    2. Decibels: NMSE_dB = 10 × log10(NMSE)
+       - -15 dB NMSE ≈ 3.2% error
+       - -20 dB NMSE ≈ 1.0% error
+       - -30 dB NMSE ≈ 0.1% error
+       - More negative is better, -∞ dB is perfect
+
+    Interpretation of improvement:
+    - Δ = -1 dB means ~20% reduction in error power
+    - Δ = -3 dB means ~50% reduction in error power
+    - Δ = -10 dB means ~90% reduction in error power
+
+OPTIMIZATION:
+------------
+- Loss function: MSE in linear power space (loss_scale="linear")
+- Linear space provides stable gradients and better convergence
+- Do NOT use loss_scale="dB" - it causes divergence due to nonlinear landscape
+"""
+
 import typing as tp
 from functools import partial
 from pathlib import Path
@@ -108,7 +144,7 @@ def train_step(
     lr: float,
     loss_fn: LossFn = mse_loss,
     loss_scale: LossScale = "db",
-) -> tuple[jnp.ndarray, float]:
+) -> tuple[jnp.ndarray, float, float]:
     if loss_scale == "db":
         target_power = to_db(target_power)
 
@@ -120,9 +156,9 @@ def train_step(
         return loss_fn(pred_power, target_power)
 
     loss, grads = jax.value_and_grad(loss_wrapper)(w)
+    grad_norm = jnp.linalg.norm(grads)
     w = w - lr * grads
-    # w = w / jnp.linalg.norm(w) * amplitude  # Re-normalize
-    return w, loss
+    return w, loss, grad_norm
 
 
 def optimize(
@@ -134,12 +170,18 @@ def optimize(
     lr: float = 1e-5,
 ) -> jax.Array:
     w = w_init
-    for step in range(100):
-        w, loss = train_step(w, aeps, target_power, lr, loss_fn, loss_scale)
-        if step % 10 == 0:
-            print(f"step {step}, loss: {loss:.3f}")
 
-    print(f"Weight norm: {jnp.linalg.norm(w):.3f}")
+    # Get initial loss
+    _, initial_loss, _ = train_step(w, aeps, target_power, 0.0, loss_fn, loss_scale)
+    print(f"Initial loss: {initial_loss:.3f}")
+
+    for step in range(100):
+        w, loss, grad_norm = train_step(w, aeps, target_power, lr, loss_fn, loss_scale)
+
+        if step % 20 == 0:
+            print(f"  step {step:3d}, loss: {loss:.3f}")
+
+    print(f"  step 100, loss: {loss:.3f} (final)")
 
     pattern_opt = jnp.einsum("xy,xytpz->tpz", w, aeps)
     power_db_opt = to_power_db(pattern_opt)
@@ -229,14 +271,38 @@ def run_optimization(
 
     power_db_env0, power_db_env1 = to_db(params.power_env0), to_db(params.power_env1)
 
-    # Normalize by the mean square of the target pattern in dB
-    norm_factor = np.mean(power_db_env0**2)
-    mse_env1_raw = np.mean((power_db_env1 - power_db_env0) ** 2)
-    mse_opt_raw = np.mean((power_db_opt - power_db_env0) ** 2)
+    # Convert optimized pattern to linear power for NMSE calculation
+    power_opt = 10 ** (power_db_opt / 10)  # Convert from dB back to linear power
+    power_env0 = params.power_env0
+    power_env1 = params.power_env1
 
-    # Calculate NMSE in dB
-    nmse_env1 = 10 * np.log10(mse_env1_raw / norm_factor).item()
-    nmse_opt = 10 * np.log10(mse_opt_raw / norm_factor).item()
+    # Standard NMSE: MSE normalized by mean power of target
+    # NMSE = mean((pred - target)²) / mean(target²)
+    mse_env1 = np.mean((power_env1 - power_env0) ** 2)
+    mse_opt = np.mean((power_opt - power_env0) ** 2)
+
+    target_power_mean = np.mean(power_env0 ** 2)
+    nmse_env1_linear = mse_env1 / target_power_mean
+    nmse_opt_linear = mse_opt / target_power_mean
+
+    # Convert to dB for reporting: NMSE_dB = 10 * log10(NMSE)
+    # Interpretation:
+    #   NMSE_dB = -10 dB means 10% normalized error
+    #   NMSE_dB = -20 dB means 1% normalized error
+    #   NMSE_dB = -30 dB means 0.1% normalized error
+    #   Lower (more negative) is better
+    nmse_env1_db = 10 * np.log10(nmse_env1_linear).item()
+    nmse_opt_db = 10 * np.log10(nmse_opt_linear).item()
+    nmse_improvement_db = nmse_opt_db - nmse_env1_db
+
+    print(f"\n=== Evaluation Metrics ===")
+    print(f"NMSE (naive weights in Env1):     {nmse_env1_db:.3f} dB ({nmse_env1_linear*100:.2f}%)")
+    print(f"NMSE (optimized weights in Env1): {nmse_opt_db:.3f} dB ({nmse_opt_linear*100:.2f}%)")
+    print(f"NMSE Improvement (Δ):             {nmse_improvement_db:+.3f} dB")
+    if nmse_improvement_db < 0:
+        print(f"  → Optimized is {abs(nmse_improvement_db):.3f} dB BETTER")
+    else:
+        print(f"  → Optimized is {nmse_improvement_db:.3f} dB WORSE")
 
     if plot:
         fig = plt.figure(figsize=(15, 12), layout="compressed")
@@ -244,10 +310,10 @@ def run_optimization(
 
         plot_power_db(power_db_env0, fig=subfigs[0], title="No Env")
 
-        title = f"Env 1 | NMSE {nmse_env1:.3f}dB"
+        title = f"Env 1 | NMSE {nmse_env1_db:.3f} dB"
         plot_power_db(power_db_env1, fig=subfigs[1], title=title)
 
-        title = f"Optimized | NMSE {nmse_opt:.3f}dB"
+        title = f"Optimized | NMSE {nmse_opt_db:.3f} dB"
         plot_power_db(power_db_opt, fig=subfigs[2], title=title)
 
         steer_title = f"Steering Elev {int(elev_deg)}°, Azim {int(azim_deg)}°"
@@ -260,18 +326,19 @@ def run_optimization(
 
     return OptResults(
         power_db_opt=power_db_opt,
-        nmse_env1=nmse_env1,
-        nmse_opt=nmse_opt,
+        nmse_env1=nmse_env1_db,
+        nmse_opt=nmse_opt_db,
     )
 
 
-# run_optimization(
-#     taper="hamming",
-#     elev_deg=20,
-#     azim_deg=-45,
-#     loss_scale="db",
-#     lr=5e-6,
-# )
+run_optimization(
+    env1_name="Env1_2_rotated",
+    taper="hamming",
+    elev_deg=10,
+    azim_deg=45,
+    loss_scale="linear",
+    lr=1e-5,
+)
 
 
 def evaluate_grid(
@@ -352,22 +419,24 @@ def evaluate_grid(
         fig.savefig(name, dpi=200)
 
 
-for env in [
-    "Env1_rotated",
-    "Env2_rotated",
-    "Env1_1_rotated",
-    "Env1_2_rotated",
-    "Env2_1_rotated",
-    "Env2_2_rotated",
-]:
-    for taper in get_args(Taper):
-        for loss_fn in [mse_loss]:
-            for loss_scale in tp.get_args(LossScale):
-                for lr in [1e-5, 5e-6]:
-                    evaluate_grid(
-                        env1_name=env,
-                        taper=taper,
-                        loss_fn=loss_fn,
-                        loss_scale=loss_scale,
-                        lr=lr,
-                    )
+RUN_GRID = False
+if RUN_GRID:
+    for env in [
+        "Env1_rotated",
+        "Env2_rotated",
+        "Env1_1_rotated",
+        "Env1_2_rotated",
+        "Env2_1_rotated",
+        "Env2_2_rotated",
+    ]:
+        for taper in get_args(Taper):
+            for loss_fn in [mse_loss]:
+                for loss_scale in tp.get_args(LossScale):
+                    for lr in [1e-5, 5e-6]:
+                        evaluate_grid(
+                            env1_name=env,
+                            taper=taper,
+                            loss_fn=loss_fn,
+                            loss_scale=loss_scale,
+                            lr=lr,
+                        )
