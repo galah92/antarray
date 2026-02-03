@@ -114,14 +114,14 @@ def train_pipeline(
 
     logger.info("Warming up GPU kernels")
     model.eval()
-    train_step(optimizer, next(sampler), physics_params)
+    train_step(optimizer, model, next(sampler), physics_params)
     model.train()
 
     log_progress = create_progress_logger(n_steps, log_every=10)
     logger.info("Starting training")
     try:
         for step, batch in enumerate(sampler):
-            metrics = train_step(optimizer, batch, physics_params)
+            metrics = train_step(optimizer, model, batch, physics_params)
             log_progress(step, metrics)
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")

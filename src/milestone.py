@@ -437,15 +437,15 @@ def run_optimization(
 
     if plot:
         fig = plt.figure(figsize=(15, 12), layout="compressed")
-        subfigs: np.ndarray = fig.subfigures(3, 1)  # type: ignore[assignment]
+        subfigs: np.ndarray = fig.subfigures(3, 1)
 
-        plot_power_db(power_db_env0, fig=subfigs[0], title="No Env")  # type: ignore[arg-type]
+        plot_power_db(power_db_env0, fig=subfigs[0], title="No Env")
 
         title = f"Env 1 | NMSE {nmse_env1_db:.3f} dB"
-        plot_power_db(power_db_env1, fig=subfigs[1], title=title)  # type: ignore[arg-type]
+        plot_power_db(power_db_env1, fig=subfigs[1], title=title)
 
         title = f"Optimized | NMSE {nmse_opt_db:.3f} dB"
-        plot_power_db(power_db_opt, fig=subfigs[2], title=title)  # type: ignore[arg-type]
+        plot_power_db(power_db_opt, fig=subfigs[2], title=title)
 
         steer_title = f"Steering Elev {int(elev_deg)}°, Azim {int(azim_deg)}°"
         title = f"{taper} taper | {steer_title}"
@@ -694,7 +694,7 @@ def evaluate_grid_vectorized(
     )
 
     # Reliability metrics
-    percentiles: np.ndarray = np.percentile(nmse_diff, [5, 25, 75, 95])  # type: ignore[assignment]
+    percentiles: np.ndarray = np.percentile(nmse_diff, [5, 25, 75, 95])
     print("\n[3] Reliability Metrics:")
     print(f"  P5  (best 5%):          {percentiles[0]:+.3f} dB")
     print(f"  P25 (best quartile):    {percentiles[1]:+.3f} dB")
@@ -727,13 +727,15 @@ def evaluate_grid_vectorized(
     # Generate polar plot
     polar_plot = True
     if polar_plot:
-        kw = dict(layout="compressed", subplot_kw={"projection": "polar"})
-        fig, ax = plt.subplots(figsize=(8, 8), **kw)
+        fig, ax = plt.subplots(
+            figsize=(8, 8), layout="compressed", subplot_kw={"projection": "polar"}
+        )
         axp = tp.cast(PolarAxes, ax)
         azim_grid, elev_grid = np.meshgrid(np.radians(azims), elevs)
         # Use RdBu_r (reversed) so Blue=negative=improvement, Red=positive=degradation
-        kw = dict(cmap="RdBu_r", norm=colors.CenteredNorm())
-        c = axp.pcolormesh(azim_grid, elev_grid, nmse_diff, **kw)
+        c = axp.pcolormesh(
+            azim_grid, elev_grid, nmse_diff, cmap="RdBu_r", norm=colors.CenteredNorm()
+        )
         axp.set_theta_zero_location("N")
         axp.set_theta_direction(-1)
         cbar = fig.colorbar(c, ax=axp, label="ΔNMSE (dB)")
@@ -748,12 +750,12 @@ def evaluate_grid_vectorized(
         )
 
         envs = f"{env0_name} vs {env1_name}"
-        loss_fn_name = loss_fn.__name__.replace("_", " ")
+        loss_fn_name = getattr(loss_fn, "__name__", "loss").replace("_", " ")
         title = f"ΔNMSE | {taper} taper | {weight_init} init | {envs} | {loss_fn_name} ({loss_scale}) | {lr=:.1e}"
         fig.suptitle(title)
 
         envs = envs.replace(" ", "_")
-        loss_fn_name = loss_fn.__name__
+        loss_fn_name = getattr(loss_fn, "__name__", "loss")
         name = f"patterns_nmse_{taper}_{weight_init}_init_{envs}_{loss_fn_name}_{loss_scale}_lr_{lr:.1e}.png"
         fig.savefig(name, dpi=200)
         print(f"Saved plot to {name}")
@@ -864,7 +866,7 @@ def evaluate_grid(
     )
 
     # Reliability metrics
-    percentiles: np.ndarray = np.percentile(nmse_diff, [5, 25, 75, 95])  # type: ignore[assignment]
+    percentiles: np.ndarray = np.percentile(nmse_diff, [5, 25, 75, 95])
     print("\n[3] Reliability Metrics:")
     print(f"  P5  (best 5%):          {percentiles[0]:+.3f} dB")
     print(f"  P25 (best quartile):    {percentiles[1]:+.3f} dB")
@@ -908,13 +910,15 @@ def evaluate_grid(
 
     polar_plot = True
     if polar_plot:
-        kw = dict(layout="compressed", subplot_kw={"projection": "polar"})
-        fig, ax = plt.subplots(figsize=(8, 8), **kw)
+        fig, ax = plt.subplots(
+            figsize=(8, 8), layout="compressed", subplot_kw={"projection": "polar"}
+        )
         axp = tp.cast(PolarAxes, ax)  # For type checker
         azim_grid, elev_grid = np.meshgrid(np.radians(azims), elevs)
         # Use RdBu_r (reversed) so Blue=negative=improvement, Red=positive=degradation
-        kw = dict(cmap="RdBu_r", norm=colors.CenteredNorm())  # Center colormap at 0
-        c = axp.pcolormesh(azim_grid, elev_grid, nmse_diff, **kw)
+        c = axp.pcolormesh(
+            azim_grid, elev_grid, nmse_diff, cmap="RdBu_r", norm=colors.CenteredNorm()
+        )
         axp.set_theta_zero_location("N")
         axp.set_theta_direction(-1)
         cbar = fig.colorbar(c, ax=axp, label="ΔNMSE (dB)")
@@ -929,13 +933,13 @@ def evaluate_grid(
         )
 
         envs = f"{env0_name} vs {env1_name}"
-        loss_fn_name = loss_fn.__name__.replace("_", " ")
+        loss_fn_name = getattr(loss_fn, "__name__", "loss").replace("_", " ")
 
         title = f"ΔNMSE | {taper} taper | {envs} | {loss_fn_name} ({loss_scale}) | {lr=:.1e}"
         fig.suptitle(title)
 
         envs = envs.replace(" ", "_")
-        loss_fn_name = loss_fn.__name__
+        loss_fn_name = getattr(loss_fn, "__name__", "loss")
         name = (
             f"patterns_nmse_{taper}_{envs}_{loss_fn_name}_{loss_scale}_lr_{lr:.1e}.png"
         )
@@ -987,7 +991,8 @@ elif RUN_GRID == "medium":
     print("\n" + "=" * 60)
     print("MEDIUM TEST MODE (medium grid, multiple configs)")
     print("=" * 60)
-    for env in ["Env1_2_rotated", "Env2_1_rotated"]:
+    envs: list[Environment] = ["Env1_2_rotated", "Env2_1_rotated"]
+    for env in envs:
         for taper in get_args(Taper):
             evaluate_grid_vectorized(
                 env1_name=env,
@@ -1007,14 +1012,15 @@ elif RUN_GRID == "full":
     print("\n" + "=" * 60)
     print("FULL EVALUATION MODE (fine grid, all environments)")
     print("=" * 60)
-    for env in [
+    envs: list[Environment] = [
         "Env1_rotated",
         "Env2_rotated",
         "Env1_1_rotated",
         "Env1_2_rotated",
         "Env2_1_rotated",
         "Env2_2_rotated",
-    ]:
+    ]
+    for env in envs:
         for taper in get_args(Taper):
             for lr in [1e-5, 5e-6]:
                 evaluate_grid_vectorized(

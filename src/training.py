@@ -31,10 +31,10 @@ def pad_batch(
     mode: str = "constant",
 ) -> jax.Array:
     """Pad batch of images with proper dimension handling."""
-    pad_width = np.asarray(pad_width, dtype=np.int32)
-    if pad_width.shape[0] == 3:  # Add batch dimension
-        pad_width = np.pad(pad_width, ((1, 0), (0, 0)))
-    return jnp.pad(image, pad_width=pad_width, mode=mode)
+    pad_width_arr = np.asarray(pad_width, dtype=np.int32)
+    if pad_width_arr.shape[0] == 3:  # Add batch dimension
+        pad_width_arr = np.pad(pad_width_arr, ((1, 0), (0, 0)))
+    return jnp.pad(image, pad_width=pad_width_arr, mode=mode)
 
 
 def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMethod):
@@ -44,6 +44,8 @@ def resize_batch(image, shape: Sequence[int], method: str | jax.image.ResizeMeth
 
 
 def circular_mse_fn(target: ArrayLike, pred: ArrayLike) -> jax.Array:
+    target = jnp.asarray(target)
+    pred = jnp.asarray(pred)
     phase_diff = jnp.abs(pred - target)
     circular_diff = jnp.minimum(phase_diff, 2 * jnp.pi - phase_diff)
     circular_mse = (circular_diff**2).mean()
@@ -108,6 +110,7 @@ class PatternEncoder(nnx.Module):
         )
 
     def __call__(self, pattern: ArrayLike) -> jax.Array:
+        pattern = jnp.asarray(pattern)
         x = pattern[..., None]  # Add channel dimension
         x = self.pattern_pad(x)
         return self.encoder(x)
@@ -120,6 +123,7 @@ class WeightsProcessor(nnx.Module):
         self.processor = ConvBlock(2, base_channels, (3, 3), rngs=rngs)
 
     def __call__(self, weights: ArrayLike) -> jax.Array:
+        weights = jnp.asarray(weights)
         # Convert complex weights to real/imag channels
         weights_real = jnp.real(weights)[..., None]
         weights_imag = jnp.imag(weights)[..., None]
@@ -147,6 +151,7 @@ class UNetCore(nnx.Module):
         self.up1 = ConvBlock(base_channels * 4, base_channels, (3, 3), rngs=rngs)
 
     def __call__(self, x: ArrayLike) -> jax.Array:
+        x = jnp.asarray(x)
         # Encoder path
         x1 = self.down1(x)
         x2 = self.down2(nnx.max_pool(x1, (2, 2), (2, 2)))
@@ -192,6 +197,7 @@ class DenoisingUNet(nnx.Module):
     def __call__(
         self, noisy_weights: ArrayLike, target_pattern: ArrayLike, timestep: ArrayLike
     ) -> jax.Array:
+        timestep = jnp.asarray(timestep)
         # Encode inputs
         pattern_features = self.pattern_encoder(target_pattern)
         weights_features = self.weights_processor(noisy_weights)
@@ -253,6 +259,7 @@ class InterferenceCorrector(nnx.Module):
         self.final_conv = nnx.Conv(16, 1, (1, 1), padding="SAME", rngs=rngs)
 
     def __call__(self, x: ArrayLike) -> tuple[jax.Array, jax.Array]:
+        x = jnp.asarray(x)
         x = x[..., None]  # Add channel dimension
         x = self.pad(x)
 
@@ -331,7 +338,7 @@ def restore_checkpoint(
     if isinstance(item, nnx.Optimizer):
         handler = ocp.args.StandardRestore(nnx.state(item))
         restored = mngr.restore(step, args=ocp.args.Composite(state=handler))
-        nnx.update(item, restored.state)  # ty: ignore[possibly-unbound-attribute]
+        nnx.update(item, restored.state)  # ty: ignore[possibly-missing-attribute]
     else:
         state = nnx.state(item)
         restored = mngr.restore(step, args=ocp.args.StandardRestore(state))

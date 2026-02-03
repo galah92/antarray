@@ -72,6 +72,9 @@ class Denoiser(nnx.Module):
         steering_angles: ArrayLike,
         timestep: ArrayLike,
     ) -> jax.Array:
+        weights = jnp.asarray(weights)
+        steering_angles = jnp.asarray(steering_angles)
+        timestep = jnp.asarray(timestep)
         # Convert complex weights to real/imag channels
         weights = weights.view(jnp.float32).reshape(weights.shape + (2,))
 
@@ -170,8 +173,16 @@ def load_cst_params() -> DiffusionParams:
     ref_kx, ref_ky = compute_spatial_phase_coeffs(cst_ref.config)
     dis_kx, dis_ky = compute_spatial_phase_coeffs(cst_dis.config)
     params = DiffusionParams(
-        ref=ArrayParams(geps=jnp.asarray(cst_ref.geps), kx=ref_kx, ky=ref_ky),
-        dis=ArrayParams(geps=jnp.asarray(cst_dis.geps), kx=dis_kx, ky=dis_ky),
+        ref=ArrayParams(
+            geps=jnp.asarray(cst_ref.geps),
+            kx=jnp.asarray(ref_kx),
+            ky=jnp.asarray(ref_ky),
+        ),
+        dis=ArrayParams(
+            geps=jnp.asarray(cst_dis.geps),
+            kx=jnp.asarray(dis_kx),
+            ky=jnp.asarray(dis_ky),
+        ),
     )
     return params
 

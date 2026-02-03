@@ -41,6 +41,7 @@ class SEBlock(nnx.Module):
         self.fc2 = nnx.Linear(channels // reduction, channels, rngs=rngs)
 
     def __call__(self, x: ArrayLike) -> jax.Array:
+        x = jnp.asarray(x)
         # Global average pooling
         se = jnp.mean(x, axis=(1, 2), keepdims=True)  # (batch, 1, 1, channels)
         se = se.squeeze((1, 2))  # (batch, channels)
@@ -81,6 +82,7 @@ class SEConvBlock(nnx.Module):
         self.se = SEBlock(out_channels, rngs=rngs)
 
     def __call__(self, x: ArrayLike) -> jax.Array:
+        x = jnp.asarray(x)
         x = self.conv(x)
         x = self.norm(x)
         x = self.activation(x)
@@ -111,6 +113,7 @@ class SEResidualBlock(nnx.Module):
         self.se = SEBlock(features, rngs=rngs)
 
     def __call__(self, x: ArrayLike) -> jax.Array:
+        x = jnp.asarray(x)
         residual = x
         x = self.conv1(x)
         x = self.norm1(x)
@@ -165,6 +168,7 @@ class RegressionNet(nnx.Module):
         )
 
     def __call__(self, x: ArrayLike) -> jax.Array:
+        x = jnp.asarray(x)
         x = self.pad(x)
         x = self.encoder(x)
         x = self.bottleneck(x)
@@ -223,7 +227,7 @@ def warmup_step(
     logger.info("Warming up GPU kernels")
     model.eval()
     warmup_batch = next(dataset)
-    _ = train_step(optimizer, warmup_batch, params)
+    _ = train_step(optimizer, model, warmup_batch, params)
     model.train()
     logger.info("Warmup completed")
 

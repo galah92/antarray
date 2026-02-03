@@ -97,6 +97,7 @@ def create_radiation_pattern_transform(
         sin_phi: ArrayLike,
         cos_phi: ArrayLike,
     ) -> jax.Array:
+        radiation_pattern = jnp.asarray(radiation_pattern)
         if clip:
             radiation_pattern = jnp.clip(radiation_pattern, a_min=0.0)
 
@@ -143,7 +144,7 @@ class Dataset:
 
         self.array_size = array_size
         self.spacing_mm = spacing_mm
-        self.theta_end = jnp.radians(theta_end)
+        self.theta_end = float(jnp.radians(theta_end))
         self.kind = kind
 
         self.clip = clip
@@ -200,6 +201,7 @@ class Dataset:
 
         self.key, batch_key = jax.random.split(self.key)
         if self.prefetch:
+            assert self.prefetched_batch is not None
             current_batch = self.prefetched_batch
             self.prefetched_batch = self.generate_batch(batch_key)
             return current_batch

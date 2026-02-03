@@ -49,13 +49,13 @@ class ArrayConfig(NamedTuple):
 
 
 class OpenEMSData(NamedTuple):
-    theta_rad: jax.Array
-    phi_rad: jax.Array
-    r: jax.Array
+    theta_rad: np.ndarray
+    phi_rad: np.ndarray
+    r: np.ndarray
     Dmax: float
-    freq_hz: jax.Array
-    E_field: jax.Array
-    power_density: jax.Array
+    freq_hz: np.ndarray
+    E_field: np.ndarray
+    power_density: np.ndarray
 
 
 @lru_cache
@@ -288,6 +288,8 @@ def calculate_weights(
     steering_angles: ArrayLike,
 ) -> tuple[jax.Array, jax.Array]:
     """Calculates element weights for given steering angles (separable case)."""
+    kx = jnp.asarray(kx)
+    ky = jnp.asarray(ky)
     steering_angles = jnp.atleast_2d(steering_angles)
     theta, phi = steering_angles[:, 0], steering_angles[:, 1]
 
@@ -318,6 +320,7 @@ def calculate_weights_2d(
         weights: Array of shape (n_x, n_y) for single beam or (n_x, n_y, n_beams) for multiple
         phase_shifts: Array of shape (n_x, n_y) for single beam or (n_x, n_y, n_beams) for multiple
     """
+    spatial_coeffs = jnp.asarray(spatial_coeffs)
     steering_angles = jnp.atleast_2d(steering_angles)
     theta, phi = steering_angles.T
 
@@ -384,6 +387,8 @@ def synthesize_pattern(
     power: bool = True,
 ) -> jax.Array:
     """Synthesizes a pattern from weights using the precomputed GEPs (geometric element patterns)."""
+    geps = jnp.asarray(geps)
+    weights = jnp.asarray(weights)
     total_field = jnp.einsum("xytpz,xy->tpz", geps, weights)
     if not power:
         return total_field
@@ -426,6 +431,7 @@ def solve_weights(
 @jax.jit
 def normalize_patterns(patterns: ArrayLike) -> jax.Array:
     """Performs peak normalization on a batch of radiation patterns (linear scale)."""
+    patterns = jnp.asarray(patterns)
     max_vals = jnp.max(patterns, axis=(1, 2), keepdims=True)
     return patterns / (max_vals + 1e-8)
 
@@ -437,6 +443,7 @@ def convert_to_db(
     normalize: bool = False,
 ) -> jax.Array:
     """Converts linear power patterns to dB scale."""
+    patterns = jnp.asarray(patterns)
     if normalize:
         patterns = patterns / jnp.max(patterns)  # Normalize
 
@@ -592,13 +599,15 @@ def plot_sine_space(
     v = np.sin(theta_rad)[:, None] * np.sin(phi_rad)
     im = ax.contourf(u, v, pattern, levels=512, cmap="viridis")
 
-    axis_args = dict(color="gray", linestyle="--", linewidth=0.9)
-
     if theta_circles:
         for theta_deg in [30, 60]:
             theta_rad = np.radians(theta_deg)
             radius = np.sin(theta_rad)
-            ax.add_patch(plt.Circle((0, 0), radius, fill=False, **axis_args))
+            ax.add_patch(
+                plt.Circle(
+                    (0, 0), radius, fill=False, color="gray", linestyle="--", linewidth=0.9
+                )
+            )
             label_offset = np.radians(45)
             x, y = radius * np.cos(label_offset), radius * np.sin(label_offset)
             ax.text(x, y, f"{theta_deg}°", ha="center", va="center", color="gray")
@@ -607,7 +616,10 @@ def plot_sine_space(
         for phi_deg in range(0, 360, 30):
             phi_rad = np.radians(phi_deg)
             x, y = np.cos(phi_rad), np.sin(phi_rad)
-            ax.plot(*np.vstack(([0, 0], [x, y])).T, **axis_args)
+            ax.plot(
+                *np.vstack(([0, 0], [x, y])).T,
+                color="gray", linestyle="--", linewidth=0.9,
+            )
             if phi_deg in [0, 90]:
                 continue  # Avoid label overlap with the title and colorbar
             ax.text(1.1 * x, 1.1 * y, f"{phi_deg}°", ha="center", va="center")
@@ -710,8 +722,9 @@ def demo_phase_shifts():
         _, phase_shifts = calculate_weights(kx, ky, np.radians(angle))
         phase_shifts_list.append(phase_shifts)
 
-    kw = dict(figsize=(15, 10), sharex=True, sharey=True, layout="compressed")
-    fig, axes = plt.subplots(nrows, ncols, **kw)
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(15, 10), sharex=True, sharey=True, layout="compressed"
+    )
 
     for i, ax in enumerate(axes.flat[: steering_angles.shape[0]]):
         title = f"θ={steering_angles[i][0]}°, φ={steering_angles[i][1]}°"
@@ -775,8 +788,9 @@ def sum_cst():
     p_power = synthesize_pattern(element_fields, weights)
     p_power_db = convert_to_db(p_power, floor_db=None, normalize=False)
 
-    kw = dict(subplot_kw=dict(projection="polar"), figsize=(6, 6), layout="compressed")
-    fig, ax = plt.subplots(1, 1, **kw)
+    fig, ax = plt.subplots(
+        1, 1, subplot_kw={"projection": "polar"}, figsize=(6, 6), layout="compressed"
+    )
     plot_E_plane(g_power_db, ax=ax, fmt="r-", label="CST Original")
     plot_E_plane(power_sum_db, ax=ax, fmt="g-", label="Direct Sum")
     plot_E_plane(p_power_db, ax=ax, fmt="b-", label="Proper Sum")
@@ -787,8 +801,9 @@ def sum_cst():
     logger.info(f"Saved CST sum plot to {filename}")
 
     fig = plt.figure(figsize=(16, 16), layout="compressed")
-    kw = dict(sharex=True, sharey=True, subplot_kw=dict(projection="polar"))
-    axs = fig.subplots(n_x, n_y, **kw)
+    axs = fig.subplots(
+        n_x, n_y, sharex=True, sharey=True, subplot_kw={"projection": "polar"}
+    )
     for (i, j), ax in np.ndenumerate(axs):
         title = f"Element ({i + 1}, {j + 1})"
         plot_E_plane(powers_db[i, j], phi_idx=0, title=title, ax=ax)
@@ -835,8 +850,9 @@ def demo_cst_patterns():
     dist_metrics = compute_pattern_metrics(dist_power_db, theta_rad, phi_rad)
     corr_metrics = compute_pattern_metrics(corr_power_db, theta_rad, phi_rad)
 
-    kw = dict(subplot_kw=dict(projection="polar"), layout="compressed")
-    fig, ax = plt.subplots(figsize=(8, 8), **kw)
+    fig, ax = plt.subplots(
+        figsize=(8, 8), subplot_kw={"projection": "polar"}, layout="compressed"
+    )
 
     plot = partial(plot_E_plane, phi_idx=phi_idx, ax=ax)
     plot(
@@ -999,8 +1015,11 @@ def test_random_sampling():
                     f"Iter {iteration:>5d} | {rand_mse=:.3f} | {rand_peak=:.1f}dB"
                 )
 
-                kw = dict(subplot_kw=dict(projection="polar"), layout="compressed")
-                fig, ax = plt.subplots(figsize=(8, 8), **kw)
+                fig, ax = plt.subplots(
+                    figsize=(8, 8),
+                    subplot_kw={"projection": "polar"},
+                    layout="compressed",
+                )
                 plot = partial(plot_E_plane, phi_idx=0, ax=ax)
 
                 label = f"Target (Peak: {target_peak:.1f}dB)"

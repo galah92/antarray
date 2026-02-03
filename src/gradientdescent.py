@@ -143,7 +143,7 @@ def optimize(
     def step(weights, opt_state):
         loss, grads = jax.value_and_grad(loss_fn)(weights)
         updates, opt_state = optimizer.update(grads, opt_state)
-        new_weights = optax.apply_updates(weights, updates)
+        new_weights = jnp.asarray(optax.apply_updates(weights, updates))
         # Normalize weights to maintain unit power
         new_weights = new_weights / jnp.sqrt(jnp.sum(jnp.abs(new_weights) ** 2))
         return new_weights, opt_state, loss, jnp.sqrt(jnp.sum(jnp.abs(grads) ** 2))
@@ -234,8 +234,9 @@ def dev(theta: float = 30.0, phi: float = 0.0):
     mf_peak_ref = power_mf_ref_db[mf_peak_ref_idx]
     w_mf_ref_power = np.abs(w_mf_ref).sum()
 
-    kw = dict(subplot_kw=dict(projection="polar"), layout="compressed")
-    fig, ax = plt.subplots(figsize=(8, 8), **kw)
+    fig, ax = plt.subplots(
+        figsize=(8, 8), subplot_kw={"projection": "polar"}, layout="compressed"
+    )
     plot = partial(py.plot_E_plane, phi_idx=0, ax=ax)
 
     ref_power_title = f"Reference Peak: {ref_peak_idx}° {ref_peak:.2f}dB, Power: {w_ref_power:.2f}, MSE: 0.0"
